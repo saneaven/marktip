@@ -1,0 +1,68 @@
+import marktip as tm
+
+
+def test_parse_heading_marks_and_link():
+    assert tm.from_markdown("# Hello\n\nThis is **bold** and [link](https://example.com).\n").to_dict() == {
+        "type": "doc",
+        "content": [
+            {
+                "type": "heading",
+                "attrs": {"level": 1},
+                "content": [{"type": "text", "text": "Hello"}],
+            },
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "This is "},
+                    {"type": "text", "text": "bold", "marks": [{"type": "bold"}]},
+                    {"type": "text", "text": " and "},
+                    {
+                        "type": "text",
+                        "text": "link",
+                        "marks": [{"type": "link", "attrs": {"href": "https://example.com"}}],
+                    },
+                    {"type": "text", "text": "."},
+                ],
+            },
+        ],
+    }
+
+
+def test_parse_gfm_task_list_and_table():
+    ast = tm.from_markdown("- [x] done\n- [ ] todo\n\n| A | B |\n| :- | -: |\n| x | y |\n").to_dict()
+
+    task_list = ast["content"][0]
+    assert task_list["type"] == "taskList"
+    assert task_list["content"][0]["attrs"] == {"checked": True}
+    assert task_list["content"][1]["attrs"] == {"checked": False}
+
+    table = ast["content"][1]
+    assert table["type"] == "table"
+    assert table["attrs"] == {"colCount": 2}
+    assert table["content"][0]["content"][0]["type"] == "tableHeader"
+    assert table["content"][0]["content"][0]["attrs"] == {"align": "left"}
+    assert table["content"][0]["content"][1]["attrs"] == {"align": "right"}
+
+
+def test_parse_raw_html_code_image_and_breaks():
+    ast = tm.from_markdown(
+        '<div>raw</div>\n\n'
+        'Hello <span>x</span>!\n\n'
+        '![Alt *text*](img.png "Title")\n\n'
+        '```cpp\nint main() { return 0; }\n```\n\n'
+        'a  \nb\n'
+    ).to_dict()
+
+    assert ast["content"][0] == {"type": "htmlBlock", "attrs": {"html": "<div>raw</div>\n"}}
+    assert ast["content"][1]["content"][1] == {"type": "htmlInline", "attrs": {"html": "<span>"}}
+    assert ast["content"][2]["content"][0] == {
+        "type": "image",
+        "attrs": {"src": "img.png", "title": "Title", "alt": "Alt text"},
+    }
+    assert ast["content"][3]["type"] == "codeBlock"
+    assert ast["content"][3]["attrs"] == {"language": "cpp", "info": "cpp"}
+    assert ast["content"][4]["content"][1] == {"type": "hardBreak"}
+
+
+def test_parse_accepts_bytes():
+    assert tm.from_markdown(b"# Bytes").to_dict()["content"][0]["content"][0]["text"] == "Bytes"
