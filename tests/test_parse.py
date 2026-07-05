@@ -64,5 +64,22 @@ def test_parse_raw_html_code_image_and_breaks():
     assert ast["content"][4]["content"][1] == {"type": "hardBreak"}
 
 
+def test_parse_decodes_entities():
+    ast = tm.from_markdown("&copy; &amp; &#65; &#x1F600;").to_dict()
+
+    assert ast["content"][0]["content"][0]["text"] == "© & A \U0001F600"
+
+
+def test_parse_maps_br_in_table_cell_to_hard_break():
+    ast = tm.from_markdown("| A |\n| - |\n| x<br>y |\n").to_dict()
+
+    cell = ast["content"][0]["content"][1]["content"][0]["content"][0]
+    assert cell["content"] == [
+        {"type": "text", "text": "x"},
+        {"type": "hardBreak"},
+        {"type": "text", "text": "y"},
+    ]
+
+
 def test_parse_accepts_bytes():
     assert tm.from_markdown(b"# Bytes").to_dict()["content"][0]["content"][0]["text"] == "Bytes"

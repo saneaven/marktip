@@ -45,6 +45,20 @@ def test_from_dict_rejects_malformed_input(ast, message):
         tm.from_dict(ast)
 
 
+def test_deeply_nested_markdown_raises_instead_of_crashing():
+    with pytest.raises(RuntimeError, match="maximum depth"):
+        tm.from_markdown(">" * 50000 + " x")
+
+
+def test_deeply_nested_dict_raises_instead_of_crashing():
+    node = {"type": "paragraph"}
+    for _ in range(5000):
+        node = {"type": "blockquote", "content": [node]}
+
+    with pytest.raises(ValueError, match="maximum depth"):
+        tm.from_dict({"type": "doc", "content": [node]})
+
+
 def test_old_module_level_api_is_removed():
     assert not hasattr(tm, "parse")
     assert not hasattr(tm, "to_markdown")

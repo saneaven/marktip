@@ -2,6 +2,10 @@
 
 #include "md4c.h"
 
+extern "C" {
+#include "entity.h"
+}
+
 #include <algorithm>
 #include <cstddef>
 #include <iterator>
@@ -41,6 +45,90 @@ std::string md_attribute_to_string(const MD_ATTRIBUTE& attribute) {
         }
     }
     return out;
+}
+
+void append_utf8(std::string& out, unsigned codepoint) {
+    if (codepoint == 0 || codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+        codepoint = 0xFFFD;
+    }
+    if (codepoint < 0x80) {
+        out.push_back(static_cast<char>(codepoint));
+    } else if (codepoint < 0x800) {
+        out.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else if (codepoint < 0x10000) {
+        out.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    }
+}
+
+// Decode an entity reported by md4c ("&amp;", "&#65;", "&#x41;"; delimiters included).
+std::string decode_entity(std::string_view value) {
+    if (value.size() >= 4 && value[1] == '#') {
+        bool hex = value[2] == 'x' || value[2] == 'X';
+        std::size_t i = hex ? 3 : 2;
+        unsigned codepoint = 0;
+        bool any_digit = false;
+        for (; i + 1 < value.size(); ++i) {
+            char ch = value[i];
+            unsigned digit;
+            if (ch >= '0' && ch <= '9') {
+                digit = static_cast<unsigned>(ch - '0');
+            } else if (hex && ch >= 'a' && ch <= 'f') {
+                digit = static_cast<unsigned>(ch - 'a' + 10);
+            } else if (hex && ch >= 'A' && ch <= 'F') {
+                digit = static_cast<unsigned>(ch - 'A' + 10);
+            } else {
+                return std::string(value);
+            }
+            codepoint = codepoint * (hex ? 16 : 10) + digit;
+            if (codepoint > 0x10FFFF) {
+                codepoint = 0x110000;
+            }
+            any_digit = true;
+        }
+        if (!any_digit) {
+            return std::string(value);
+        }
+        std::string out;
+        append_utf8(out, codepoint);
+        return out;
+    }
+
+    const ENTITY* entity = entity_lookup(value.data(), value.size());
+    if (entity == nullptr) {
+        return std::string(value);
+    }
+    std::string out;
+    append_utf8(out, entity->codepoints[0]);
+    if (entity->codepoints[1] != 0) {
+        append_utf8(out, entity->codepoints[1]);
+    }
+    return out;
+}
+
+bool is_br_tag(std::string_view value) {
+    if (value.size() < 4 || value.front() != '<' || value.back() != '>') {
+        return false;
+    }
+    auto lower = [](char ch) { return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch + 32) : ch; };
+    if (lower(value[1]) != 'b' || lower(value[2]) != 'r') {
+        return false;
+    }
+    std::size_t i = 3;
+    while (i + 1 < value.size() && (value[i] == ' ' || value[i] == '\t')) {
+        ++i;
+    }
+    if (value[i] == '/') {
+        ++i;
+    }
+    return i == value.size() - 1;
 }
 
 std::string align_to_string(MD_ALIGN align) {
@@ -221,7 +309,7 @@ public:
                 set_attr(attrs, "alt", AttrValue::string(""));
                 std::size_t index = append_node("image", std::move(attrs));
                 document_.node(index).marks = active_marks_;
-                stack_.push_back(index);
+                push_index(index);
                 return 0;
             }
             case MD_SPAN_CODE:
@@ -294,8 +382,10 @@ public:
                     add_text(std::string_view(text, size));
                 }
                 return 0;
-            case MD_TEXT_NORMAL:
             case MD_TEXT_ENTITY:
+                add_text(decode_entity(std::string_view(text, size)));
+                return 0;
+            case MD_TEXT_NORMAL:
             case MD_TEXT_LATEXMATH:
                 add_text(std::string_view(text, size));
                 return 0;
@@ -338,8 +428,15 @@ private:
         return document_.append_child(stack_.back(), std::move(node));
     }
 
+    void push_index(std::size_t index) {
+        if (stack_.size() >= kMaxNodeDepth) {
+            throw std::runtime_error("markdown nesting exceeds maximum depth");
+        }
+        stack_.push_back(index);
+    }
+
     void push_node(std::string type, AttrList attrs = {}) {
-        stack_.push_back(append_node(std::move(type), std::move(attrs)));
+        push_index(append_node(std::move(type), std::move(attrs)));
     }
 
     void pop_node() {
@@ -416,6 +513,13 @@ private:
 
     void add_html_inline(std::string_view value) {
         if (value.empty()) {
+            return;
+        }
+
+        // Table cells cannot hold literal newlines, so hard breaks in cells are
+        // serialized as <br>; map them back to hardBreak when parsing.
+        if (is_br_tag(value) && (current().type == "tableCell" || current().type == "tableHeader")) {
+            add_hard_break();
             return;
         }
 

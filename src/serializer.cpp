@@ -51,17 +51,77 @@ std::size_t max_backtick_run(std::string_view value) {
     return best;
 }
 
+bool looks_like_entity(std::string_view value, std::size_t index) {
+    std::size_t i = index + 1;
+    std::size_t length = 0;
+    while (i < value.size() && length < 48) {
+        char ch = value[i];
+        bool word = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                    (ch >= '0' && ch <= '9') || ch == '#';
+        if (!word) {
+            break;
+        }
+        ++i;
+        ++length;
+    }
+    return length > 0 && i < value.size() && value[i] == ';';
+}
+
 std::string escape_inline(std::string_view value, bool table_cell = false) {
     std::string out;
     out.reserve(value.size());
-    for (char ch : value) {
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        char ch = value[i];
         bool escape = ch == '\\' || ch == '`' || ch == '*' || ch == '_' || ch == '[' || ch == ']' ||
                       ch == '(' || ch == ')' || ch == '#' || ch == '!' || ch == '~' ||
                       (table_cell && ch == '|');
+        if (ch == '<') {
+            char next = i + 1 < value.size() ? value[i + 1] : '\0';
+            escape = (next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z') ||
+                     next == '/' || next == '!' || next == '?';
+        } else if (ch == '&') {
+            escape = looks_like_entity(value, i);
+        }
         if (escape) {
             out.push_back('\\');
         }
         out.push_back(ch);
+    }
+    return out;
+}
+
+// Escape characters that would start a new block construct at the beginning of a
+// paragraph line ('-', '+', '>', setext underlines, ordered-list markers).
+std::string escape_line_starts(const std::string& value) {
+    std::vector<std::string> lines = split_lines(value);
+    std::string out;
+    for (std::size_t li = 0; li < lines.size(); ++li) {
+        std::string& line = lines[li];
+        std::size_t start = 0;
+        while (start < line.size() && start < 3 && line[start] == ' ') {
+            ++start;
+        }
+        if (start < line.size()) {
+            char first = line[start];
+            if (first == '-' || first == '+' || first == '>') {
+                line.insert(start, 1, '\\');
+            } else if (first == '=') {
+                if (line.find_first_not_of("= \t", start) == std::string::npos) {
+                    line.insert(start, 1, '\\');
+                }
+            } else if (first >= '0' && first <= '9') {
+                std::size_t digits_end = line.find_first_not_of("0123456789", start);
+                if (digits_end != std::string::npos && digits_end - start <= 9 && line[digits_end] == '.' &&
+                    (digits_end + 1 == line.size() || line[digits_end + 1] == ' ' ||
+                     line[digits_end + 1] == '\t')) {
+                    line.insert(digits_end, 1, '\\');
+                }
+            }
+        }
+        if (li != 0) {
+            out.push_back('\n');
+        }
+        out += line;
     }
     return out;
 }
@@ -193,7 +253,7 @@ private:
             return render_doc(node);
         }
         if (type == "paragraph") {
-            return add_indent(render_inlines(node), indent);
+            return add_indent(escape_line_starts(render_inlines(node)), indent);
         }
         if (type == "heading") {
             long long level = std::clamp<long long>(attr_int(node.attrs, "level", 1), 1, 6);
@@ -253,20 +313,19 @@ private:
     std::string render_list(const Node& node, int indent, bool ordered, bool task) {
         std::string out;
         long long number = attr_int(node.attrs, "start", 1);
+        bool tight = attr_bool(node.attrs, "tight", true);
         std::size_t item_index = 0;
         for_each_child(node, [&](const Node& child) {
             if (item_index != 0) {
                 out.push_back('\n');
+                if (!tight) {
+                    out.push_back('\n');
+                }
             }
 
-            std::string marker;
-            if (task) {
-                bool checked = attr_bool(child.attrs, "checked", false);
-                marker = checked ? "- [x] " : "- [ ] ";
-            } else if (ordered) {
-                marker = std::to_string(number++) + ". ";
-            } else {
-                marker = "- ";
+            std::string marker = ordered ? std::to_string(number++) + ". " : "- ";
+            if (task || child.type == "taskItem") {
+                marker += attr_bool(child.attrs, "checked", false) ? "[x] " : "[ ] ";
             }
             out += render_list_item(child, marker, indent);
             item_index++;
@@ -274,13 +333,32 @@ private:
         return out;
     }
 
-    std::string render_list_item(const Node& node, const std::string& marker, int indent) {
-        std::vector<std::string> parts;
-        for_each_child(node, [&](const Node& child) {
-            parts.push_back(render_block(child, 0));
-        });
+    // Whether two adjacent blocks inside a list item need a blank line between
+    // them to reparse as separate blocks. Blank lines are avoided where markdown
+    // does not require them, so tight lists stay tight.
+    static bool needs_blank_between(const std::string& prev, const std::string& next) {
+        if (next == "paragraph" || next == "table" || next == "htmlBlock") {
+            return true;
+        }
+        if (prev == "htmlBlock") {
+            return true;
+        }
+        return prev == "blockquote" && next == "blockquote";
+    }
 
-        std::string body = join(parts, "\n");
+    std::string render_list_item(const Node& node, const std::string& marker, int indent) {
+        std::string body;
+        const Node* prev = nullptr;
+        for_each_child(node, [&](const Node& child) {
+            if (prev != nullptr) {
+                body.push_back('\n');
+                if (needs_blank_between(prev->type, child.type)) {
+                    body.push_back('\n');
+                }
+            }
+            body += render_block(child, 0);
+            prev = &child;
+        });
         std::vector<std::string> lines = split_lines(body);
         std::string out = repeat(' ', static_cast<std::size_t>(indent)) + marker;
         if (lines.empty() || (lines.size() == 1 && lines[0].empty())) {
@@ -291,8 +369,10 @@ private:
         std::string continuation = repeat(' ', static_cast<std::size_t>(indent + static_cast<int>(marker.size())));
         for (std::size_t i = 1; i < lines.size(); ++i) {
             out.push_back('\n');
-            out += continuation;
-            out += lines[i];
+            if (!lines[i].empty()) {
+                out += continuation;
+                out += lines[i];
+            }
         }
         return out;
     }
@@ -403,40 +483,68 @@ private:
         return rendered;
     }
 
-    std::string render_inlines(const Node& node, bool table_cell = false) {
-        std::string out;
-        for_each_child(node, [&](const Node& child) {
-            out += render_inline(child, table_cell);
-        });
-        if (out.empty() && node.type == "text") {
-            return render_inline(node, table_cell);
-        }
-        return out;
-    }
-
-    std::string render_inline(const Node& node, bool table_cell = false) {
+    // Render one inline node without applying its marks. Marks are applied once
+    // around each run of consecutive nodes sharing the same marks, so a hard
+    // break inside e.g. bold yields "**a  \nb**" rather than "**a****  \n****b**".
+    std::string render_inline_content(const Node& node, bool table_cell, bool in_code) {
         const std::string& type = node.type;
         if (type == "text") {
-            if (has_mark(node.marks, "code")) {
-                return apply_marks(code_span(node.text), node.marks, true);
-            }
-            return apply_marks(escape_inline(node.text, table_cell), node.marks);
+            return in_code ? node.text : escape_inline(node.text, table_cell);
         }
         if (type == "hardBreak") {
-            return apply_marks("  \n", node.marks);
+            return table_cell ? "<br>" : "  \n";
         }
         if (type == "image") {
             std::string src = attr_string(node.attrs, "src");
             std::string alt = attr_string(node.attrs, "alt", plain_text(node));
             std::string title = attr_string(node.attrs, "title");
-            std::string rendered = "![" + escape_inline(alt, table_cell) + "](" + escape_link_destination(src) +
-                                   (title.empty() ? "" : " \"" + escape_title(title) + "\"") + ")";
-            return apply_marks(std::move(rendered), node.marks);
+            return "![" + escape_inline(alt, table_cell) + "](" + escape_link_destination(src) +
+                   (title.empty() ? "" : " \"" + escape_title(title) + "\"") + ")";
         }
         if (type == "htmlInline") {
-            return apply_marks(attr_string(node.attrs, "html"), node.marks);
+            return attr_string(node.attrs, "html");
         }
         return render_inlines(node, table_cell);
+    }
+
+    std::string render_inlines(const Node& node, bool table_cell = false) {
+        if (node.content.empty() && node.type == "text") {
+            return render_inline(node, table_cell);
+        }
+
+        std::string out;
+        const std::vector<std::size_t>& content = node.content;
+        std::size_t i = 0;
+        while (i < content.size()) {
+            const Node& first = document_.node(content[i]);
+            bool in_code = has_mark(first.marks, "code");
+            std::string group;
+            std::size_t j = i;
+            while (j < content.size()) {
+                const Node& child = document_.node(content[j]);
+                if (!(child.marks == first.marks)) {
+                    break;
+                }
+                group += render_inline_content(child, table_cell, in_code);
+                ++j;
+            }
+            if (in_code) {
+                out += apply_marks(code_span(group), first.marks, true);
+            } else {
+                out += apply_marks(std::move(group), first.marks);
+            }
+            i = j;
+        }
+        return out;
+    }
+
+    std::string render_inline(const Node& node, bool table_cell = false) {
+        bool in_code = has_mark(node.marks, "code");
+        std::string rendered = render_inline_content(node, table_cell, in_code);
+        if (in_code) {
+            return apply_marks(code_span(rendered), node.marks, true);
+        }
+        return apply_marks(std::move(rendered), node.marks);
     }
 
     std::string plain_text(const Node& node) {

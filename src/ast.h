@@ -10,6 +10,10 @@
 
 namespace marktip {
 
+// Deep documents are traversed recursively (to_dict, to_markdown); cap nesting
+// at build time so those traversals cannot overflow the C stack.
+inline constexpr std::size_t kMaxNodeDepth = 2048;
+
 struct AttrValue {
     enum class Kind { String, Int, Bool };
 

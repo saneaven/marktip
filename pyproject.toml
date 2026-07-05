@@ -9,12 +9,23 @@ description = "Fast C++/MD4C Markdown parser and canonical Markdown serializer f
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
-authors = [{ name = "MarkdownParser contributors" }]
+license-files = ["LICENSE", "third_party/md4c/LICENSE.md"]
+authors = [{ name = "Saneaven (Minjae Kyung)" }]
+keywords = ["markdown", "tiptap", "md4c", "parser"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: C++",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Text Processing :: Markup :: Markdown",
 ]
 
@@ -27,8 +38,16 @@ wheel.packages = ["python/marktip"]
 sdist.include = [
   "third_party/md4c/src/md4c.c",
   "third_party/md4c/src/md4c.h",
+  "third_party/md4c/src/entity.c",
+  "third_party/md4c/src/entity.h",
   "third_party/md4c/LICENSE.md",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
+skip = ["*-win32", "*-manylinux_i686", "*-musllinux*"]
+test-extras = ["test"]
+test-command = "pytest {project}/tests"

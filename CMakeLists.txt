@@ -13,7 +13,10 @@ endif()
 set(PYBIND11_FINDPYTHON ON)
 find_package(pybind11 CONFIG REQUIRED)
 
-add_library(md4c STATIC third_party/md4c/src/md4c.c)
+add_library(md4c STATIC
+  third_party/md4c/src/md4c.c
+  third_party/md4c/src/entity.c
+)
 target_include_directories(md4c PUBLIC third_party/md4c/src)
 target_compile_definitions(md4c PRIVATE MD4C_USE_UTF8)
 set_target_properties(md4c PROPERTIES POSITION_INDEPENDENT_CODE ON)

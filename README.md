@@ -2,6 +2,18 @@
 
 Fast C++/MD4C Markdown conversion for Tiptap-style JSON.
 
+## Installation
+
+```bash
+python -m pip install marktip
+```
+
+Release wheels are built for common CPython versions on Linux, macOS, and
+Windows. If a wheel is not available for a platform, pip can build from the
+source distribution with a C++17 compiler and standard Python build tooling.
+
+## Usage
+
 ```python
 import marktip as tm
 

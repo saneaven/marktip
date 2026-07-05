@@ -136,7 +136,12 @@ Mark mark_from_py(py::dict mark_dict) {
     return mark;
 }
 
-void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict, std::string_view context) {
+void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict, std::string_view context,
+                       std::size_t depth) {
+    if (depth > kMaxNodeDepth) {
+        throw std::invalid_argument("node content nesting exceeds maximum depth");
+    }
+
     Node node;
     node.type = required_type(node_dict, context);
 
@@ -167,7 +172,7 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
     py::list content_list = expect_list(content, "node content");
     for (py::handle child_handle : content_list) {
         std::size_t child_index = document.append_child(index, Node{});
-        fill_node_from_py(document, child_index, expect_dict(child_handle, "content child"), "node");
+        fill_node_from_py(document, child_index, expect_dict(child_handle, "content child"), "node", depth + 1);
     }
 }
 
@@ -331,7 +336,7 @@ Document from_dict_py(py::dict root) {
     }
 
     Document document;
-    fill_node_from_py(document, 0, root, "root node");
+    fill_node_from_py(document, 0, root, "root node", 0);
     return document;
 }
 
