@@ -218,6 +218,26 @@ struct InlineRun {
     std::string content;
 };
 
+// Where inline content is being rendered. TableCell and Heading are
+// single-line contexts: cells express hard breaks as <br>, while ATX headings
+// have no break syntax at all, so breaks there demote to a plain space.
+enum class InlineContext { Default, TableCell, Heading };
+
+// Adjacent lists of the same family would merge on reparse if they used the
+// same marker, so sibling loops alternate the marker (variant 0/1) between
+// consecutive same-family lists: "-" vs "*", "1. " vs "1) ".
+enum class ListFamily { None, Bullet, Ordered };
+
+ListFamily list_family(const std::string& type) {
+    if (type == "bulletList" || type == "taskList") {
+        return ListFamily::Bullet;
+    }
+    if (type == "orderedList") {
+        return ListFamily::Ordered;
+    }
+    return ListFamily::None;
+}
+
 bool is_emphasis_mark(const Mark& mark) {
     return mark.type == "bold" || mark.type == "italic" || mark.type == "strike";
 }
@@ -370,28 +390,29 @@ private:
     const Document& document_;
 
     std::string render_doc(const Node& node) {
-        std::vector<std::string> blocks;
-        for_each_child(node, [&](const Node& child) {
-            std::string rendered = rstrip_newlines(render_block(child, 0));
-            if (!rendered.empty()) {
-                blocks.push_back(std::move(rendered));
-            }
-        });
-        return join(blocks, "\n\n");
+        return render_blocks(node, 0);
     }
 
     std::string render_blocks(const Node& node, int indent) {
         std::vector<std::string> blocks;
+        // Track the previously *emitted* sibling: an empty render must not
+        // reset the alternation, or the lists around it would merge.
+        ListFamily prev_family = ListFamily::None;
+        int prev_variant = 0;
         for_each_child(node, [&](const Node& child) {
-            std::string rendered = rstrip_newlines(render_block(child, indent));
+            ListFamily family = list_family(child.type);
+            int variant = (family != ListFamily::None && family == prev_family) ? 1 - prev_variant : 0;
+            std::string rendered = rstrip_newlines(render_block(child, indent, variant));
             if (!rendered.empty()) {
                 blocks.push_back(std::move(rendered));
+                prev_family = family;
+                prev_variant = variant;
             }
         });
         return join(blocks, "\n\n");
     }
 
-    std::string render_block(const Node& node, int indent) {
+    std::string render_block(const Node& node, int indent, int list_variant = 0) {
         const std::string& type = node.type;
         if (type == "doc") {
             return render_doc(node);
@@ -401,19 +422,21 @@ private:
         }
         if (type == "heading") {
             long long level = std::clamp<long long>(attr_int(node.attrs, "level", 1), 1, 6);
-            return add_indent(repeat('#', static_cast<std::size_t>(level)) + " " + render_inlines(node), indent);
+            return add_indent(
+                repeat('#', static_cast<std::size_t>(level)) + " " + render_inlines(node, InlineContext::Heading),
+                indent);
         }
         if (type == "blockquote") {
             return render_blockquote(node, indent);
         }
         if (type == "bulletList") {
-            return render_list(node, indent, false, false);
+            return render_list(node, indent, false, false, list_variant);
         }
         if (type == "orderedList") {
-            return render_list(node, indent, true, false);
+            return render_list(node, indent, true, false, list_variant);
         }
         if (type == "taskList") {
-            return render_list(node, indent, false, true);
+            return render_list(node, indent, false, true, list_variant);
         }
         if (type == "listItem" || type == "taskItem") {
             return render_list_item(node, "- ", indent);
@@ -454,7 +477,7 @@ private:
         return out;
     }
 
-    std::string render_list(const Node& node, int indent, bool ordered, bool task) {
+    std::string render_list(const Node& node, int indent, bool ordered, bool task, int variant = 0) {
         std::string out;
         long long number = attr_int(node.attrs, "start", 1);
         bool tight = attr_bool(node.attrs, "tight", true);
@@ -467,7 +490,8 @@ private:
                 }
             }
 
-            std::string marker = ordered ? std::to_string(number++) + ". " : "- ";
+            std::string marker = ordered ? std::to_string(number++) + (variant != 0 ? ") " : ". ")
+                                         : std::string(variant != 0 ? "* " : "- ");
             if (task || child.type == "taskItem") {
                 marker += attr_bool(child.attrs, "checked", false) ? "[x] " : "[ ] ";
             }
@@ -493,6 +517,8 @@ private:
     std::string render_list_item(const Node& node, const std::string& marker, int indent) {
         std::string body;
         const Node* prev = nullptr;
+        ListFamily prev_family = ListFamily::None;
+        int prev_variant = 0;
         for_each_child(node, [&](const Node& child) {
             if (prev != nullptr) {
                 body.push_back('\n');
@@ -500,8 +526,12 @@ private:
                     body.push_back('\n');
                 }
             }
-            body += render_block(child, 0);
+            ListFamily family = list_family(child.type);
+            int variant = (family != ListFamily::None && family == prev_family) ? 1 - prev_variant : 0;
+            body += render_block(child, 0, variant);
             prev = &child;
+            prev_family = family;
+            prev_variant = variant;
         });
         std::vector<std::string> lines = split_lines(body);
         std::string out = repeat(' ', static_cast<std::size_t>(indent)) + marker;
@@ -615,9 +645,9 @@ private:
         for_each_child(cell, [&](const Node& child) {
             const std::string& type = child.type;
             if (type == "paragraph") {
-                blocks.push_back(render_inlines(child, true));
+                blocks.push_back(render_inlines(child, InlineContext::TableCell));
             } else if (type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline") {
-                blocks.push_back(render_inline(child, true));
+                blocks.push_back(render_inline(child, InlineContext::TableCell));
             } else {
                 blocks.push_back(render_block(child, 0));
             }
@@ -630,38 +660,51 @@ private:
     // Render one inline node without applying its marks. Marks are emitted by
     // emit_runs(), which keeps marks shared between consecutive runs open
     // across the boundary.
-    std::string render_inline_content(const Node& node, bool table_cell, bool in_code) {
+    std::string render_inline_content(const Node& node, InlineContext ctx, bool in_code) {
         const std::string& type = node.type;
         if (type == "text") {
-            return in_code ? node.text : escape_inline(node.text, table_cell);
+            if (ctx == InlineContext::Heading && node.text.find('\n') != std::string::npos) {
+                // ATX headings are single-line; literal newlines (e.g. carried
+                // over from setext input) demote to spaces.
+                std::string flattened = node.text;
+                std::replace(flattened.begin(), flattened.end(), '\n', ' ');
+                return in_code ? flattened : escape_inline(flattened, false);
+            }
+            return in_code ? node.text : escape_inline(node.text, ctx == InlineContext::TableCell);
         }
         if (type == "hardBreak") {
-            return table_cell ? "<br>" : "  \n";
+            if (ctx == InlineContext::TableCell) {
+                return "<br>";
+            }
+            if (ctx == InlineContext::Heading) {
+                return " ";
+            }
+            return "  \n";
         }
         if (type == "image") {
             std::string src = attr_string(node.attrs, "src");
             std::string alt = attr_string(node.attrs, "alt", plain_text(node));
             std::string title = attr_string(node.attrs, "title");
-            return "![" + escape_inline(alt, table_cell) + "](" + escape_link_destination(src) +
+            return "![" + escape_inline(alt, ctx == InlineContext::TableCell) + "](" + escape_link_destination(src) +
                    (title.empty() ? "" : " \"" + escape_title(title) + "\"") + ")";
         }
         if (type == "htmlInline") {
             return attr_string(node.attrs, "html");
         }
-        return render_inlines(node, table_cell);
+        return render_inlines(node, ctx);
     }
 
-    std::string render_inlines(const Node& node, bool table_cell = false) {
+    std::string render_inlines(const Node& node, InlineContext ctx = InlineContext::Default) {
         if (node.content.empty() && node.type == "text") {
-            return render_inline(node, table_cell);
+            return render_inline(node, ctx);
         }
 
-        std::vector<InlineRun> runs = build_runs(node, table_cell);
+        std::vector<InlineRun> runs = build_runs(node, ctx);
         expel_boundary_whitespace(runs);
         return emit_runs(runs);
     }
 
-    std::vector<InlineRun> build_runs(const Node& node, bool table_cell) {
+    std::vector<InlineRun> build_runs(const Node& node, InlineContext ctx) {
         std::vector<InlineRun> runs;
         const std::vector<std::size_t>& content = node.content;
         std::size_t i = 0;
@@ -675,7 +718,7 @@ private:
                 if (!(child.marks == first.marks)) {
                     break;
                 }
-                group += render_inline_content(child, table_cell, in_code);
+                group += render_inline_content(child, ctx, in_code);
                 ++j;
             }
 
@@ -692,9 +735,9 @@ private:
         return runs;
     }
 
-    std::string render_inline(const Node& node, bool table_cell = false) {
+    std::string render_inline(const Node& node, InlineContext ctx = InlineContext::Default) {
         bool in_code = has_mark(node.marks, "code");
-        std::string rendered = render_inline_content(node, table_cell, in_code);
+        std::string rendered = render_inline_content(node, ctx, in_code);
         if (in_code) {
             return apply_marks(code_span(rendered), node.marks, true);
         }

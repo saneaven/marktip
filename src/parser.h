@@ -6,6 +6,6 @@
 
 namespace marktip {
 
-Document from_markdown_py(pybind11::object markdown, bool cjk_friendly);
+Document from_markdown_py(pybind11::object markdown, bool cjk_friendly, bool html);
 
 }  // namespace marktip

@@ -1,7 +1,7 @@
 """Fast Markdown conversion for Tiptap-style JSON."""
 
 try:
-    from ._core import Document, __version__, from_dict, from_markdown
+    from ._core import Document, UnknownTypeError, __version__, from_dict, from_markdown
 except ImportError:  # pragma: no cover - development-only CMake build fallback
     import importlib.util
     import pathlib
@@ -21,7 +21,8 @@ except ImportError:  # pragma: no cover - development-only CMake build fallback
 
     __version__ = _module.__version__
     Document = _module.Document
+    UnknownTypeError = _module.UnknownTypeError
     from_dict = _module.from_dict
     from_markdown = _module.from_markdown
 
-__all__ = ["__version__", "Document", "from_markdown", "from_dict"]
+__all__ = ["__version__", "Document", "UnknownTypeError", "from_markdown", "from_dict"]

@@ -3354,16 +3354,52 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                     tmp++;
 
                 if(tmp - off <= 2) {
-                    unsigned flags = MD_MARK_POTENTIAL_OPENER | MD_MARK_POTENTIAL_CLOSER;
-                    /* MARKTIP LOCAL PATCH: CJK-friendly strikethrough. */
-                    int cjk_friendly = (ch == _T('~')  &&  (ctx->parser.flags & MD_FLAG_CJKFRIENDLYEMPHASIS));
+                    unsigned flags = 0;
 
-                    if(off > line->beg  &&  !ISUNICODEWHITESPACEBEFORE(off)  &&  !ISUNICODEPUNCTBEFORE(off)
-                        &&  !(cjk_friendly  &&  ISCJKBEFORE(off)))
-                        flags &= ~MD_MARK_POTENTIAL_OPENER;
-                    if(tmp < line->end  &&  !ISUNICODEWHITESPACE(tmp)  &&  !ISUNICODEPUNCT(tmp)
-                        &&  !(cjk_friendly  &&  ISCJK(tmp)))
-                        flags &= ~MD_MARK_POTENTIAL_CLOSER;
+                    if(ch == _T('~')) {
+                        /* MARKTIP LOCAL PATCH: strikethrough uses the same
+                         * graded flanking rules as '*' (cf. cmark-gfm, which
+                         * treats '~' like '*'), so intra-word "~~" opens and
+                         * closes (e.g. "a~~b~~c"). The CJK-friendly relaxation
+                         * mirrors the emphasis patch above. */
+                        int left_level, right_level;
+                        int left_is_cjk = FALSE;
+                        int right_is_cjk = FALSE;
+
+                        if(off == line->beg  ||  ISUNICODEWHITESPACEBEFORE(off))
+                            left_level = 0;
+                        else if(ISUNICODEPUNCTBEFORE(off))
+                            left_level = 1;
+                        else
+                            left_level = 2;
+
+                        if(tmp == line->end  ||  ISUNICODEWHITESPACE(tmp))
+                            right_level = 0;
+                        else if(ISUNICODEPUNCT(tmp))
+                            right_level = 1;
+                        else
+                            right_level = 2;
+
+                        if(ctx->parser.flags & MD_FLAG_CJKFRIENDLYEMPHASIS) {
+                            if(off > line->beg)
+                                left_is_cjk = ISCJKBEFORE(off);
+                            if(tmp < line->end)
+                                right_is_cjk = ISCJK(tmp);
+                        }
+
+                        if(left_level > 0  &&  (left_level >= right_level  ||  right_is_cjk))
+                            flags |= MD_MARK_POTENTIAL_CLOSER;
+                        if(right_level > 0  &&  (right_level >= left_level  ||  left_is_cjk))
+                            flags |= MD_MARK_POTENTIAL_OPENER;
+                    } else {
+                        /* '$' keeps the original strict flanking behavior. */
+                        flags = MD_MARK_POTENTIAL_OPENER | MD_MARK_POTENTIAL_CLOSER;
+                        if(off > line->beg  &&  !ISUNICODEWHITESPACEBEFORE(off)  &&  !ISUNICODEPUNCTBEFORE(off))
+                            flags &= ~MD_MARK_POTENTIAL_OPENER;
+                        if(tmp < line->end  &&  !ISUNICODEWHITESPACE(tmp)  &&  !ISUNICODEPUNCT(tmp))
+                            flags &= ~MD_MARK_POTENTIAL_CLOSER;
+                    }
+
                     if(flags != 0)
                         ADD_MARK(ch, off, tmp, flags);
                 }

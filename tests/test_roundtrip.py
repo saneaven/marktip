@@ -176,10 +176,12 @@ def test_bold_quoted_word_before_particle():
 
 
 def test_strike_before_cjk_particle():
-    # `~~삭제~~은` — the strikethrough closer is also blocked by standard rules.
-    assert_ast_roundtrip(
-        doc(p(text("삭제", "strike"), text("은 취소선"))), cjk_friendly=True
-    )
+    # `~~삭제~~은` — since the tilde flanking patch aligned `~` with cmark-gfm
+    # (same graded rules as `*`), a CJK letter after the closer no longer
+    # blocks it even under default parsing. Both modes must round-trip.
+    ast = doc(p(text("삭제", "strike"), text("은 취소선")))
+    assert_ast_roundtrip(ast)
+    assert_ast_roundtrip(ast, cjk_friendly=True)
 
 
 def test_cjk_relaxation_is_opt_in():
@@ -224,6 +226,158 @@ def test_adjacent_bold_to_bold_italic():
     assert_ast_roundtrip(doc(p(text("a", "bold"), text("b", "bold", "italic"))))
 
 
+# ── intra-word strikethrough (tilde flanking matches cmark-gfm) ──────────
+
+
+def test_intraword_strike_roundtrip():
+    # `a~~b~~c` — upstream md4c rejects intra-word tildes, cmark-gfm strikes.
+    # The local tilde patch makes this AST round-trip under default parsing.
+    assert_ast_roundtrip(doc(p(text("a"), text("b", "strike"), text("c"))))
+
+
+# ── heading hard breaks: demoted to a single space ───────────────────────
+# ATX headings are single-line; a hardBreak inside a heading has no markdown
+# representation, so the serializer demotes it to a space instead of emitting
+# "  \n" (which would split the heading into heading + paragraph on reparse).
+
+
+def test_hard_break_inside_heading_demotes_to_space():
+    ast = doc(
+        {
+            "type": "heading",
+            "attrs": {"level": 1},
+            "content": [text("a"), hard_break(), text("b")],
+        }
+    )
+    md = tm.from_dict(ast).to_markdown()
+    assert md == "# a b"
+    assert tm.from_markdown(md).to_dict() == doc(
+        {"type": "heading", "attrs": {"level": 1}, "content": [text("a b")]}
+    )
+
+
+def test_setext_heading_with_hard_break_normalizes_stable():
+    # Setext input leaves a hard break (or literal newline) inside the heading
+    # AST. Demoting it to a space is deliberately lossy, so the first pass
+    # changes the AST — but the output must be a single-line heading and the
+    # normalization must be idempotent from then on.
+    for md in ("foo  \nbar\n===\n", "foo\nbar\n===\n"):
+        once = normalize(md)
+        assert once == "# foo bar"
+        assert normalize(once) == once
+
+
+# ── adjacent same-family lists: markers alternate to stay separate ───────
+# Two same-marker lists merge on reparse (renumbering ordered items and
+# spreading task checkboxes); the serializer alternates the marker ("-"/"*",
+# "."/")") between consecutive same-family siblings so they stay separate.
+
+
+def bullet_list(*items):
+    return {"type": "bulletList", "attrs": {"tight": True}, "content": list(items)}
+
+
+def ordered_list(start, *items):
+    return {
+        "type": "orderedList",
+        "attrs": {"start": start, "tight": True},
+        "content": list(items),
+    }
+
+
+def task_list(*items):
+    return {"type": "taskList", "attrs": {"tight": True}, "content": list(items)}
+
+
+def list_item(*blocks):
+    return {"type": "listItem", "content": list(blocks)}
+
+
+def task_item(checked, *blocks):
+    return {"type": "taskItem", "attrs": {"checked": checked}, "content": list(blocks)}
+
+
+def test_adjacent_bullet_lists_stay_separate():
+    ast = doc(bullet_list(list_item(p(text("a")))), bullet_list(list_item(p(text("b")))))
+    assert tm.from_dict(ast).to_markdown() == "- a\n\n* b"
+    assert_ast_roundtrip(ast)
+
+
+def test_three_adjacent_bullet_lists_alternate():
+    ast = doc(
+        bullet_list(list_item(p(text("a")))),
+        bullet_list(list_item(p(text("b")))),
+        bullet_list(list_item(p(text("c")))),
+    )
+    assert tm.from_dict(ast).to_markdown() == "- a\n\n* b\n\n- c"
+    assert_ast_roundtrip(ast)
+
+
+def test_adjacent_ordered_lists_preserve_starts():
+    ast = doc(
+        ordered_list(3, list_item(p(text("a"))), list_item(p(text("b")))),
+        ordered_list(0, list_item(p(text("c"))), list_item(p(text("d")))),
+    )
+    assert tm.from_dict(ast).to_markdown() == "3. a\n4. b\n\n0) c\n1) d"
+    assert_ast_roundtrip(ast)
+
+
+def test_task_list_after_bullet_list_no_checkbox_bleed():
+    ast = doc(
+        bullet_list(list_item(p(text("a")))), task_list(task_item(False, p(text("b"))))
+    )
+    assert tm.from_dict(ast).to_markdown() == "- a\n\n* [ ] b"
+    assert_ast_roundtrip(ast)
+
+
+def test_bullet_list_after_task_list_no_checkbox_bleed():
+    ast = doc(
+        task_list(task_item(True, p(text("a")))), bullet_list(list_item(p(text("b"))))
+    )
+    assert_ast_roundtrip(ast)
+
+
+def test_nested_adjacent_lists_inside_item():
+    ast = doc(
+        bullet_list(
+            list_item(
+                p(text("top")),
+                bullet_list(list_item(p(text("x")))),
+                bullet_list(list_item(p(text("y")))),
+            )
+        )
+    )
+    assert_ast_roundtrip(ast)
+
+
+def test_non_adjacent_lists_keep_default_marker():
+    ast = doc(
+        bullet_list(list_item(p(text("a")))),
+        p(text("mid")),
+        bullet_list(list_item(p(text("b")))),
+    )
+    assert tm.from_dict(ast).to_markdown() == "- a\n\nmid\n\n- b"
+    assert_ast_roundtrip(ast)
+
+
+# ── raw HTML disabled: literal text, still round-trip stable ─────────────
+
+
+@pytest.mark.parametrize(
+    "md",
+    [
+        "<div>x</div>",
+        "a <b>c</b> d",
+        "| A |\n| - |\n| x<br>y |",
+    ],
+)
+def test_html_disabled_normalizes_stable(md):
+    doc_obj = tm.from_markdown(md, html=False)
+    once = doc_obj.to_markdown()
+    assert tm.from_markdown(once, html=False).to_dict() == doc_obj.to_dict()
+    assert tm.from_markdown(once, html=False).to_markdown() == once
+
+
 # ── idempotence: normalize twice == normalize once ───────────────────────
 
 IDEMPOTENCE_CORPUS = [
@@ -237,6 +391,10 @@ IDEMPOTENCE_CORPUS = [
     "> 인용\n>\n> 두 문단",
     "`code` 와 **bold** 혼합",
     "a  \nb",
+    "a~~b~~c",
+    "- a\n* b",
+    "3. a\n\n0) b",
+    "- x\n* [ ] y",
 ]
 
 

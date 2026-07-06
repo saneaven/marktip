@@ -19,3 +19,12 @@ Pinned tag: `release-0.5.3`
   (cf. markdown-it-cjk-friendly). Adds `md_is_cjk_char__()` and the
   `ISCJK`/`ISCJKBEFORE` macros. All patched hunks are marked with
   `MARKTIP LOCAL PATCH` comments. Behavior is unchanged unless the flag is set.
+- Intra-word strikethrough (md4c.c, `~` branch in `md_collect_marks`):
+  `~`/`~~` delimiter runs use the same graded flanking rules as `*` instead of
+  upstream's strict require-whitespace/punctuation rule, matching cmark-gfm
+  (which treats `~` like `*`): `a~~b~~c` strikes. The `$` (LaTeX math) branch
+  keeps the original strict behavior, and the run-length cap (max 2) plus
+  opener/closer length matching are unchanged. This is an always-on deviation
+  from upstream md4c 0.5.3 (upstream rejects intra-word tildes; the GFM
+  reference implementations accept them). Marked with a `MARKTIP LOCAL PATCH`
+  comment.

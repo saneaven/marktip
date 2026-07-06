@@ -97,3 +97,69 @@ def test_parse_cjk_friendly_is_opt_in():
 
 def test_parse_accepts_bytes():
     assert tm.from_markdown(b"# Bytes").to_dict()["content"][0]["content"][0]["text"] == "Bytes"
+
+
+def _strike_texts(md, **kwargs):
+    ast = tm.from_markdown(md, **kwargs).to_dict()
+    found = []
+
+    def walk(node):
+        if node.get("type") == "text" and any(
+            mark["type"] == "strike" for mark in node.get("marks", [])
+        ):
+            found.append(node["text"])
+        for child in node.get("content", []):
+            walk(child)
+
+    walk(ast)
+    return found
+
+
+def test_parse_intraword_strikethrough_matches_gfm():
+    # cmark-gfm treats `~` like `*`, so intra-word `~~` strikes; upstream md4c
+    # rejects it. The local tilde patch aligns default parsing with cmark-gfm.
+    assert _strike_texts("a~~b~~c") == ["b"]
+    assert _strike_texts("a~~b~~c", cjk_friendly=True) == ["b"]
+    # Regressions: existing behavior stays put.
+    assert _strike_texts("~~x~~") == ["x"]
+    assert _strike_texts("a ~~b~~ c") == ["b"]
+    assert _strike_texts("a~~ b~~") == []  # space after the opener still blocks
+    assert _strike_texts("x ~~~y~~~") == []  # runs longer than 2 never match
+    assert _strike_texts("~foo~~") == []  # opener/closer lengths must agree
+
+
+def test_parse_strike_next_to_cjk_letters_works_by_default():
+    # CJK letters are neither whitespace nor punctuation, so with the graded
+    # rules `~~삭제~~은` strikes under default parsing too (same as cmark-gfm).
+    assert _strike_texts("~~삭제~~은") == ["삭제"]
+    # Punctuation-adjacent cases still need the cjk_friendly relaxation.
+    assert _strike_texts('~~"인용"~~라고') == []
+    assert _strike_texts('~~"인용"~~라고', cjk_friendly=True) == ['"인용"']
+
+
+def test_parse_html_disabled_turns_raw_html_into_text():
+    block = tm.from_markdown("<div>raw</div>", html=False).to_dict()
+    assert block["content"] == [
+        {
+            "type": "paragraph",
+            "content": [{"type": "text", "text": "<div>raw</div>"}],
+        }
+    ]
+
+    inline = tm.from_markdown("Hello <span>x</span>!", html=False).to_dict()
+    assert inline["content"][0]["content"] == [
+        {"type": "text", "text": "Hello <span>x</span>!"}
+    ]
+
+
+def test_parse_html_disabled_keeps_br_in_table_cell():
+    # The serializer expresses cell hard breaks as <br>, so that mapping must
+    # survive html=False for marktip's own output to round-trip.
+    ast = tm.from_markdown("| A |\n| - |\n| x<br>y |\n", html=False).to_dict()
+
+    cell = ast["content"][0]["content"][1]["content"][0]["content"][0]
+    assert cell["content"] == [
+        {"type": "text", "text": "x"},
+        {"type": "hardBreak"},
+        {"type": "text", "text": "y"},
+    ]

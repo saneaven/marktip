@@ -147,8 +147,8 @@ std::string align_to_string(MD_ALIGN align) {
 
 class AstBuilder {
 public:
-    explicit AstBuilder(std::size_t input_size = 0)
-        : document_(std::max<std::size_t>(32, input_size / 24)) {
+    explicit AstBuilder(std::size_t input_size = 0, bool html = true)
+        : document_(std::max<std::size_t>(32, input_size / 24)), html_(html) {
         stack_.push_back(0);
     }
 
@@ -412,6 +412,7 @@ private:
     std::vector<std::size_t> stack_;
     std::vector<Mark> active_marks_;
     std::string error_;
+    bool html_ = true;
 
     Node& current() {
         return document_.node(stack_.back());
@@ -517,9 +518,16 @@ private:
         }
 
         // Table cells cannot hold literal newlines, so hard breaks in cells are
-        // serialized as <br>; map them back to hardBreak when parsing.
+        // serialized as <br>; map them back to hardBreak when parsing. This
+        // must stay ahead of the html_ gate so marktip's own cell output
+        // round-trips even with html disabled.
         if (is_br_tag(value) && (current().type == "tableCell" || current().type == "tableHeader")) {
             add_hard_break();
+            return;
+        }
+
+        if (!html_) {
+            add_text(value);
             return;
         }
 
@@ -704,11 +712,16 @@ int text_callback(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* use
     }
 }
 
-Document parse_to_document(const std::string& markdown, bool cjk_friendly) {
-    AstBuilder builder(markdown.size());
+Document parse_to_document(const std::string& markdown, bool cjk_friendly, bool html) {
+    AstBuilder builder(markdown.size(), html);
     MD_PARSER parser {};
     parser.abi_version = 0;
-    parser.flags = MD_DIALECT_GITHUB | (cjk_friendly ? MD_FLAG_CJKFRIENDLYEMPHASIS : 0);
+    // With html=false, block-level raw HTML degrades to paragraph text via
+    // MD_FLAG_NOHTMLBLOCKS. Inline HTML spans stay recognized (no
+    // MD_FLAG_NOHTMLSPANS) so the <br>-in-cell hardBreak mapping keeps
+    // working; AstBuilder turns the remaining spans into literal text.
+    parser.flags = MD_DIALECT_GITHUB | (cjk_friendly ? MD_FLAG_CJKFRIENDLYEMPHASIS : 0) |
+                   (html ? 0 : MD_FLAG_NOHTMLBLOCKS);
     parser.enter_block = enter_block_callback;
     parser.leave_block = leave_block_callback;
     parser.enter_span = enter_span_callback;
@@ -729,7 +742,7 @@ Document parse_to_document(const std::string& markdown, bool cjk_friendly) {
 
 }  // namespace
 
-Document from_markdown_py(py::object markdown, bool cjk_friendly) {
+Document from_markdown_py(py::object markdown, bool cjk_friendly, bool html) {
     std::string input;
     if (py::isinstance<py::str>(markdown) || py::isinstance<py::bytes>(markdown)) {
         input = py::cast<std::string>(markdown);
@@ -740,7 +753,7 @@ Document from_markdown_py(py::object markdown, bool cjk_friendly) {
     Document document;
     {
         py::gil_scoped_release release;
-        document = parse_to_document(input, cjk_friendly);
+        document = parse_to_document(input, cjk_friendly, html);
     }
     return document;
 }
