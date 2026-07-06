@@ -63,3 +63,27 @@ jobs:
         with:
           name: marktip-wheels-${{ matrix.os }}
           path: wheelhouse/*.whl
+
+  publish:
+    name: Publish to PyPI
+    needs: [sdist, wheels]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/marktip
+
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v6
+        with:
+          pattern: marktip-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
