@@ -319,6 +319,11 @@ typedef struct MD_SPAN_WIKILINK {
 #define MD_FLAG_UNDERLINE                   0x4000  /* Enable underline extension (and disables '_' for normal emphasis). */
 #define MD_FLAG_HARD_SOFT_BREAKS            0x8000  /* Force all soft breaks to act as hard breaks. */
 
+/* MARKTIP LOCAL PATCH (not upstream): relax emphasis/strikethrough flanking
+ * rules so a CJK character next to a delimiter does not prevent it from
+ * opening/closing (cf. markdown-it-cjk-friendly). */
+#define MD_FLAG_CJKFRIENDLYEMPHASIS         0x10000
+
 #define MD_FLAG_PERMISSIVEAUTOLINKS         (MD_FLAG_PERMISSIVEEMAILAUTOLINKS | MD_FLAG_PERMISSIVEURLAUTOLINKS | MD_FLAG_PERMISSIVEWWWAUTOLINKS)
 #define MD_FLAG_NOHTML                      (MD_FLAG_NOHTMLBLOCKS | MD_FLAG_NOHTMLSPANS)
 

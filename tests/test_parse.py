@@ -81,5 +81,19 @@ def test_parse_maps_br_in_table_cell_to_hard_break():
     ]
 
 
+def test_parse_cjk_friendly_is_opt_in():
+    md = "**마크다운(Markdown)**은 표준이다"
+
+    relaxed = tm.from_markdown(md, cjk_friendly=True).to_dict()
+    assert relaxed["content"][0]["content"][0] == {
+        "type": "text",
+        "text": "마크다운(Markdown)",
+        "marks": [{"type": "bold"}],
+    }
+
+    standard = tm.from_markdown(md).to_dict()
+    assert standard["content"][0]["content"][0]["text"].startswith("**")
+
+
 def test_parse_accepts_bytes():
     assert tm.from_markdown(b"# Bytes").to_dict()["content"][0]["content"][0]["text"] == "Bytes"

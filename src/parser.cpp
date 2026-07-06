@@ -704,11 +704,11 @@ int text_callback(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* use
     }
 }
 
-Document parse_to_document(const std::string& markdown) {
+Document parse_to_document(const std::string& markdown, bool cjk_friendly) {
     AstBuilder builder(markdown.size());
     MD_PARSER parser {};
     parser.abi_version = 0;
-    parser.flags = MD_DIALECT_GITHUB;
+    parser.flags = MD_DIALECT_GITHUB | (cjk_friendly ? MD_FLAG_CJKFRIENDLYEMPHASIS : 0);
     parser.enter_block = enter_block_callback;
     parser.leave_block = leave_block_callback;
     parser.enter_span = enter_span_callback;
@@ -729,7 +729,7 @@ Document parse_to_document(const std::string& markdown) {
 
 }  // namespace
 
-Document from_markdown_py(py::object markdown) {
+Document from_markdown_py(py::object markdown, bool cjk_friendly) {
     std::string input;
     if (py::isinstance<py::str>(markdown) || py::isinstance<py::bytes>(markdown)) {
         input = py::cast<std::string>(markdown);
@@ -740,7 +740,7 @@ Document from_markdown_py(py::object markdown) {
     Document document;
     {
         py::gil_scoped_release release;
-        document = parse_to_document(input);
+        document = parse_to_document(input, cjk_friendly);
     }
     return document;
 }

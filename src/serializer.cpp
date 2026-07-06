@@ -211,6 +211,150 @@ std::string apply_marks(std::string rendered, const std::vector<Mark>& marks, bo
     return rendered;
 }
 
+// A run of consecutive inline nodes sharing the same marks, with its content
+// already rendered. `marks` excludes "code" (code spans are atomic per run).
+struct InlineRun {
+    std::vector<Mark> marks;
+    std::string content;
+};
+
+bool is_emphasis_mark(const Mark& mark) {
+    return mark.type == "bold" || mark.type == "italic" || mark.type == "strike";
+}
+
+std::size_t common_prefix(const std::vector<Mark>& a, const std::vector<Mark>& b) {
+    std::size_t limit = std::min(a.size(), b.size());
+    std::size_t i = 0;
+    while (i < limit && a[i] == b[i]) {
+        ++i;
+    }
+    return i;
+}
+
+std::size_t first_emphasis_at_or_after(const std::vector<Mark>& marks, std::size_t from) {
+    for (std::size_t i = from; i < marks.size(); ++i) {
+        if (is_emphasis_mark(marks[i])) {
+            return i;
+        }
+    }
+    return marks.size();
+}
+
+std::string open_delimiter(const Mark& mark) {
+    if (mark.type == "bold") {
+        return "**";
+    }
+    if (mark.type == "italic") {
+        return "*";
+    }
+    if (mark.type == "strike") {
+        return "~~";
+    }
+    if (mark.type == "link") {
+        return "[";
+    }
+    return "";
+}
+
+std::string close_delimiter(const Mark& mark) {
+    if (mark.type == "bold") {
+        return "**";
+    }
+    if (mark.type == "italic") {
+        return "*";
+    }
+    if (mark.type == "strike") {
+        return "~~";
+    }
+    if (mark.type == "link") {
+        std::string href = mark_attr_string(mark, "href");
+        std::string title = mark_attr_string(mark, "title");
+        return "](" + escape_link_destination(href) +
+               (title.empty() ? "" : " \"" + escape_title(title) + "\"") + ")";
+    }
+    return "";
+}
+
+// Whitespace adjacent to an emphasis delimiter prevents the delimiter from
+// opening/closing and no markdown syntax can express it, so such whitespace is
+// moved outside the emphasis marks (cf. prosemirror-markdown
+// expelEnclosingWhitespace). It stays inside enclosing non-emphasis marks
+// such as links, which have no whitespace restriction.
+void expel_boundary_whitespace(std::vector<InlineRun>& runs) {
+    static const char* const kWhitespace = " \t\n";
+    const std::vector<Mark> no_marks;
+    std::vector<InlineRun> result;
+
+    for (std::size_t i = 0; i < runs.size(); ++i) {
+        const std::vector<Mark>& prev = i > 0 ? runs[i - 1].marks : no_marks;
+        const std::vector<Mark>& next = i + 1 < runs.size() ? runs[i + 1].marks : no_marks;
+        InlineRun& run = runs[i];
+
+        std::size_t opening_emphasis = first_emphasis_at_or_after(run.marks, common_prefix(prev, run.marks));
+        if (opening_emphasis < run.marks.size()) {
+            std::size_t body = run.content.find_first_not_of(kWhitespace);
+            std::size_t lead_len = body == std::string::npos ? run.content.size() : body;
+            if (lead_len > 0) {
+                InlineRun lead;
+                lead.marks.assign(run.marks.begin(), run.marks.begin() + opening_emphasis);
+                lead.content = run.content.substr(0, lead_len);
+                run.content.erase(0, lead_len);
+                result.push_back(std::move(lead));
+            }
+        }
+
+        InlineRun tail;
+        bool has_tail = false;
+        std::size_t closing_emphasis = first_emphasis_at_or_after(run.marks, common_prefix(run.marks, next));
+        if (closing_emphasis < run.marks.size() && !run.content.empty()) {
+            std::size_t body = run.content.find_last_not_of(kWhitespace);
+            std::size_t keep = body == std::string::npos ? 0 : body + 1;
+            if (keep < run.content.size()) {
+                tail.marks.assign(run.marks.begin(), run.marks.begin() + closing_emphasis);
+                tail.content = run.content.substr(keep);
+                run.content.erase(keep);
+                has_tail = true;
+            }
+        }
+
+        if (!run.content.empty()) {
+            InlineRun kept;
+            kept.marks = run.marks;
+            kept.content = std::move(run.content);
+            result.push_back(std::move(kept));
+        }
+        if (has_tail) {
+            result.push_back(std::move(tail));
+        }
+    }
+
+    runs = std::move(result);
+}
+
+// Emit runs keeping shared marks open across run boundaries, so e.g.
+// [a: bold][b: bold+italic] becomes "**a*b***" rather than "**a*****b***".
+std::string emit_runs(const std::vector<InlineRun>& runs) {
+    std::string out;
+    std::vector<Mark> open;
+    for (const InlineRun& run : runs) {
+        std::size_t keep = common_prefix(open, run.marks);
+        while (open.size() > keep) {
+            out += close_delimiter(open.back());
+            open.pop_back();
+        }
+        for (std::size_t j = keep; j < run.marks.size(); ++j) {
+            out += open_delimiter(run.marks[j]);
+            open.push_back(run.marks[j]);
+        }
+        out += run.content;
+    }
+    while (!open.empty()) {
+        out += close_delimiter(open.back());
+        open.pop_back();
+    }
+    return out;
+}
+
 class MarkdownWriter {
 public:
     explicit MarkdownWriter(const Document& document) : document_(document) {}
@@ -483,9 +627,9 @@ private:
         return rendered;
     }
 
-    // Render one inline node without applying its marks. Marks are applied once
-    // around each run of consecutive nodes sharing the same marks, so a hard
-    // break inside e.g. bold yields "**a  \nb**" rather than "**a****  \n****b**".
+    // Render one inline node without applying its marks. Marks are emitted by
+    // emit_runs(), which keeps marks shared between consecutive runs open
+    // across the boundary.
     std::string render_inline_content(const Node& node, bool table_cell, bool in_code) {
         const std::string& type = node.type;
         if (type == "text") {
@@ -512,7 +656,13 @@ private:
             return render_inline(node, table_cell);
         }
 
-        std::string out;
+        std::vector<InlineRun> runs = build_runs(node, table_cell);
+        expel_boundary_whitespace(runs);
+        return emit_runs(runs);
+    }
+
+    std::vector<InlineRun> build_runs(const Node& node, bool table_cell) {
+        std::vector<InlineRun> runs;
         const std::vector<std::size_t>& content = node.content;
         std::size_t i = 0;
         while (i < content.size()) {
@@ -528,14 +678,18 @@ private:
                 group += render_inline_content(child, table_cell, in_code);
                 ++j;
             }
-            if (in_code) {
-                out += apply_marks(code_span(group), first.marks, true);
-            } else {
-                out += apply_marks(std::move(group), first.marks);
+
+            InlineRun run;
+            for (const Mark& mark : first.marks) {
+                if (mark.type != "code") {
+                    run.marks.push_back(mark);
+                }
             }
+            run.content = in_code ? code_span(group) : std::move(group);
+            runs.push_back(std::move(run));
             i = j;
         }
-        return out;
+        return runs;
     }
 
     std::string render_inline(const Node& node, bool table_cell = false) {

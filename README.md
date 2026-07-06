@@ -24,8 +24,17 @@ markdown = doc.to_markdown()
 doc = tm.from_dict(ast)
 ```
 
-The first version targets GFM core syntax and canonical Markdown output rather
-than byte-identical source preservation.
+`from_markdown` follows GFM/CommonMark by default. Pass `cjk_friendly=True` to
+relax the emphasis and strikethrough rules so delimiters next to CJK text still
+open and close (e.g. `**볼드**은` parses as bold), a non-standard extension that
+is off by default:
+
+```python
+doc = tm.from_markdown("**볼드**은 강조", cjk_friendly=True)
+```
+
+marktip targets GFM core syntax and canonical Markdown output rather than
+byte-identical source preservation.
 
 ## Development
 

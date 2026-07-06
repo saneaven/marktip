@@ -6,7 +6,7 @@
 namespace py = pybind11;
 
 #ifndef MARKTIP_VERSION
-#define MARKTIP_VERSION "0.1.0"
+#define MARKTIP_VERSION "0.2.0"
 #endif
 
 PYBIND11_MODULE(_core, module) {
@@ -21,6 +21,8 @@ PYBIND11_MODULE(_core, module) {
              },
              "Serialize the document AST to canonical Markdown.");
 
-    module.def("from_markdown", &marktip::from_markdown_py, py::arg("markdown"), "Parse Markdown into a Document.");
+    module.def("from_markdown", &marktip::from_markdown_py, py::arg("markdown"), py::arg("cjk_friendly") = false,
+               "Parse Markdown into a Document. Set cjk_friendly=True to relax the emphasis rules around CJK text "
+               "(non-standard extension; the default follows GFM/CommonMark exactly).");
     module.def("from_dict", &marktip::from_dict_py, py::arg("ast"), "Build a Document from a Tiptap-style JSON dict.");
 }

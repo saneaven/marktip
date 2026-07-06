@@ -678,6 +678,42 @@ struct MD_UNICODE_FOLD_INFO_tag {
         return (md_unicode_bsearch__(codepoint, PUNCT_MAP, SIZEOF_ARRAY(PUNCT_MAP)) >= 0);
     }
 
+    /* MARKTIP LOCAL PATCH (MD_FLAG_CJKFRIENDLYEMPHASIS):
+     * CJK letters (Hangul, kana, Han ideographs, fullwidth forms). Used to
+     * relax the emphasis flanking rules around CJK text. */
+    static int
+    md_is_cjk_char__(unsigned codepoint)
+    {
+#define R(cp_min, cp_max)   ((cp_min) | 0x40000000), ((cp_max) | 0x80000000)
+#define S(cp)               (cp)
+        static const unsigned CJK_MAP[] = {
+            R(0x1100,0x11ff),   /* Hangul jamo */
+            S(0x3005), S(0x3007), S(0x303b),
+            R(0x3040,0x30fa),   /* hiragana, katakana (except middle dot) */
+            R(0x30fc,0x30ff),
+            R(0x3105,0x312f),   /* bopomofo */
+            R(0x3130,0x318f),   /* Hangul compatibility jamo */
+            R(0x31f0,0x31ff),   /* katakana phonetic extensions */
+            R(0x3400,0x4dbf),   /* CJK ideographs extension A */
+            R(0x4e00,0x9fff),   /* CJK unified ideographs */
+            R(0xa960,0xa97f),   /* Hangul jamo extended-A */
+            R(0xac00,0xd7a3),   /* Hangul syllables */
+            R(0xd7b0,0xd7ff),   /* Hangul jamo extended-B */
+            R(0xf900,0xfaff),   /* CJK compatibility ideographs */
+            R(0xff21,0xff3a),   /* fullwidth Latin capitals */
+            R(0xff41,0xff5a),   /* fullwidth Latin small letters */
+            R(0xff66,0xff9f),   /* halfwidth katakana */
+            R(0x20000,0x3ffff)  /* CJK ideographs extensions B..H */
+        };
+#undef R
+#undef S
+
+        if(codepoint < 0x1100)
+            return FALSE;
+
+        return (md_unicode_bsearch__(codepoint, CJK_MAP, SIZEOF_ARRAY(CJK_MAP)) >= 0);
+    }
+
     static void
     md_get_unicode_fold_info(unsigned codepoint, MD_UNICODE_FOLD_INFO* info)
     {
@@ -871,6 +907,10 @@ struct MD_UNICODE_FOLD_INFO_tag {
     #define ISUNICODEPUNCT(off)             md_is_unicode_punct__(md_decode_utf16le__(STR(off), ctx->size - (off), NULL))
     #define ISUNICODEPUNCTBEFORE(off)       md_is_unicode_punct__(md_decode_utf16le_before__(ctx, off))
 
+    /* MARKTIP LOCAL PATCH (MD_FLAG_CJKFRIENDLYEMPHASIS) */
+    #define ISCJK(off)                      md_is_cjk_char__(md_decode_utf16le__(STR(off), ctx->size - (off), NULL))
+    #define ISCJKBEFORE(off)                md_is_cjk_char__(md_decode_utf16le_before__(ctx, off))
+
     static inline int
     md_decode_unicode(const CHAR* str, OFF off, SZ str_size, SZ* p_char_size)
     {
@@ -952,6 +992,10 @@ struct MD_UNICODE_FOLD_INFO_tag {
     #define ISUNICODEPUNCT(off)             md_is_unicode_punct__(md_decode_utf8__(STR(off), ctx->size - (off), NULL))
     #define ISUNICODEPUNCTBEFORE(off)       md_is_unicode_punct__(md_decode_utf8_before__(ctx, off))
 
+    /* MARKTIP LOCAL PATCH (MD_FLAG_CJKFRIENDLYEMPHASIS) */
+    #define ISCJK(off)                      md_is_cjk_char__(md_decode_utf8__(STR(off), ctx->size - (off), NULL))
+    #define ISCJKBEFORE(off)                md_is_cjk_char__(md_decode_utf8_before__(ctx, off))
+
     static inline unsigned
     md_decode_unicode(const CHAR* str, OFF off, SZ str_size, SZ* p_char_size)
     {
@@ -964,6 +1008,10 @@ struct MD_UNICODE_FOLD_INFO_tag {
 
     #define ISUNICODEPUNCT(off)             ISPUNCT(off)
     #define ISUNICODEPUNCTBEFORE(off)       ISPUNCT((off)-1)
+
+    /* MARKTIP LOCAL PATCH (MD_FLAG_CJKFRIENDLYEMPHASIS): no CJK in ASCII mode. */
+    #define ISCJK(off)                      FALSE
+    #define ISCJKBEFORE(off)                FALSE
 
     static inline void
     md_get_unicode_fold_info(unsigned codepoint, MD_UNICODE_FOLD_INFO* info)
@@ -3044,6 +3092,8 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                 OFF tmp = off+1;
                 int left_level;     /* What precedes: 0 = whitespace; 1 = punctuation; 2 = other char. */
                 int right_level;    /* What follows: 0 = whitespace; 1 = punctuation; 2 = other char. */
+                int left_is_cjk = FALSE;
+                int right_is_cjk = FALSE;
 
                 while(tmp < line->end  &&  CH(tmp) == ch)
                     tmp++;
@@ -3062,6 +3112,16 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                 else
                     right_level = 2;
 
+                /* MARKTIP LOCAL PATCH: a CJK character next to the delimiter
+                 * does not block it from being an opener/closer on the other
+                 * side (cf. markdown-it-cjk-friendly). */
+                if(ctx->parser.flags & MD_FLAG_CJKFRIENDLYEMPHASIS) {
+                    if(off > line->beg)
+                        left_is_cjk = ISCJKBEFORE(off);
+                    if(tmp < line->end)
+                        right_is_cjk = ISCJK(tmp);
+                }
+
                 /* Intra-word underscore doesn't have special meaning. */
                 if(ch == _T('_')  &&  left_level == 2  &&  right_level == 2) {
                     left_level = 0;
@@ -3071,9 +3131,9 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                 if(left_level != 0  ||  right_level != 0) {
                     unsigned flags = 0;
 
-                    if(left_level > 0  &&  left_level >= right_level)
+                    if(left_level > 0  &&  (left_level >= right_level  ||  right_is_cjk))
                         flags |= MD_MARK_POTENTIAL_CLOSER;
-                    if(right_level > 0  &&  right_level >= left_level)
+                    if(right_level > 0  &&  (right_level >= left_level  ||  left_is_cjk))
                         flags |= MD_MARK_POTENTIAL_OPENER;
                     if(flags == (MD_MARK_POTENTIAL_OPENER | MD_MARK_POTENTIAL_CLOSER))
                         flags |= MD_MARK_EMPH_OC;
@@ -3295,10 +3355,14 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
 
                 if(tmp - off <= 2) {
                     unsigned flags = MD_MARK_POTENTIAL_OPENER | MD_MARK_POTENTIAL_CLOSER;
+                    /* MARKTIP LOCAL PATCH: CJK-friendly strikethrough. */
+                    int cjk_friendly = (ch == _T('~')  &&  (ctx->parser.flags & MD_FLAG_CJKFRIENDLYEMPHASIS));
 
-                    if(off > line->beg  &&  !ISUNICODEWHITESPACEBEFORE(off)  &&  !ISUNICODEPUNCTBEFORE(off))
+                    if(off > line->beg  &&  !ISUNICODEWHITESPACEBEFORE(off)  &&  !ISUNICODEPUNCTBEFORE(off)
+                        &&  !(cjk_friendly  &&  ISCJKBEFORE(off)))
                         flags &= ~MD_MARK_POTENTIAL_OPENER;
-                    if(tmp < line->end  &&  !ISUNICODEWHITESPACE(tmp)  &&  !ISUNICODEPUNCT(tmp))
+                    if(tmp < line->end  &&  !ISUNICODEWHITESPACE(tmp)  &&  !ISUNICODEPUNCT(tmp)
+                        &&  !(cjk_friendly  &&  ISCJK(tmp)))
                         flags &= ~MD_MARK_POTENTIAL_CLOSER;
                     if(flags != 0)
                         ADD_MARK(ch, off, tmp, flags);
