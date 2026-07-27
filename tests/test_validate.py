@@ -1,9 +1,12 @@
 """from_dict schema enforcement: unknown node/mark types are rejected.
 
-The Tiptap-side schema is closed — every extension must have a markdown
-mapping. from_dict is the single enforcement point: an unknown type raises
-UnknownTypeError (a ValueError subclass) carrying structured fields
-(.type, .path, .kind, .detail) instead of silently dropping content.
+The Tiptap-side schema is closed — every extension must have a markdown mapping.
+from_dict is the single enforcement point.
+An unknown type raises UnknownTypeError instead of silently dropping content,
+carrying structured fields (.code, .type, .path, .kind, .detail).
+
+Grammar violations are a separate class (InvalidNodeError); both share the MarktipError base.
+See test_errors.py for the hierarchy itself.
 """
 
 import pytest
@@ -36,6 +39,7 @@ def test_unknown_node_type_rejected_with_path():
     assert err.type == "callout"
     assert err.path == "content[0]"
     assert err.kind == "node"
+    assert err.code == "unknown_node_type"
     assert err.detail == str(err)
 
 
@@ -49,6 +53,7 @@ def test_unknown_mark_type_rejected_with_path():
     assert err.type == "underline"
     assert err.path == "content[0].content[0].marks[0]"
     assert err.kind == "mark"
+    assert err.code == "unknown_mark_type"
 
 
 def test_unknown_leaf_node_rejected():
@@ -83,14 +88,15 @@ def test_unknown_mark_on_root():
     assert excinfo.value.path == "marks[0]"
 
 
-def test_unknown_type_error_is_value_error():
-    with pytest.raises(ValueError):
+def test_unknown_type_error_is_a_marktip_error():
+    with pytest.raises(tm.MarktipError):
         tm.from_dict(doc({"type": "callout"}))
 
 
-def test_malformed_input_still_plain_value_error():
-    # Structural errors (not schema violations) keep raising plain ValueError.
-    with pytest.raises(ValueError) as excinfo:
+def test_malformed_input_is_a_distinct_class():
+    # A grammar violation is not a schema violation: same base, different class,
+    # so a caller can still tell "unsupported extension" from "broken document".
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
         tm.from_dict({"type": "doc", "content": "bad"})
     assert not isinstance(excinfo.value, tm.UnknownTypeError)
 
@@ -160,5 +166,5 @@ def test_every_known_type_accepted():
 
 
 def test_unknown_type_error_exported():
-    assert issubclass(tm.UnknownTypeError, ValueError)
+    assert issubclass(tm.UnknownTypeError, tm.MarktipError)
     assert "UnknownTypeError" in tm.__all__

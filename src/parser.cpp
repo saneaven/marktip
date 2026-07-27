@@ -9,11 +9,12 @@ extern "C" {
 #include <algorithm>
 #include <cstddef>
 #include <iterator>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "errors.h"
 
 namespace py = pybind11;
 
@@ -393,14 +394,21 @@ public:
         return 0;
     }
 
-    void set_error(std::string message) {
+    // First error wins: MD4C keeps calling back until it unwinds,
+    // and the original failure is the informative one.
+    void set_error(std::string code, std::string message) {
         if (error_.empty()) {
+            error_code_ = std::move(code);
             error_ = std::move(message);
         }
     }
 
     const std::string& error() const {
         return error_;
+    }
+
+    const std::string& error_code() const {
+        return error_code_;
     }
 
     Document into_document() && {
@@ -412,6 +420,7 @@ private:
     std::vector<std::size_t> stack_;
     std::vector<Mark> active_marks_;
     std::string error_;
+    std::string error_code_;
     bool html_ = true;
 
     Node& current() {
@@ -431,7 +440,7 @@ private:
 
     void push_index(std::size_t index) {
         if (stack_.size() >= kMaxNodeDepth) {
-            throw std::runtime_error("markdown nesting exceeds maximum depth");
+            throw ParseError("markdown_max_depth", "markdown nesting exceeds maximum depth");
         }
         stack_.push_back(index);
     }
@@ -647,69 +656,42 @@ private:
     }
 };
 
-int enter_block_callback(MD_BLOCKTYPE type, void* detail, void* userdata) noexcept {
+// MD4C callbacks are a C boundary, so an exception must not escape one.
+// Stash its code and message on the builder and return nonzero instead;
+// parse_to_document rethrows once md_parse has unwound.
+template <typename Fn>
+int run_callback(void* userdata, Fn&& fn) noexcept {
     auto* builder = static_cast<AstBuilder*>(userdata);
     try {
-        return builder->enter_block(type, detail);
+        return fn(*builder);
+    } catch (const MarktipError& exc) {
+        builder->set_error(exc.code(), exc.what());
     } catch (const std::exception& exc) {
-        builder->set_error(exc.what());
-        return 1;
+        builder->set_error("parse_failed", exc.what());
     } catch (...) {
-        builder->set_error("unknown parser callback failure");
-        return 1;
+        builder->set_error("parse_failed", "unknown parser callback failure");
     }
+    return 1;
+}
+
+int enter_block_callback(MD_BLOCKTYPE type, void* detail, void* userdata) noexcept {
+    return run_callback(userdata, [&](AstBuilder& builder) { return builder.enter_block(type, detail); });
 }
 
 int leave_block_callback(MD_BLOCKTYPE type, void* detail, void* userdata) noexcept {
-    auto* builder = static_cast<AstBuilder*>(userdata);
-    try {
-        return builder->leave_block(type, detail);
-    } catch (const std::exception& exc) {
-        builder->set_error(exc.what());
-        return 1;
-    } catch (...) {
-        builder->set_error("unknown parser callback failure");
-        return 1;
-    }
+    return run_callback(userdata, [&](AstBuilder& builder) { return builder.leave_block(type, detail); });
 }
 
 int enter_span_callback(MD_SPANTYPE type, void* detail, void* userdata) noexcept {
-    auto* builder = static_cast<AstBuilder*>(userdata);
-    try {
-        return builder->enter_span(type, detail);
-    } catch (const std::exception& exc) {
-        builder->set_error(exc.what());
-        return 1;
-    } catch (...) {
-        builder->set_error("unknown parser callback failure");
-        return 1;
-    }
+    return run_callback(userdata, [&](AstBuilder& builder) { return builder.enter_span(type, detail); });
 }
 
 int leave_span_callback(MD_SPANTYPE type, void* detail, void* userdata) noexcept {
-    auto* builder = static_cast<AstBuilder*>(userdata);
-    try {
-        return builder->leave_span(type, detail);
-    } catch (const std::exception& exc) {
-        builder->set_error(exc.what());
-        return 1;
-    } catch (...) {
-        builder->set_error("unknown parser callback failure");
-        return 1;
-    }
+    return run_callback(userdata, [&](AstBuilder& builder) { return builder.leave_span(type, detail); });
 }
 
 int text_callback(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* userdata) noexcept {
-    auto* builder = static_cast<AstBuilder*>(userdata);
-    try {
-        return builder->text(type, text, size);
-    } catch (const std::exception& exc) {
-        builder->set_error(exc.what());
-        return 1;
-    } catch (...) {
-        builder->set_error("unknown parser callback failure");
-        return 1;
-    }
+    return run_callback(userdata, [&](AstBuilder& builder) { return builder.text(type, text, size); });
 }
 
 Document parse_to_document(const std::string& markdown, bool cjk_friendly, bool html) {
@@ -733,9 +715,9 @@ Document parse_to_document(const std::string& markdown, bool cjk_friendly, bool 
     int rc = md_parse(markdown.data(), static_cast<MD_SIZE>(markdown.size()), &parser, &builder);
     if (rc != 0) {
         if (!builder.error().empty()) {
-            throw std::runtime_error(builder.error());
+            throw ParseError(builder.error_code(), builder.error());
         }
-        throw std::runtime_error("MD4C failed to parse markdown");
+        throw ParseError("parse_failed", "MD4C failed to parse markdown");
     }
     return std::move(builder).into_document();
 }

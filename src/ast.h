@@ -3,11 +3,12 @@
 #include <pybind11/pybind11.h>
 
 #include <cstddef>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "errors.h"
 
 namespace marktip {
 
@@ -45,27 +46,6 @@ struct Node {
     AttrList attrs;
     std::vector<Mark> marks;
     std::vector<std::size_t> content;
-};
-
-// Raised by from_dict when a node or mark type is outside the closed schema.
-// Subclasses std::invalid_argument so it surfaces as (a subclass of) ValueError.
-class UnknownTypeError : public std::invalid_argument {
-public:
-    UnknownTypeError(std::string kind, std::string type_name, std::string path)
-        : std::invalid_argument("unknown " + kind + " type '" + type_name + "' at " +
-                                (path.empty() ? std::string("root") : path)),
-          kind_(std::move(kind)),
-          type_name_(std::move(type_name)),
-          path_(std::move(path)) {}
-
-    const std::string& kind() const noexcept { return kind_; }
-    const std::string& type_name() const noexcept { return type_name_; }
-    const std::string& path() const noexcept { return path_; }
-
-private:
-    std::string kind_;       // "node" | "mark"
-    std::string type_name_;
-    std::string path_;       // "content[0].marks[1]"; empty = root
 };
 
 void set_attr(AttrList& attrs, std::string key, AttrValue value);

@@ -41,12 +41,12 @@ def test_from_dict_roundtrips_and_deep_copies():
     ],
 )
 def test_from_dict_rejects_malformed_input(ast, message):
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(tm.InvalidNodeError, match=message):
         tm.from_dict(ast)
 
 
 def test_deeply_nested_markdown_raises_instead_of_crashing():
-    with pytest.raises(RuntimeError, match="maximum depth"):
+    with pytest.raises(tm.ParseError, match="maximum depth"):
         tm.from_markdown(">" * 50000 + " x")
 
 
@@ -55,7 +55,7 @@ def test_deeply_nested_dict_raises_instead_of_crashing():
     for _ in range(5000):
         node = {"type": "blockquote", "content": [node]}
 
-    with pytest.raises(ValueError, match="maximum depth"):
+    with pytest.raises(tm.InvalidNodeError, match="maximum depth"):
         tm.from_dict({"type": "doc", "content": [node]})
 
 

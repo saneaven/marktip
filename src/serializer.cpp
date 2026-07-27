@@ -2,11 +2,12 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "errors.h"
 
 namespace marktip {
 namespace {
@@ -381,7 +382,7 @@ public:
 
     std::string render() {
         if (document_.root().type != "doc") {
-            throw std::invalid_argument("root node must have type 'doc'");
+            throw InvalidNodeError("invalid_root", "type", "root node must have type 'doc'", "");
         }
         return render_doc(document_.root());
     }

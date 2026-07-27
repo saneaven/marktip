@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <iterator>
-#include <stdexcept>
 
 namespace py = pybind11;
 
@@ -64,16 +63,16 @@ py::object dict_get(py::dict dict, const char* key) {
     return dict[py::str(key)];
 }
 
-py::dict expect_dict(py::handle value, std::string_view context) {
+py::dict expect_dict(py::handle value, std::string_view context, const char* field, const PathStack& path) {
     if (!py::isinstance<py::dict>(value)) {
-        throw std::invalid_argument(std::string(context) + " must be a dict");
+        throw InvalidNodeError("wrong_type", field, std::string(context) + " must be a dict", format_path(path));
     }
     return py::reinterpret_borrow<py::dict>(value);
 }
 
-py::list expect_list(py::handle value, std::string_view context) {
+py::list expect_list(py::handle value, std::string_view context, const char* field, const PathStack& path) {
     if (!py::isinstance<py::list>(value)) {
-        throw std::invalid_argument(std::string(context) + " must be a list");
+        throw InvalidNodeError("wrong_type", field, std::string(context) + " must be a list", format_path(path));
     }
     return py::reinterpret_borrow<py::list>(value);
 }
@@ -85,10 +84,11 @@ std::string py_to_string(py::handle value) {
     return py::cast<std::string>(py::str(value));
 }
 
-std::string required_type(py::dict value, std::string_view context) {
+std::string required_type(py::dict value, std::string_view context, const PathStack& path) {
     py::object type = dict_get(value, "type");
     if (type.is_none()) {
-        throw std::invalid_argument(std::string(context) + " is missing required key 'type'");
+        throw InvalidNodeError("missing_type", "type", std::string(context) + " is missing required key 'type'",
+                               format_path(path));
     }
     return py_to_string(type);
 }
@@ -172,14 +172,14 @@ py::dict node_to_py(const Document& document, std::size_t index) {
 
 Mark mark_from_py(py::dict mark_dict, const PathStack& path) {
     Mark mark;
-    mark.type = required_type(mark_dict, "mark");
+    mark.type = required_type(mark_dict, "mark", path);
     if (!is_known_mark_type(mark.type)) {
         throw UnknownTypeError("mark", mark.type, format_path(path));
     }
 
     py::object attrs = dict_get(mark_dict, "attrs");
     if (!attrs.is_none()) {
-        mark.attrs = attrs_from_py(expect_dict(attrs, "mark attrs"));
+        mark.attrs = attrs_from_py(expect_dict(attrs, "mark attrs", "attrs", path));
     }
 
     return mark;
@@ -188,11 +188,12 @@ Mark mark_from_py(py::dict mark_dict, const PathStack& path) {
 void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict, std::string_view context,
                        std::size_t depth, PathStack& path) {
     if (depth > kMaxNodeDepth) {
-        throw std::invalid_argument("node content nesting exceeds maximum depth");
+        throw InvalidNodeError("max_depth", "content", "node content nesting exceeds maximum depth",
+                               format_path(path));
     }
 
     Node node;
-    node.type = required_type(node_dict, context);
+    node.type = required_type(node_dict, context, path);
     if (!is_known_node_type(node.type)) {
         throw UnknownTypeError("node", node.type, format_path(path));
     }
@@ -203,16 +204,16 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
 
     py::object attrs = dict_get(node_dict, "attrs");
     if (!attrs.is_none()) {
-        node.attrs = attrs_from_py(expect_dict(attrs, "node attrs"));
+        node.attrs = attrs_from_py(expect_dict(attrs, "node attrs", "attrs", path));
     }
 
     py::object marks = dict_get(node_dict, "marks");
     if (!marks.is_none()) {
-        py::list mark_list = expect_list(marks, "node marks");
+        py::list mark_list = expect_list(marks, "node marks", "marks", path);
         std::size_t mark_index = 0;
         for (py::handle mark_handle : mark_list) {
             path.push_back({"marks", mark_index});
-            node.marks.push_back(mark_from_py(expect_dict(mark_handle, "mark"), path));
+            node.marks.push_back(mark_from_py(expect_dict(mark_handle, "mark", "marks", path), path));
             path.pop_back();
             ++mark_index;
         }
@@ -225,12 +226,13 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
         return;
     }
 
-    py::list content_list = expect_list(content, "node content");
+    py::list content_list = expect_list(content, "node content", "content", path);
     std::size_t child_pos = 0;
     for (py::handle child_handle : content_list) {
         std::size_t child_index = document.append_child(index, Node{});
         path.push_back({"content", child_pos});
-        fill_node_from_py(document, child_index, expect_dict(child_handle, "content child"), "node", depth + 1, path);
+        fill_node_from_py(document, child_index, expect_dict(child_handle, "content child", "content", path), "node",
+                          depth + 1, path);
         path.pop_back();
         ++child_pos;
     }
@@ -390,14 +392,15 @@ py::dict Document::to_dict() const {
 }
 
 Document from_dict_py(py::dict root) {
-    std::string type = required_type(root, "root node");
+    PathStack path;
+    path.reserve(32);
+
+    std::string type = required_type(root, "root node", path);
     if (type != "doc") {
-        throw std::invalid_argument("root node must have type 'doc'");
+        throw InvalidNodeError("invalid_root", "type", "root node must have type 'doc'", format_path(path));
     }
 
     Document document;
-    PathStack path;
-    path.reserve(32);
     fill_node_from_py(document, 0, root, "root node", 0, path);
     return document;
 }

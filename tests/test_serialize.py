@@ -81,7 +81,7 @@ def test_serialize_lists_code_and_table():
 
 
 def test_serialize_rejects_non_doc_root():
-    with pytest.raises(ValueError, match="root node"):
+    with pytest.raises(tm.InvalidNodeError, match="root node"):
         tm.from_dict({"type": "paragraph"})
 
 
