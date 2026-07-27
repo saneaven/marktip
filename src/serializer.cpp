@@ -690,7 +690,7 @@ private:
                    (title.empty() ? "" : " \"" + escape_title(title) + "\"") + ")";
         }
         if (type == "htmlInline") {
-            return attr_string(node.attrs, "html");
+            return attr_string(node.attrs, "html", plain_text(node));
         }
         return render_inlines(node, ctx);
     }
@@ -753,14 +753,20 @@ private:
         if (type == "hardBreak") {
             return "\n";
         }
-        if (type == "htmlInline") {
-            return attr_string(node.attrs, "html");
-        }
-        if (type == "htmlBlock") {
-            return attr_string(node.attrs, "html");
-        }
-        if (type == "image") {
-            return attr_string(node.attrs, "alt");
+        // The attr is the payload when the key is present, even if its value is empty.
+        // When it is absent, fall through to the children:
+        // from_dict accepts and stores content on these nodes,
+        // and returning "" here would drop it — the silent loss the closed schema exists to prevent.
+        // Callers use this as the fallback for the very same attr (see the htmlBlock and image
+        // branches above), so returning the attr unconditionally would just recurse to "".
+        if (type == "htmlInline" || type == "htmlBlock") {
+            if (find_attr(node.attrs, "html") != nullptr) {
+                return attr_string(node.attrs, "html");
+            }
+        } else if (type == "image") {
+            if (find_attr(node.attrs, "alt") != nullptr) {
+                return attr_string(node.attrs, "alt");
+            }
         }
         std::string out;
         for_each_child(node, [&](const Node& child) {

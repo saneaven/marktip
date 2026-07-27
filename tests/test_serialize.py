@@ -139,3 +139,49 @@ def test_serialize_hard_break_in_table_cell_as_br():
         {"type": "hardBreak"},
         {"type": "text", "text": "line2"},
     ]
+
+
+def doc_with(node):
+    return tm.from_dict({"type": "doc", "content": [node]}).to_markdown()
+
+
+def test_html_nodes_fall_back_to_content_when_attr_is_absent():
+    # from_dict accepts and stores content on html nodes, so dropping it here would be
+    # the silent loss the closed schema exists to prevent.
+    # plain_text used to answer with the "html" attr for these types,
+    # which made the attr's own fallback recurse straight back to "".
+    assert doc_with({"type": "htmlBlock", "content": [{"type": "text", "text": "<div>hi</div>"}]}) == "<div>hi</div>"
+
+    inline = {
+        "type": "paragraph",
+        "content": [
+            {"type": "text", "text": "a"},
+            {"type": "htmlInline", "content": [{"type": "text", "text": "<u>U</u>"}]},
+            {"type": "text", "text": "b"},
+        ],
+    }
+    assert doc_with(inline) == "a<u>U</u>b"
+
+
+def test_html_attr_wins_over_content():
+    node = {
+        "type": "htmlBlock",
+        "attrs": {"html": "<b>A</b>"},
+        "content": [{"type": "text", "text": "ignored"}],
+    }
+    assert doc_with(node) == "<b>A</b>"
+
+
+def test_explicit_empty_html_attr_stays_empty():
+    # The key is present, so "" is a deliberate value rather than a missing payload.
+    node = {"type": "htmlBlock", "attrs": {"html": ""}, "content": [{"type": "text", "text": "x"}]}
+    assert doc_with(node) == ""
+    assert doc_with({"type": "htmlBlock"}) == ""
+
+
+def test_image_alt_falls_back_to_content():
+    node = {
+        "type": "paragraph",
+        "content": [{"type": "image", "attrs": {"src": "i.png"}, "content": [{"type": "text", "text": "ALT"}]}],
+    }
+    assert doc_with(node) == "![ALT](i.png)"
