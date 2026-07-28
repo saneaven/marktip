@@ -50,6 +50,7 @@ private:
 
 // Raised when the input violates the node grammar itself: a missing 'type', a non-dict attrs,
 // a non-list content, a root that is not a doc.
+// Also raised when an attr value is refused outright, as the URI policy does for a link href / image src.
 class InvalidNodeError : public MarktipError {
 public:
     InvalidNodeError(std::string code, std::string field, std::string message, std::string path)
@@ -58,7 +59,7 @@ public:
     const std::string& field() const noexcept { return field_; }
 
 private:
-    std::string field_;  // "type" | "attrs" | "marks" | "content"
+    std::string field_;  // "type" | "attrs" | "marks" | "content", or the offending attr name ("href" | "src")
 };
 
 // Raised by from_markdown when the markdown itself cannot be parsed.

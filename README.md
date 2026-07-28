@@ -43,6 +43,39 @@ doc = tm.from_markdown("a <u>x</u> b", html=False)
 
 marktip targets GFM core syntax and canonical Markdown output rather than byte-identical source preservation.
 
+### Restricting link and image URIs
+
+`[click](javascript:alert(1))` is valid Markdown, so marktip converts it by default.
+A consumer that *stores* the result and renders it later can opt into a scheme allowlist, enforced in C++ rather than as a second traversal in Python:
+
+```python
+doc = tm.from_dict(ast, link_schemes=("http", "https", "mailto"), image_schemes=("https",))
+```
+
+`link_schemes` and `image_schemes` are separate because the asymmetry is the common case, and both default to `None`, which allows every scheme.
+An empty tuple allows none.
+Scheme comparison is case-insensitive, and entity references are resolved first, so neither `JavaScript:` nor `&#106;avascript:` slips past an `https`-only list.
+
+`link_relative` and `image_relative` govern references that carry no scheme at all:
+
+| | `/foo`, `#anchor`, `./x.png` | `//evil.com/x` |
+| --- | --- | --- |
+| `"allow"` (default) | passes | passes |
+| `"path_only"` | passes | rejected |
+| `"reject"` | rejected | rejected |
+
+The two axes are independent: `link_relative="reject"` with no allowlist means "any scheme, but it must be absolute".
+
+Both write boundaries take the same options, which matters when an editor submits an AST but agents and imports submit Markdown strings:
+
+```python
+doc = tm.from_markdown(untrusted, link_schemes=("https",), image_relative="reject")
+# InvalidNodeError: link href scheme 'javascript' is not allowed
+```
+
+Violations raise `InvalidNodeError` with `.field` set to `"href"` or `"src"`.
+The options are keyword-only.
+
 ## Errors
 
 Every rejection marktip raises derives from `marktip.MarktipError`, so "the input is malformed" is a single `except` — no need to catch a bare `ValueError` wide enough to swallow an unrelated bug:
@@ -63,6 +96,7 @@ Exception
 ```
 
 `.path` is a breadcrumb into the input, e.g. `content[1].content[0].marks[0]`; it is `""` when the failure is at the root or has no location.
+For `from_markdown` it locates the node in the parsed document, since the input itself is a string.
 `.detail` is the same string as `str(e)`.
 `.code` is a stable machine key:
 
@@ -74,13 +108,21 @@ Exception
 | `invalid_root` | `InvalidNodeError` | the root node's type is not `doc` |
 | `wrong_type` | `InvalidNodeError` | `attrs`/`content`/`marks`/a child has the wrong Python type |
 | `max_depth` | `InvalidNodeError` | dict nesting exceeds 2048 |
+| `disallowed_scheme` | `InvalidNodeError` | a link `href` / image `src` scheme is outside the allowlist |
+| `disallowed_relative_url` | `InvalidNodeError` | a scheme-less `href`/`src` violates the relative policy |
+| `invalid_uri_char` | `InvalidNodeError` | an `href`/`src` contains an ASCII control character |
 | `markdown_max_depth` | `ParseError` | markdown nesting exceeds 2048 |
 | `parse_failed` | `ParseError` | MD4C could not parse the input |
 
 `from_markdown` still raises a plain `TypeError` when the argument is not `str`/`bytes` — that is a caller bug, not a malformed document.
+So is a bad URI-policy option: a non-iterable `link_schemes` raises `TypeError`, and `link_schemes=("https://",)` or `link_relative="nope"` raises `ValueError`.
 
 > **Changed in 0.4.0** — these were previously `ValueError` (`from_dict`) and `RuntimeError` (`from_markdown`).
 > `MarktipError` derives from `Exception` directly, so `except ValueError` no longer catches them.
+
+> **Changed in 0.5.0** — an ASCII control character in a link `href` or image `src` is now rejected outright, with or without the URI policy.
+> A URI cannot carry one unencoded (`%09` is the encoded form), and leaving it in would defeat the allowlist itself, because browsers strip tab/LF/CR before reading the scheme.
+> This also rejects `[x](<a\tb>)`, which CommonMark otherwise accepts.
 
 ## What `from_dict` validates
 
@@ -96,8 +138,11 @@ It guarantees, for the whole tree:
 - **The root is a `doc`.**
 - **Shapes**: `attrs` is a dict, `content` and `marks` are lists, and every entry of `content`/`marks` is a dict.
 - **Depth** is at most 2048 levels.
+- **No ASCII control character** in a link `href` or image `src`, entity references included (`&Tab;`, `&#09;`).
+- **The URI policy**, when `link_schemes`/`image_schemes`/`link_relative`/`image_relative` ask for it — see [Restricting link and image URIs](#restricting-link-and-image-uris).
 
 A document that survives `from_dict` always serializes; callers do not need to re-check any of the above.
+`from_markdown` enforces the same two URI rules on what it parses.
 
 It deliberately does **not** validate:
 
@@ -108,6 +153,12 @@ It deliberately does **not** validate:
   A `heading` without `level`, an `image` without `src`, or a `link` mark without `href` is accepted; the serializer substitutes a default rather than failing.
 - **Content models.**
   Which node may contain which is not checked — a `text` node directly under `doc` is accepted and serialized.
+- **Raw HTML.**
+  The URI policy governs `link` marks and `image` nodes, not markup inside `htmlBlock`/`htmlInline`, so `<a href="javascript:...">` passes it.
+  Pair the policy with `html=False` to close that.
+- **URI syntax beyond the scheme.**
+  Everything after the scheme is opaque, and the stored value is never rewritten — an `href` is checked in its entity-decoded form but stored exactly as given.
+  Under `link_relative="allow"` a protocol-relative `//evil.com/x` also passes, since it carries no scheme; `"path_only"` is the setting that rejects it.
 
 Structural violations report where they happened:
 

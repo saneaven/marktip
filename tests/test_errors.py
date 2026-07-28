@@ -171,6 +171,15 @@ def test_every_documented_code_is_reachable():
     for _ in range(5000):
         deep = {"type": "blockquote", "content": [deep]}
 
+    def linked(href):
+        return {
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "x", "marks": [
+                    {"type": "link", "attrs": {"href": href}}]}]}
+            ],
+        }
+
     record(lambda: tm.from_dict({"type": "doc", "content": [{"type": "callout"}]}))
     record(lambda: tm.from_dict({"type": "doc", "marks": [{"type": "underline"}], "content": []}))
     record(lambda: tm.from_dict({"type": "doc", "content": [{"content": []}]}))
@@ -178,6 +187,9 @@ def test_every_documented_code_is_reachable():
     record(lambda: tm.from_dict({"type": "doc", "content": "bad"}))
     record(lambda: tm.from_dict({"type": "doc", "content": [deep]}))
     record(lambda: tm.from_markdown(">" * 50000 + " x"))
+    record(lambda: tm.from_dict(linked("javascript:alert(1)"), link_schemes=("https",)))
+    record(lambda: tm.from_dict(linked("/foo"), link_relative="reject"))
+    record(lambda: tm.from_dict(linked("https://a\x01b")))  # no options: unconditional
 
     assert reachable == {
         "unknown_node_type",
@@ -187,4 +199,7 @@ def test_every_documented_code_is_reachable():
         "wrong_type",
         "max_depth",
         "markdown_max_depth",
+        "disallowed_scheme",
+        "disallowed_relative_url",
+        "invalid_uri_char",
     }

@@ -101,11 +101,37 @@ PYBIND11_MODULE(_core, module) {
              },
              "Serialize the document AST to canonical Markdown.");
 
+    // The URI policy is keyword-only and documented once here;
+    // the README carries the prose.
+    // It behaves identically on both entry points, because both are write boundaries:
+    // an editor submits an AST, agents and imports submit Markdown strings,
+    // and both end up stored.
+    const std::string uri_policy_doc =
+        " Pass link_schemes/image_schemes an iterable of scheme names"
+        " to restrict link href / image src to that set."
+        " None (the default) allows every scheme, () allows none, and comparison is case-insensitive."
+        " Pass link_relative/image_relative one of 'allow' (the default), 'path_only' or 'reject'."
+        " Those govern references carrying no scheme; 'path_only' rejects protocol-relative '//host/x'."
+        " Violations raise InvalidNodeError with .code 'disallowed_scheme' or 'disallowed_relative_url'."
+        " An ASCII control character in href/src is always rejected with .code 'invalid_uri_char',"
+        " options or not.";
+
+    // Held in locals rather than passed as temporaries:
+    // pybind11 takes the doc as a bare const char* and only copies it while def() runs.
+    const std::string from_markdown_doc =
+        "Parse Markdown into a Document."
+        " Set cjk_friendly=True to relax the emphasis rules around CJK text"
+        " (non-standard extension; the default follows GFM/CommonMark exactly)."
+        " Set html=False to parse raw HTML as literal text instead of htmlBlock/htmlInline nodes;"
+        " <br> inside table cells still maps to hardBreak." +
+        uri_policy_doc;
+    const std::string from_dict_doc = "Build a Document from a Tiptap-style JSON dict." + uri_policy_doc;
+
     module.def("from_markdown", &marktip::from_markdown_py, py::arg("markdown"), py::arg("cjk_friendly") = false,
-               py::arg("html") = true,
-               "Parse Markdown into a Document. Set cjk_friendly=True to relax the emphasis rules around CJK text "
-               "(non-standard extension; the default follows GFM/CommonMark exactly). Set html=False to parse raw "
-               "HTML as literal text instead of htmlBlock/htmlInline nodes; <br> inside table cells still maps to "
-               "hardBreak.");
-    module.def("from_dict", &marktip::from_dict_py, py::arg("ast"), "Build a Document from a Tiptap-style JSON dict.");
+               py::arg("html") = true, py::kw_only(), py::arg("link_schemes") = py::none(),
+               py::arg("image_schemes") = py::none(), py::arg("link_relative") = "allow",
+               py::arg("image_relative") = "allow", from_markdown_doc.c_str());
+    module.def("from_dict", &marktip::from_dict_py, py::arg("ast"), py::kw_only(),
+               py::arg("link_schemes") = py::none(), py::arg("image_schemes") = py::none(),
+               py::arg("link_relative") = "allow", py::arg("image_relative") = "allow", from_dict_doc.c_str());
 }
