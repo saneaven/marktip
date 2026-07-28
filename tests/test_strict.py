@@ -41,6 +41,14 @@ def link(**attrs):
     return doc(p({"type": "text", "text": "x", "marks": [{"type": "link", "attrs": attrs}]}))
 
 
+def image(**attrs):
+    return doc(p({"type": "image", "attrs": attrs}))
+
+
+def captioned_image(**attrs):
+    return doc(p({"type": "image", "attrs": attrs, "content": [text("cap")]}))
+
+
 def ordered(**attrs):
     return doc({"type": "orderedList", "attrs": attrs, "content": [{"type": "listItem", "content": [p(text("a"))]}]})
 
@@ -177,6 +185,7 @@ def test_bool_attrs_are_not_coerced_under_strict(value, expected):
         ("py\nx", "invalid_attr_value"),  # would push "x" into the code content on reparse
         ("py\rx", "invalid_attr_value"),
         (1, "invalid_attr_value"),
+        (None, None),  # unset, not a wrong type — see below
     ],
 )
 def test_code_fence_info_must_be_a_single_line(language, expected):
@@ -237,6 +246,90 @@ def test_unrepresentable_is_distinct_from_a_malformed_value():
     # markdown cannot carry, level=9 is simply wrong.
     assert code_for(cell(colspan=2), strict=True) == "unrepresentable"
     assert code_for(doc(node("heading", level=9)), strict=True) == "invalid_attr_value"
+
+
+# ── None: an attr Tiptap serialized but never set ────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "ast",
+    [
+        code_block(language=None),
+        code_block(info=None),
+        image(src="a.png", alt=None, title=None),
+        image(src=None),
+        link(href="https://a", title=None),
+        link(href=None),
+    ],
+)
+def test_none_on_an_optional_attr_is_unset_not_a_wrong_type(ast):
+    # Issue #4. ProseMirror serializes every attr in the schema, defaults included,
+    # and Tiptap declares `default: null` for each of these,
+    # so this is what the editor submits for an attr nobody ever filled in.
+    assert code_for(ast, strict=True) is None
+
+
+@pytest.mark.parametrize(
+    "with_null, without",
+    [
+        (code_block(language=None), code_block()),
+        (image(src="a.png", alt=None, title=None), image(src="a.png")),
+        (link(href="https://a", title=None), link(href="https://a")),
+        (link(href=None), link()),
+    ],
+)
+def test_a_null_attr_converts_exactly_like_an_absent_one(with_null, without):
+    # Why accepting it is not a loosening:
+    # strict admits no markdown here it was not already admitting from the absent-key form.
+    assert tm.from_dict(with_null, strict=True).to_markdown() == tm.from_dict(without, strict=True).to_markdown()
+
+
+def test_a_null_attr_is_dropped_rather_than_coerced_to_empty():
+    # The fix is in the coercion and not only in the strict check,
+    # which is what makes the equivalence above hold for the serializer and the URI policy too.
+    assert "attrs" not in tm.from_dict(code_block(language=None)).to_dict()["content"][0]
+    assert tm.from_dict(code_block(language=None, info="")).to_dict()["content"][0]["attrs"] == {"info": ""}
+
+
+@pytest.mark.parametrize(
+    "ast, field",
+    [
+        (doc(node("heading", level=None)), "level"),
+        (ordered(start=None), "start"),
+        (doc({"type": "taskList", "attrs": {"tight": None}}), "tight"),
+        (doc(node("taskItem", checked=None)), "checked"),
+        (doc({"type": "table", "attrs": {"colCount": None}}), "colCount"),
+        (cell(colspan=None), "colspan"),
+    ],
+)
+def test_none_stays_wrong_where_tiptap_declares_a_non_null_default(ast, field):
+    # These are settings rather than optional values.
+    # Tiptap gives every one of them a non-null default, so a null is a caller mistake.
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_dict(ast, strict=True)
+
+    assert excinfo.value.code == "invalid_attr_value"
+    assert excinfo.value.field == field
+
+
+def test_a_null_html_attr_is_refused_because_it_erases_the_content():
+    # htmlBlock/htmlInline are marktip's own node types, declared by no Tiptap schema,
+    # and an html attr that is present but empty is the payload —
+    # so a null there is not an unset attr, it is the content drop 0.4.1 fixed.
+    nulled = doc({"type": "htmlBlock", "attrs": {"html": None}, "content": [text("<div>hi</div>")]})
+    absent = doc({"type": "htmlBlock", "content": [text("<div>hi</div>")]})
+
+    assert tm.from_dict(nulled).to_markdown() == ""
+    assert tm.from_dict(absent).to_markdown() == "<div>hi</div>"
+    assert code_for(nulled, strict=True) == "invalid_attr_value"
+
+
+def test_a_null_alt_falls_back_to_the_child_text_like_an_absent_one():
+    # The one place the coercion change is visible in the markdown:
+    # an alt of "" is the caption, an unset alt is not, and a null now lands on the second.
+    assert tm.from_dict(captioned_image(src="a.png", alt=None)).to_markdown() == "![cap](a.png)"
+    assert tm.from_dict(captioned_image(src="a.png")).to_markdown() == "![cap](a.png)"
+    assert tm.from_dict(captioned_image(src="a.png", alt="")).to_markdown() == "![](a.png)"
 
 
 # ── the two attrs that are accepted and ignored ──────────────────────────────

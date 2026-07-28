@@ -117,6 +117,18 @@ def test_a_missing_href_or_src_is_still_accepted():
     assert code_for(doc(bare_image), image_schemes=(), image_relative="reject") is None
 
 
+def test_a_null_href_or_src_is_the_missing_one_not_an_empty_string():
+    # Issue #4: Tiptap declares `default: null` for both,
+    # so from_dict drops the key rather than coercing it to "".
+    # Before 0.6.0 a null reached the policy as a present reference carrying no scheme,
+    # and "reject" refused a document the editor produces.
+    assert code_for(doc(link(None)), link_schemes=(), link_relative="reject") is None
+    assert code_for(doc(image(None)), image_schemes=(), image_relative="reject") is None
+
+    # An href that is present and empty is still a reference, and still refused.
+    assert code_for(doc(link("")), link_relative="reject") == "disallowed_relative_url"
+
+
 def test_non_link_marks_and_non_image_nodes_are_left_alone():
     node = {"type": "text", "text": "x", "marks": [{"type": "bold"}, {"type": "code"}]}
     ast = doc({"type": "paragraph", "content": [node], "attrs": {"href": "javascript:alert(1)"}})

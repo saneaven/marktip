@@ -93,18 +93,28 @@ It is off by default and keyword-only, and it is a `from_dict` option only — t
 | Node | Accepted attrs |
 | --- | --- |
 | `heading` | `level`: 1–6 |
-| `codeBlock` | `language`, `info`: single-line `str` |
+| `codeBlock` | `language`, `info`: single-line `str` or `None` |
 | `bulletList`, `taskList` | `tight`: `bool` |
 | `orderedList` | `start`: 0–999999999, `tight`: `bool` |
 | `taskItem` | `checked`: `bool` |
 | `table` | `colCount`: non-negative `int` |
 | `tableHeader`, `tableCell` | `align`: `"left"`/`"center"`/`"right"`/`None`, `colspan`: `1`, `rowspan`: `1`, `colwidth`: `None` |
-| `image` | `src`, `alt`, `title`: `str` |
+| `image` | `src`, `alt`, `title`: `str` or `None` |
 | `htmlBlock`, `htmlInline` | `html`: `str` |
-| `link` mark | `href`, `title`: `str` |
+| `link` mark | `href`, `title`: `str` or `None` |
 
 Every other type takes no attrs at all.
 Under strict, `bool` and `int` stay distinct — `{"level": True}` is refused rather than read as `1`.
+
+> **Changed in 0.6.0** — `None` on the attrs above that accept it now means the attr is unset, and the key is dropped on the way in rather than coerced to `""`.
+> Two things move with it: an `image` whose `alt` is `None` *and* which carries content children now renders that child text, and `to_dict()` omits such a key instead of echoing `""`.
+
+`None` is accepted exactly where Tiptap's own schema declares `default: null` — `codeBlock`'s `language`/`info`, `image`'s `src`/`alt`/`title`, and `link`'s `href`/`title`.
+ProseMirror serializes every attr in the schema, defaults included, so `None` is what the editor submits for an attr nobody ever filled in, and an unset attr is accepted already; the markdown is the same either way.
+There are two carve-outs.
+`html` is marktip's own attr with no Tiptap counterpart, and the serializer reads it as the node's payload when it is present but empty, so a `None` there would drop content rather than leave an attr unset.
+The rest — `level`, `start`, `tight`, `checked`, `colCount`, `colspan`, `rowspan` — are settings Tiptap gives a non-null default, so a `None` on one of those is a caller mistake and stays refused.
+`align` and `colwidth` are unchanged: `None` was already a *value* there, not an unset marker.
 
 `colspan`/`rowspan`/`colwidth` are *known* attrs whose only accepted values are the no-ops Tiptap's table extension puts on every cell.
 Refusing the names outright would leave strict unusable for the documents it exists to check.
@@ -193,10 +203,12 @@ It deliberately does **not** validate, unless `strict=True` asks it to:
 - **`attrs` names and value types.**
   Keys are free-form.
   `str`, `int`, and `bool` round-trip unchanged; anything else is coerced to a string (`[1, 2]` → `"[1, 2]"`, `1.5` → `"1.5"`, `None` → `""`), so `to_dict()` will not always give back what you passed in.
+  The one exception is the attrs [Refusing lossy conversions](#refusing-lossy-conversions) lists as accepting `None`: there the key is dropped instead of coerced, because a `None` on those means the attr was never set.
   An attr with no markdown form is dropped at serialization — see [Refusing lossy conversions](#refusing-lossy-conversions).
 - **Per-node required attrs**, `strict` included.
   A `heading` without `level`, an `image` without `src`, or a `link` mark without `href` is accepted; the serializer substitutes a default rather than failing.
   `strict` governs the attrs that are present, not which ones must be.
+  `{"src": None}` and no `src` key at all are the same thing to every part of the library, the URI policy included.
 - **Content models.**
   Which node may contain which is not checked — a `text` node directly under `doc` is accepted and serialized.
 - **Raw HTML.**

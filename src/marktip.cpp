@@ -11,7 +11,7 @@
 namespace py = pybind11;
 
 #ifndef MARKTIP_VERSION
-#define MARKTIP_VERSION "0.5.0"
+#define MARKTIP_VERSION "0.6.0"
 #endif
 
 namespace {
@@ -135,7 +135,10 @@ PYBIND11_MODULE(_core, module) {
         " 'invalid_attr_value' (wrong type or out of range) or 'unrepresentable'"
         " (well-formed, but GFM cannot carry it, e.g. colspan=2), and .field set to the attr name."
         " table 'colCount' and a non-header row's 'align' are accepted and ignored,"
-        " because from_markdown emits both.";
+        " because from_markdown emits both."
+        " None is accepted on the attrs Tiptap declares `default: null`"
+        " (codeBlock language/info, image src/alt/title, link href/title):"
+        " it means the attr is unset, and from_dict drops the key rather than coercing it to ''.";
 
     module.def("from_markdown", &marktip::from_markdown_py, py::arg("markdown"), py::arg("cjk_friendly") = false,
                py::arg("html") = true, py::kw_only(), py::arg("link_schemes") = py::none(),

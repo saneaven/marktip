@@ -125,11 +125,150 @@ py::dict attrs_to_py(const AttrList& attrs) {
     return out;
 }
 
-AttrList attrs_from_py(py::dict attrs) {
+// --- the attr schema --------------------------------------------------------
+//
+// Which attrs each type may carry, and what each may hold.
+// Two readers: attrs_from_py just below, which drops a null that means "unset",
+// and strict mode further down, which refuses whatever markdown would drop or alter.
+
+enum class AttrRule {
+    Str,        // any str
+    InfoStr,    // str, single line: a code fence info string cannot wrap
+    Bool,
+    Level,      // int 1..6
+    ListStart,  // int 0..kMaxListStart
+    Count,      // int >= 0
+    Align,      // "left" | "center" | "right" | None
+    NoSpan,     // int == 1: GFM tables have no cell spanning
+    NoWidth,    // None: GFM tables have no column widths
+};
+
+// A second axis, orthogonal to the value grammar: what a None means for this attr.
+//
+// ProseMirror serializes every attr in the schema, defaults included,
+// and Tiptap declares `default: null` for codeBlock's language/info,
+// image's src/alt/title and link's href/title.
+// A None on one of those is not a wrongly typed value, it is the attr never having been set —
+// the absent-key case, which is accepted already and renders the same markdown either way.
+// attrs_from_py drops the key, so the two really are one case everywhere downstream:
+// strict, the serializer, and the URI policy.
+//
+// Refused stays the default wherever Tiptap's default is not null
+// (level, start, tight, checked, colspan): a null there is a caller mistake, not an unset attr.
+// So is html, which is marktip's own attr with no Tiptap counterpart,
+// and which the serializer reads as the payload when it is present but empty —
+// dropping the node's content rather than leaving an attr unset.
+//
+// Align and NoWidth are untouched:
+// those rules take None as a *value* ("no alignment", "no column width") rather than as an unset marker,
+// so they handle it themselves.
+enum class NullAttr {
+    Refused,  // the default
+    Unset,    // None accepted: the attr was never set
+};
+
+struct AttrSpec {
+    std::string_view name;
+    AttrRule rule;
+    NullAttr null = NullAttr::Refused;
+};
+
+struct AttrTable {
+    const AttrSpec* specs;
+    std::size_t count;
+};
+
+constexpr AttrSpec kHeadingAttrs[] = {{"level", AttrRule::Level}};
+constexpr AttrSpec kCodeBlockAttrs[] = {{"info", AttrRule::InfoStr, NullAttr::Unset},
+                                        {"language", AttrRule::InfoStr, NullAttr::Unset}};
+constexpr AttrSpec kTightAttrs[] = {{"tight", AttrRule::Bool}};
+constexpr AttrSpec kOrderedListAttrs[] = {{"start", AttrRule::ListStart}, {"tight", AttrRule::Bool}};
+constexpr AttrSpec kTaskItemAttrs[] = {{"checked", AttrRule::Bool}};
+constexpr AttrSpec kTableAttrs[] = {{"colCount", AttrRule::Count}};
+constexpr AttrSpec kCellAttrs[] = {
+    {"align", AttrRule::Align},
+    {"colspan", AttrRule::NoSpan},
+    {"colwidth", AttrRule::NoWidth},
+    {"rowspan", AttrRule::NoSpan},
+};
+constexpr AttrSpec kImageAttrs[] = {{"alt", AttrRule::Str, NullAttr::Unset},
+                                    {"src", AttrRule::Str, NullAttr::Unset},
+                                    {"title", AttrRule::Str, NullAttr::Unset}};
+constexpr AttrSpec kHtmlAttrs[] = {{"html", AttrRule::Str}};
+constexpr AttrSpec kLinkAttrs[] = {{"href", AttrRule::Str, NullAttr::Unset},
+                                   {"title", AttrRule::Str, NullAttr::Unset}};
+
+constexpr AttrTable kNoAttrs = {nullptr, 0};
+
+template <std::size_t N>
+constexpr AttrTable table_of(const AttrSpec (&specs)[N]) {
+    return AttrTable{specs, N};
+}
+
+// Parallel to kKnownNodeTypes / kKnownMarkTypes: same order, one entry each, indexed by
+// type_index(). A new type therefore cannot be added to the schema without also stating
+// what its attrs are — the static_asserts below fail the build otherwise.
+constexpr AttrTable kNodeAttrTables[] = {
+    kNoAttrs,                    // blockquote
+    table_of(kTightAttrs),       // bulletList
+    table_of(kCodeBlockAttrs),   // codeBlock
+    kNoAttrs,                    // doc
+    kNoAttrs,                    // hardBreak
+    table_of(kHeadingAttrs),     // heading
+    kNoAttrs,                    // horizontalRule
+    table_of(kHtmlAttrs),        // htmlBlock
+    table_of(kHtmlAttrs),        // htmlInline
+    table_of(kImageAttrs),       // image
+    kNoAttrs,                    // listItem
+    table_of(kOrderedListAttrs), // orderedList
+    kNoAttrs,                    // paragraph
+    table_of(kTableAttrs),       // table
+    table_of(kCellAttrs),        // tableCell
+    table_of(kCellAttrs),        // tableHeader
+    kNoAttrs,                    // tableRow
+    table_of(kTaskItemAttrs),    // taskItem
+    table_of(kTightAttrs),       // taskList
+    kNoAttrs,                    // text
+};
+
+constexpr AttrTable kMarkAttrTables[] = {
+    kNoAttrs,               // bold
+    kNoAttrs,               // code
+    kNoAttrs,               // italic
+    table_of(kLinkAttrs),   // link
+    kNoAttrs,               // strike
+};
+
+static_assert(std::size(kNodeAttrTables) == std::size(kKnownNodeTypes),
+              "every node type needs an attr rule table");
+static_assert(std::size(kMarkAttrTables) == std::size(kKnownMarkTypes),
+              "every mark type needs an attr rule table");
+
+// The schema is small enough that a linear scan beats anything cleverer,
+// and both readers need the same lookup: nullptr when the type does not declare that attr.
+const AttrSpec* find_attr_spec(const AttrTable& table, std::string_view name) {
+    for (std::size_t i = 0; i < table.count; ++i) {
+        if (table.specs[i].name == name) {
+            return &table.specs[i];
+        }
+    }
+    return nullptr;
+}
+
+AttrList attrs_from_py(py::dict attrs, const AttrTable& table) {
     AttrList out;
     for (auto item : attrs) {
         std::string key = py_to_string(item.first);
         py::handle value = item.second;
+        if (value.is_none()) {
+            const AttrSpec* spec = find_attr_spec(table, key);
+            if (spec != nullptr && spec->null == NullAttr::Unset) {
+                // An attr Tiptap serialized but never set.
+                // Dropping the key, rather than coercing it to "",
+                // is what makes it the absent-key case for real.
+                continue;
+            }
+        }
         if (py::isinstance<py::bool_>(value)) {
             set_attr(out, std::move(key), AttrValue::boolean(py::cast<bool>(value)));
         } else if (py::isinstance<py::int_>(value)) {
@@ -186,100 +325,18 @@ py::dict node_to_py(const Document& document, std::size_t index) {
 
 // --- strict mode ------------------------------------------------------------
 //
-// Node and mark *types* are closed, but attrs are not: an attr the serializer never
-// reads is dropped without a word. strict=True refuses those instead, from the walk
-// that is already happening, so a consumer does not have to re-traverse the tree in
-// Python just to find out whether the document survives conversion intact.
+// Node and mark *types* are closed, but attrs are not:
+// an attr the serializer never reads is dropped without a word.
+// strict=True refuses those instead, from the walk that is already happening,
+// so a consumer does not have to re-traverse the tree in Python
+// just to find out whether the document survives conversion intact.
 //
-// The check reads the raw py::dict rather than the built AttrList, because
-// attrs_from_py coerces first: None becomes "" and [100] becomes "[100]", which is
-// exactly the difference between an accepted colwidth and a refused one. That also
-// makes it from_dict-only, which is the whole story anyway — the parser emits nothing
-// but attrs it knows about, in range, so there is nothing for from_markdown to catch.
-
-enum class AttrRule {
-    Str,        // any str
-    InfoStr,    // str, single line: a code fence info string cannot wrap
-    Bool,
-    Level,      // int 1..6
-    ListStart,  // int 0..kMaxListStart
-    Count,      // int >= 0
-    Align,      // "left" | "center" | "right" | None
-    NoSpan,     // int == 1: GFM tables have no cell spanning
-    NoWidth,    // None: GFM tables have no column widths
-};
-
-struct AttrSpec {
-    std::string_view name;
-    AttrRule rule;
-};
-
-struct AttrTable {
-    const AttrSpec* specs;
-    std::size_t count;
-};
-
-constexpr AttrSpec kHeadingAttrs[] = {{"level", AttrRule::Level}};
-constexpr AttrSpec kCodeBlockAttrs[] = {{"info", AttrRule::InfoStr}, {"language", AttrRule::InfoStr}};
-constexpr AttrSpec kTightAttrs[] = {{"tight", AttrRule::Bool}};
-constexpr AttrSpec kOrderedListAttrs[] = {{"start", AttrRule::ListStart}, {"tight", AttrRule::Bool}};
-constexpr AttrSpec kTaskItemAttrs[] = {{"checked", AttrRule::Bool}};
-constexpr AttrSpec kTableAttrs[] = {{"colCount", AttrRule::Count}};
-constexpr AttrSpec kCellAttrs[] = {
-    {"align", AttrRule::Align},
-    {"colspan", AttrRule::NoSpan},
-    {"colwidth", AttrRule::NoWidth},
-    {"rowspan", AttrRule::NoSpan},
-};
-constexpr AttrSpec kImageAttrs[] = {{"alt", AttrRule::Str}, {"src", AttrRule::Str}, {"title", AttrRule::Str}};
-constexpr AttrSpec kHtmlAttrs[] = {{"html", AttrRule::Str}};
-constexpr AttrSpec kLinkAttrs[] = {{"href", AttrRule::Str}, {"title", AttrRule::Str}};
-
-constexpr AttrTable kNoAttrs = {nullptr, 0};
-
-template <std::size_t N>
-constexpr AttrTable table_of(const AttrSpec (&specs)[N]) {
-    return AttrTable{specs, N};
-}
-
-// Parallel to kKnownNodeTypes / kKnownMarkTypes: same order, one entry each, indexed by
-// type_index(). A new type therefore cannot be added to the schema without also stating
-// what its attrs are — the static_asserts below fail the build otherwise.
-constexpr AttrTable kNodeAttrTables[] = {
-    kNoAttrs,                    // blockquote
-    table_of(kTightAttrs),       // bulletList
-    table_of(kCodeBlockAttrs),   // codeBlock
-    kNoAttrs,                    // doc
-    kNoAttrs,                    // hardBreak
-    table_of(kHeadingAttrs),     // heading
-    kNoAttrs,                    // horizontalRule
-    table_of(kHtmlAttrs),        // htmlBlock
-    table_of(kHtmlAttrs),        // htmlInline
-    table_of(kImageAttrs),       // image
-    kNoAttrs,                    // listItem
-    table_of(kOrderedListAttrs), // orderedList
-    kNoAttrs,                    // paragraph
-    table_of(kTableAttrs),       // table
-    table_of(kCellAttrs),        // tableCell
-    table_of(kCellAttrs),        // tableHeader
-    kNoAttrs,                    // tableRow
-    table_of(kTaskItemAttrs),    // taskItem
-    table_of(kTightAttrs),       // taskList
-    kNoAttrs,                    // text
-};
-
-constexpr AttrTable kMarkAttrTables[] = {
-    kNoAttrs,               // bold
-    kNoAttrs,               // code
-    kNoAttrs,               // italic
-    table_of(kLinkAttrs),   // link
-    kNoAttrs,               // strike
-};
-
-static_assert(std::size(kNodeAttrTables) == std::size(kKnownNodeTypes),
-              "every node type needs an attr rule table");
-static_assert(std::size(kMarkAttrTables) == std::size(kKnownMarkTypes),
-              "every mark type needs an attr rule table");
+// The check reads the raw py::dict rather than the built AttrList, because attrs_from_py coerces first:
+// [100] becomes "[100]" and a refused None becomes "",
+// which is exactly the difference between an accepted colwidth and a refused one.
+// That also makes it from_dict-only, which is the whole story anyway —
+// the parser emits nothing but attrs it knows about, in range,
+// so there is nothing for from_markdown to catch.
 
 // Out-of-range values (10 ** 100) come back false rather than raising, so they report as
 // a document problem with a path, not as an unlocated OverflowError.
@@ -378,18 +435,17 @@ void check_attrs_strict(py::dict attrs, const AttrTable& table, std::string_view
                         const PathStack& path) {
     for (auto item : attrs) {
         std::string name = py_to_string(item.first);
-        const AttrSpec* spec = nullptr;
-        for (std::size_t i = 0; i < table.count; ++i) {
-            if (table.specs[i].name == name) {
-                spec = &table.specs[i];
-                break;
-            }
-        }
+        const AttrSpec* spec = find_attr_spec(table, name);
         if (spec == nullptr) {
             throw InvalidNodeError("unknown_attr", name,
                                    "attr '" + name + "' is not defined for " + kind + " type '" +
                                        std::string(owner_type) + "'",
                                    format_path(path));
+        }
+        // Unset rather than wrongly typed, and attrs_from_py drops the key,
+        // so refusing it here would refuse a document identical to one that is accepted.
+        if (spec->null == NullAttr::Unset && item.second.is_none()) {
+            continue;
         }
         check_attr_value(item.second, spec->rule, name, path);
     }
@@ -409,7 +465,7 @@ Mark mark_from_py(py::dict mark_dict, bool strict, const PathStack& path) {
         if (strict) {
             check_attrs_strict(attr_dict, kMarkAttrTables[type_pos], mark.type, "mark", path);
         }
-        mark.attrs = attrs_from_py(attr_dict);
+        mark.attrs = attrs_from_py(attr_dict, kMarkAttrTables[type_pos]);
     }
 
     return mark;
@@ -439,7 +495,7 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
         if (strict) {
             check_attrs_strict(attr_dict, kNodeAttrTables[type_pos], node.type, "node", path);
         }
-        node.attrs = attrs_from_py(attr_dict);
+        node.attrs = attrs_from_py(attr_dict, kNodeAttrTables[type_pos]);
     }
 
     py::object marks = dict_get(node_dict, "marks");
