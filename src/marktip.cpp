@@ -11,7 +11,7 @@
 namespace py = pybind11;
 
 #ifndef MARKTIP_VERSION
-#define MARKTIP_VERSION "0.4.1"
+#define MARKTIP_VERSION "0.5.0"
 #endif
 
 namespace {
@@ -125,7 +125,17 @@ PYBIND11_MODULE(_core, module) {
         " Set html=False to parse raw HTML as literal text instead of htmlBlock/htmlInline nodes;"
         " <br> inside table cells still maps to hardBreak." +
         uri_policy_doc;
-    const std::string from_dict_doc = "Build a Document from a Tiptap-style JSON dict." + uri_policy_doc;
+    // strict has no from_markdown counterpart on purpose:
+    // the parser only ever emits attrs it understands, with values in range.
+    const std::string from_dict_doc =
+        "Build a Document from a Tiptap-style JSON dict." + uri_policy_doc +
+        " Set strict=True to refuse any attr that would be dropped or altered on the way to markdown"
+        " instead of converting around it."
+        " Violations raise InvalidNodeError with .code 'unknown_attr' (no markdown form for that type),"
+        " 'invalid_attr_value' (wrong type or out of range) or 'unrepresentable'"
+        " (well-formed, but GFM cannot carry it, e.g. colspan=2), and .field set to the attr name."
+        " table 'colCount' and a non-header row's 'align' are accepted and ignored,"
+        " because from_markdown emits both.";
 
     module.def("from_markdown", &marktip::from_markdown_py, py::arg("markdown"), py::arg("cjk_friendly") = false,
                py::arg("html") = true, py::kw_only(), py::arg("link_schemes") = py::none(),
@@ -133,5 +143,6 @@ PYBIND11_MODULE(_core, module) {
                py::arg("image_relative") = "allow", from_markdown_doc.c_str());
     module.def("from_dict", &marktip::from_dict_py, py::arg("ast"), py::kw_only(),
                py::arg("link_schemes") = py::none(), py::arg("image_schemes") = py::none(),
-               py::arg("link_relative") = "allow", py::arg("image_relative") = "allow", from_dict_doc.c_str());
+               py::arg("link_relative") = "allow", py::arg("image_relative") = "allow", py::arg("strict") = false,
+               from_dict_doc.c_str());
 }

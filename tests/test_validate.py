@@ -163,6 +163,9 @@ def test_every_known_type_accepted():
         {"type": "htmlBlock", "attrs": {"html": "<div>x</div>"}},
     )
     assert tm.from_dict(ast).to_markdown()
+    # Same guard on the strict side: its attr rules are a table parallel to the type
+    # list, so a type added without rules fails here rather than at a caller's.
+    assert tm.from_dict(ast, strict=True).to_markdown()
 
 
 def test_unknown_type_error_exported():

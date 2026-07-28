@@ -38,11 +38,11 @@ std::string rstrip_newlines(std::string value) {
     return value;
 }
 
-std::size_t max_backtick_run(std::string_view value) {
+std::size_t max_run(std::string_view value, char of) {
     std::size_t best = 0;
     std::size_t current = 0;
     for (char ch : value) {
-        if (ch == '`') {
+        if (ch == of) {
             current++;
             best = std::max(best, current);
         } else {
@@ -172,7 +172,7 @@ std::string escape_title(std::string_view value) {
 }
 
 std::string code_span(std::string_view value) {
-    std::size_t ticks = std::max<std::size_t>(1, max_backtick_run(value) + 1);
+    std::size_t ticks = std::max<std::size_t>(1, max_run(value, '`') + 1);
     std::string fence(ticks, '`');
     bool pad = !value.empty() && (value.front() == '`' || value.back() == '`' ||
                                   value.front() == ' ' || value.back() == ' ');
@@ -480,7 +480,9 @@ private:
 
     std::string render_list(const Node& node, int indent, bool ordered, bool task, int variant = 0) {
         std::string out;
-        long long number = attr_int(node.attrs, "start", 1);
+        // "start": -5 would otherwise render as "-5. a", which is not a list at all on
+        // reparse, and a 10-digit marker stops being a list marker as well.
+        long long number = std::clamp<long long>(attr_int(node.attrs, "start", 1), 0, kMaxListStart);
         bool tight = attr_bool(node.attrs, "tight", true);
         std::size_t item_index = 0;
         for_each_child(node, [&](const Node& child) {
@@ -491,8 +493,11 @@ private:
                 }
             }
 
-            std::string marker = ordered ? std::to_string(number++) + (variant != 0 ? ") " : ". ")
+            std::string marker = ordered ? std::to_string(number) + (variant != 0 ? ") " : ". ")
                                          : std::string(variant != 0 ? "* " : "- ");
+            // Only the first number is honoured on reparse, so repeating the ceiling
+            // changes nothing about the parsed result.
+            number = std::min(number + 1, kMaxListStart);
             if (task || child.type == "taskItem") {
                 marker += attr_bool(child.attrs, "checked", false) ? "[x] " : "[ ] ";
             }
@@ -554,12 +559,22 @@ private:
 
     std::string render_code_block(const Node& node) {
         std::string code = plain_text(node);
-        std::size_t fence_len = std::max<std::size_t>(3, max_backtick_run(code) + 1);
-        std::string fence(fence_len, '`');
         std::string language = attr_string(node.attrs, "language");
         if (language.empty()) {
             language = attr_string(node.attrs, "info");
         }
+
+        // An info string is a single line. Everything after a newline would land in the
+        // code content on reparse, so the tail is dropped rather than emitted.
+        language.erase(std::min(language.size(), language.find_first_of("\r\n")));
+
+        // A backtick inside the info string closes a backtick fence, so those switch to
+        // tildes — which have no such restriction, and lose nothing.
+        // The parser reaches this too: "~~~py`x" is a valid tilde fence, and its info
+        // string comes back out through here.
+        char fence_char = language.find('`') == std::string::npos ? '`' : '~';
+        std::size_t fence_len = std::max<std::size_t>(3, max_run(code, fence_char) + 1);
+        std::string fence(fence_len, fence_char);
 
         std::string out = fence + language + "\n" + code;
         if (out.empty() || out.back() != '\n') {

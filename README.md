@@ -76,6 +76,44 @@ doc = tm.from_markdown(untrusted, link_schemes=("https",), image_relative="rejec
 Violations raise `InvalidNodeError` with `.field` set to `"href"` or `"src"`.
 The options are keyword-only.
 
+### Refusing lossy conversions
+
+Node and mark *types* are closed, but `attrs` are not.
+An attr the serializer never reads is dropped without a word, so a `colspan: 2` cell quietly becomes a plain one:
+
+```python
+tm.from_dict(ast).to_markdown()                 # '| x |\n| --- |' — the colspan is gone
+tm.from_dict(ast, strict=True)                  # InvalidNodeError: attr 'colspan' cannot be
+                                                # expressed in markdown: GFM tables have no cell spanning
+```
+
+`strict=True` refuses anything markdown would drop or alter, from the walk that is already happening, so a consumer does not have to re-traverse the tree in Python to find out whether the document survives intact.
+It is off by default and keyword-only, and it is a `from_dict` option only — the parser emits nothing but attrs it understands, with values in range, so there is nothing on the `from_markdown` path for it to catch.
+
+| Node | Accepted attrs |
+| --- | --- |
+| `heading` | `level`: 1–6 |
+| `codeBlock` | `language`, `info`: single-line `str` |
+| `bulletList`, `taskList` | `tight`: `bool` |
+| `orderedList` | `start`: 0–999999999, `tight`: `bool` |
+| `taskItem` | `checked`: `bool` |
+| `table` | `colCount`: non-negative `int` |
+| `tableHeader`, `tableCell` | `align`: `"left"`/`"center"`/`"right"`/`None`, `colspan`: `1`, `rowspan`: `1`, `colwidth`: `None` |
+| `image` | `src`, `alt`, `title`: `str` |
+| `htmlBlock`, `htmlInline` | `html`: `str` |
+| `link` mark | `href`, `title`: `str` |
+
+Every other type takes no attrs at all.
+Under strict, `bool` and `int` stay distinct — `{"level": True}` is refused rather than read as `1`.
+
+`colspan`/`rowspan`/`colwidth` are *known* attrs whose only accepted values are the no-ops Tiptap's table extension puts on every cell.
+Refusing the names outright would leave strict unusable for the documents it exists to check.
+Tiptap's Link extension is the other direction: its default `target` and `rel` have no markdown form, so they are refused, which is the same rule that stops an `onclick` from vanishing silently.
+
+Two attrs are accepted and then ignored, and they are the only two.
+The serializer derives a table's column count from its rows, so `colCount` is never read, and it takes cell alignment from the header row only, so `align` on a body row is never read either.
+Both are refused nowhere because `from_markdown` emits both: rejecting them would break re-parsing stored canonical Markdown on the read path, where a write-time refusal is much harder to notice.
+
 ## Errors
 
 Every rejection marktip raises derives from `marktip.MarktipError`, so "the input is malformed" is a single `except` — no need to catch a bare `ValueError` wide enough to swallow an unrelated bug:
@@ -111,6 +149,9 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `disallowed_scheme` | `InvalidNodeError` | a link `href` / image `src` scheme is outside the allowlist |
 | `disallowed_relative_url` | `InvalidNodeError` | a scheme-less `href`/`src` violates the relative policy |
 | `invalid_uri_char` | `InvalidNodeError` | an `href`/`src` contains an ASCII control character |
+| `unknown_attr` | `InvalidNodeError` | `strict`: the attr has no markdown form for that type |
+| `invalid_attr_value` | `InvalidNodeError` | `strict`: the attr's value has the wrong type or is out of range |
+| `unrepresentable` | `InvalidNodeError` | `strict`: the value is well-formed, but GFM cannot carry it |
 | `markdown_max_depth` | `ParseError` | markdown nesting exceeds 2048 |
 | `parse_failed` | `ParseError` | MD4C could not parse the input |
 
@@ -123,6 +164,9 @@ So is a bad URI-policy option: a non-iterable `link_schemes` raises `TypeError`,
 > **Changed in 0.5.0** — an ASCII control character in a link `href` or image `src` is now rejected outright, with or without the URI policy.
 > A URI cannot carry one unencoded (`%09` is the encoded form), and leaving it in would defeat the allowlist itself, because browsers strip tab/LF/CR before reading the scheme.
 > This also rejects `[x](<a\tb>)`, which CommonMark otherwise accepts.
+
+> **Changed in 0.5.0** — an `orderedList` `start` outside 0–999999999 is clamped instead of emitted verbatim, and a code fence `language` is truncated at the first newline.
+> Both previously produced output that reparsed into a different document; see [Defined normalizations](#defined-normalizations).
 
 ## What `from_dict` validates
 
@@ -144,13 +188,15 @@ It guarantees, for the whole tree:
 A document that survives `from_dict` always serializes; callers do not need to re-check any of the above.
 `from_markdown` enforces the same two URI rules on what it parses.
 
-It deliberately does **not** validate:
+It deliberately does **not** validate, unless `strict=True` asks it to:
 
-- **`attrs` value types.**
+- **`attrs` names and value types.**
   Keys are free-form.
   `str`, `int`, and `bool` round-trip unchanged; anything else is coerced to a string (`[1, 2]` → `"[1, 2]"`, `1.5` → `"1.5"`, `None` → `""`), so `to_dict()` will not always give back what you passed in.
-- **Per-node required attrs.**
+  An attr with no markdown form is dropped at serialization — see [Refusing lossy conversions](#refusing-lossy-conversions).
+- **Per-node required attrs**, `strict` included.
   A `heading` without `level`, an `image` without `src`, or a `link` mark without `href` is accepted; the serializer substitutes a default rather than failing.
+  `strict` governs the attrs that are present, not which ones must be.
 - **Content models.**
   Which node may contain which is not checked — a `text` node directly under `doc` is accepted and serialized.
 - **Raw HTML.**
@@ -181,6 +227,8 @@ Rather than emitting markdown that reparses into a different structure, marktip 
 - **Multi-block table cells** — blocks inside a cell are joined with `<br>` and the cell is flattened to one line; two paragraphs in a cell reparse as one paragraph containing a `hardBreak`.
 - **Headerless tables** — GFM tables require a header row, so the first row is always emitted as the header; a leading `tableCell` row reparses as `tableHeader`.
 - **Heading levels** — clamped to 1–6 at serialization (`0` → `#`, `7` → `######`).
+- **Ordered list start** — clamped to CommonMark's 0–999999999 (`-5` → `0.`), and the running number stops at that ceiling rather than emitting a 10-digit marker. Only the first number is honoured on reparse, so a repeated ceiling changes nothing.
+- **Code fence info strings** — a `language` is truncated at the first newline, since an info string is a single line; one containing a backtick switches the fence to `~~~`, which carries it losslessly.
 - **Emphasis boundary whitespace** — whitespace touching an emphasis delimiter has no valid markdown form and is expelled outside the marks (`bold("굵게 ")` → `**굵게** `), cf. prosemirror-markdown's `expelEnclosingWhitespace`.
 - **Adjacent same-family lists** — consecutive lists of the same family alternate markers (`-`/`*`, `1.`/`1)`) so they stay separate lists on reparse instead of merging (which would renumber ordered items or spread task checkboxes).
 

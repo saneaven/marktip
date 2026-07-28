@@ -29,12 +29,17 @@ constexpr std::string_view kKnownNodeTypes[] = {
 
 constexpr std::string_view kKnownMarkTypes[] = {"bold", "code", "italic", "link", "strike"};
 
-bool is_known_node_type(std::string_view type) {
-    return std::binary_search(std::begin(kKnownNodeTypes), std::end(kKnownNodeTypes), type);
-}
+// Position in the table above, or kUnknownType. The index is what strict mode looks
+// up its attr rules with, so the search doubles as the schema check.
+constexpr std::size_t kUnknownType = static_cast<std::size_t>(-1);
 
-bool is_known_mark_type(std::string_view type) {
-    return std::binary_search(std::begin(kKnownMarkTypes), std::end(kKnownMarkTypes), type);
+template <std::size_t N>
+std::size_t type_index(const std::string_view (&table)[N], std::string_view type) {
+    const std::string_view* found = std::lower_bound(std::begin(table), std::end(table), type);
+    if (found == std::end(table) || *found != type) {
+        return kUnknownType;
+    }
+    return static_cast<std::size_t>(found - std::begin(table));
 }
 
 // Breadcrumb into the input dict, e.g. content[0].content[2].marks[1].
@@ -179,23 +184,239 @@ py::dict node_to_py(const Document& document, std::size_t index) {
     return out;
 }
 
-Mark mark_from_py(py::dict mark_dict, const PathStack& path) {
+// --- strict mode ------------------------------------------------------------
+//
+// Node and mark *types* are closed, but attrs are not: an attr the serializer never
+// reads is dropped without a word. strict=True refuses those instead, from the walk
+// that is already happening, so a consumer does not have to re-traverse the tree in
+// Python just to find out whether the document survives conversion intact.
+//
+// The check reads the raw py::dict rather than the built AttrList, because
+// attrs_from_py coerces first: None becomes "" and [100] becomes "[100]", which is
+// exactly the difference between an accepted colwidth and a refused one. That also
+// makes it from_dict-only, which is the whole story anyway — the parser emits nothing
+// but attrs it knows about, in range, so there is nothing for from_markdown to catch.
+
+enum class AttrRule {
+    Str,        // any str
+    InfoStr,    // str, single line: a code fence info string cannot wrap
+    Bool,
+    Level,      // int 1..6
+    ListStart,  // int 0..kMaxListStart
+    Count,      // int >= 0
+    Align,      // "left" | "center" | "right" | None
+    NoSpan,     // int == 1: GFM tables have no cell spanning
+    NoWidth,    // None: GFM tables have no column widths
+};
+
+struct AttrSpec {
+    std::string_view name;
+    AttrRule rule;
+};
+
+struct AttrTable {
+    const AttrSpec* specs;
+    std::size_t count;
+};
+
+constexpr AttrSpec kHeadingAttrs[] = {{"level", AttrRule::Level}};
+constexpr AttrSpec kCodeBlockAttrs[] = {{"info", AttrRule::InfoStr}, {"language", AttrRule::InfoStr}};
+constexpr AttrSpec kTightAttrs[] = {{"tight", AttrRule::Bool}};
+constexpr AttrSpec kOrderedListAttrs[] = {{"start", AttrRule::ListStart}, {"tight", AttrRule::Bool}};
+constexpr AttrSpec kTaskItemAttrs[] = {{"checked", AttrRule::Bool}};
+constexpr AttrSpec kTableAttrs[] = {{"colCount", AttrRule::Count}};
+constexpr AttrSpec kCellAttrs[] = {
+    {"align", AttrRule::Align},
+    {"colspan", AttrRule::NoSpan},
+    {"colwidth", AttrRule::NoWidth},
+    {"rowspan", AttrRule::NoSpan},
+};
+constexpr AttrSpec kImageAttrs[] = {{"alt", AttrRule::Str}, {"src", AttrRule::Str}, {"title", AttrRule::Str}};
+constexpr AttrSpec kHtmlAttrs[] = {{"html", AttrRule::Str}};
+constexpr AttrSpec kLinkAttrs[] = {{"href", AttrRule::Str}, {"title", AttrRule::Str}};
+
+constexpr AttrTable kNoAttrs = {nullptr, 0};
+
+template <std::size_t N>
+constexpr AttrTable table_of(const AttrSpec (&specs)[N]) {
+    return AttrTable{specs, N};
+}
+
+// Parallel to kKnownNodeTypes / kKnownMarkTypes: same order, one entry each, indexed by
+// type_index(). A new type therefore cannot be added to the schema without also stating
+// what its attrs are — the static_asserts below fail the build otherwise.
+constexpr AttrTable kNodeAttrTables[] = {
+    kNoAttrs,                    // blockquote
+    table_of(kTightAttrs),       // bulletList
+    table_of(kCodeBlockAttrs),   // codeBlock
+    kNoAttrs,                    // doc
+    kNoAttrs,                    // hardBreak
+    table_of(kHeadingAttrs),     // heading
+    kNoAttrs,                    // horizontalRule
+    table_of(kHtmlAttrs),        // htmlBlock
+    table_of(kHtmlAttrs),        // htmlInline
+    table_of(kImageAttrs),       // image
+    kNoAttrs,                    // listItem
+    table_of(kOrderedListAttrs), // orderedList
+    kNoAttrs,                    // paragraph
+    table_of(kTableAttrs),       // table
+    table_of(kCellAttrs),        // tableCell
+    table_of(kCellAttrs),        // tableHeader
+    kNoAttrs,                    // tableRow
+    table_of(kTaskItemAttrs),    // taskItem
+    table_of(kTightAttrs),       // taskList
+    kNoAttrs,                    // text
+};
+
+constexpr AttrTable kMarkAttrTables[] = {
+    kNoAttrs,               // bold
+    kNoAttrs,               // code
+    kNoAttrs,               // italic
+    table_of(kLinkAttrs),   // link
+    kNoAttrs,               // strike
+};
+
+static_assert(std::size(kNodeAttrTables) == std::size(kKnownNodeTypes),
+              "every node type needs an attr rule table");
+static_assert(std::size(kMarkAttrTables) == std::size(kKnownMarkTypes),
+              "every mark type needs an attr rule table");
+
+// Out-of-range values (10 ** 100) come back false rather than raising, so they report as
+// a document problem with a path, not as an unlocated OverflowError.
+bool as_int(py::handle value, long long& out) {
+    int overflow = 0;
+    long long result = PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
+    if (overflow != 0 || (result == -1 && PyErr_Occurred() != nullptr)) {
+        PyErr_Clear();
+        return false;
+    }
+    out = result;
+    return true;
+}
+
+// py::bool_ is a subclass of py::int_, so every integer rule has to exclude it first.
+bool is_plain_int(py::handle value) {
+    return py::isinstance<py::int_>(value) && !py::isinstance<py::bool_>(value);
+}
+
+void check_attr_value(py::handle value, AttrRule rule, const std::string& name, const PathStack& path) {
+    auto expected = [&](const char* what) {
+        throw InvalidNodeError("invalid_attr_value", name, "attr '" + name + "' must be " + what,
+                               format_path(path));
+    };
+    auto unrepresentable = [&](const char* why) {
+        throw InvalidNodeError("unrepresentable", name,
+                               "attr '" + name + "' cannot be expressed in markdown: " + why, format_path(path));
+    };
+
+    long long number = 0;
+    switch (rule) {
+        case AttrRule::Str:
+            if (!py::isinstance<py::str>(value)) {
+                expected("a str");
+            }
+            return;
+        case AttrRule::InfoStr:
+            if (!py::isinstance<py::str>(value)) {
+                expected("a str");
+            }
+            if (py::cast<std::string>(value).find_first_of("\r\n") != std::string::npos) {
+                expected("a single line");
+            }
+            return;
+        case AttrRule::Bool:
+            if (!py::isinstance<py::bool_>(value)) {
+                expected("a bool");
+            }
+            return;
+        case AttrRule::Level:
+            if (!is_plain_int(value) || !as_int(value, number) || number < 1 || number > 6) {
+                expected("an int between 1 and 6");
+            }
+            return;
+        case AttrRule::ListStart:
+            if (!is_plain_int(value) || !as_int(value, number) || number < 0 || number > kMaxListStart) {
+                expected("an int between 0 and 999999999");
+            }
+            return;
+        case AttrRule::Count:
+            if (!is_plain_int(value) || !as_int(value, number) || number < 0) {
+                expected("a non-negative int");
+            }
+            return;
+        case AttrRule::Align:
+            if (value.is_none()) {
+                return;
+            }
+            if (!py::isinstance<py::str>(value)) {
+                expected("'left', 'center', 'right' or None");
+            }
+            {
+                std::string align = py::cast<std::string>(value);
+                if (align != "left" && align != "center" && align != "right") {
+                    expected("'left', 'center', 'right' or None");
+                }
+            }
+            return;
+        case AttrRule::NoSpan:
+            if (!is_plain_int(value) || !as_int(value, number)) {
+                expected("an int");
+            }
+            if (number != 1) {
+                unrepresentable("GFM tables have no cell spanning");
+            }
+            return;
+        case AttrRule::NoWidth:
+            if (!value.is_none()) {
+                unrepresentable("GFM tables have no column widths");
+            }
+            return;
+    }
+}
+
+void check_attrs_strict(py::dict attrs, const AttrTable& table, std::string_view owner_type, const char* kind,
+                        const PathStack& path) {
+    for (auto item : attrs) {
+        std::string name = py_to_string(item.first);
+        const AttrSpec* spec = nullptr;
+        for (std::size_t i = 0; i < table.count; ++i) {
+            if (table.specs[i].name == name) {
+                spec = &table.specs[i];
+                break;
+            }
+        }
+        if (spec == nullptr) {
+            throw InvalidNodeError("unknown_attr", name,
+                                   "attr '" + name + "' is not defined for " + kind + " type '" +
+                                       std::string(owner_type) + "'",
+                                   format_path(path));
+        }
+        check_attr_value(item.second, spec->rule, name, path);
+    }
+}
+
+Mark mark_from_py(py::dict mark_dict, bool strict, const PathStack& path) {
     Mark mark;
     mark.type = required_type(mark_dict, "mark", path);
-    if (!is_known_mark_type(mark.type)) {
+    std::size_t type_pos = type_index(kKnownMarkTypes, mark.type);
+    if (type_pos == kUnknownType) {
         throw UnknownTypeError("mark", mark.type, format_path(path));
     }
 
     py::object attrs = dict_get(mark_dict, "attrs");
     if (!attrs.is_none()) {
-        mark.attrs = attrs_from_py(expect_dict(attrs, "mark attrs", "attrs", path));
+        py::dict attr_dict = expect_dict(attrs, "mark attrs", "attrs", path);
+        if (strict) {
+            check_attrs_strict(attr_dict, kMarkAttrTables[type_pos], mark.type, "mark", path);
+        }
+        mark.attrs = attrs_from_py(attr_dict);
     }
 
     return mark;
 }
 
 void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict, std::string_view context,
-                       std::size_t depth, PathStack& path) {
+                       std::size_t depth, bool strict, PathStack& path) {
     if (depth > kMaxNodeDepth) {
         throw InvalidNodeError("max_depth", "content", "node content nesting exceeds maximum depth",
                                format_path(path));
@@ -203,7 +424,8 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
 
     Node node;
     node.type = required_type(node_dict, context, path);
-    if (!is_known_node_type(node.type)) {
+    std::size_t type_pos = type_index(kKnownNodeTypes, node.type);
+    if (type_pos == kUnknownType) {
         throw UnknownTypeError("node", node.type, format_path(path));
     }
 
@@ -213,7 +435,11 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
 
     py::object attrs = dict_get(node_dict, "attrs");
     if (!attrs.is_none()) {
-        node.attrs = attrs_from_py(expect_dict(attrs, "node attrs", "attrs", path));
+        py::dict attr_dict = expect_dict(attrs, "node attrs", "attrs", path);
+        if (strict) {
+            check_attrs_strict(attr_dict, kNodeAttrTables[type_pos], node.type, "node", path);
+        }
+        node.attrs = attrs_from_py(attr_dict);
     }
 
     py::object marks = dict_get(node_dict, "marks");
@@ -222,7 +448,7 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
         std::size_t mark_index = 0;
         for (py::handle mark_handle : mark_list) {
             path.push_back({"marks", mark_index});
-            node.marks.push_back(mark_from_py(expect_dict(mark_handle, "mark", "marks", path), path));
+            node.marks.push_back(mark_from_py(expect_dict(mark_handle, "mark", "marks", path), strict, path));
             path.pop_back();
             ++mark_index;
         }
@@ -241,7 +467,7 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
         std::size_t child_index = document.append_child(index, Node{});
         path.push_back({"content", child_pos});
         fill_node_from_py(document, child_index, expect_dict(child_handle, "content child", "content", path), "node",
-                          depth + 1, path);
+                          depth + 1, strict, path);
         path.pop_back();
         ++child_pos;
     }
@@ -797,7 +1023,7 @@ UriPolicy uri_policy_from_py(py::object link_schemes, py::object image_schemes, 
 }
 
 Document from_dict_py(py::dict root, py::object link_schemes, py::object image_schemes, py::object link_relative,
-                      py::object image_relative) {
+                      py::object image_relative, bool strict) {
     // Options are validated before the tree is walked:
     // a bad option value is a caller bug,
     // and should surface whatever the document happens to contain.
@@ -813,7 +1039,7 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
     }
 
     Document document;
-    fill_node_from_py(document, 0, root, "root node", 0, path);
+    fill_node_from_py(document, 0, root, "root node", 0, strict, path);
     enforce_uri_policy(document, policy);
     return document;
 }

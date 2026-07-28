@@ -395,6 +395,8 @@ IDEMPOTENCE_CORPUS = [
     "- a\n* b",
     "3. a\n\n0) b",
     "- x\n* [ ] y",
+    "~~~py`x\ninfo string with a backtick\n~~~",
+    "999999998. a\n999999999. b",
 ]
 
 
@@ -402,3 +404,18 @@ IDEMPOTENCE_CORPUS = [
 def test_normalize_is_idempotent(md):
     once = normalize(md)
     assert normalize(once) == once, f"first pass produced: {once!r}"
+
+
+def test_tilde_fence_info_string_survives_serialization():
+    # A backtick is legal in a tilde fence's info string, so the parser really does
+    # produce a language that a backtick fence cannot carry.
+    assert_stable("~~~py`x\ncode\n~~~\n")
+    assert tm.from_markdown("~~~py`x\ncode\n~~~\n").to_markdown() == "~~~py`x\ncode\n~~~"
+
+
+def test_clamped_ordered_list_start_still_reparses_as_a_list():
+    # "-5. a" would come back as a paragraph, losing the list entirely.
+    item = {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "a"}]}]}
+    ast = {"type": "doc", "content": [{"type": "orderedList", "attrs": {"start": -5}, "content": [item]}]}
+    md = tm.from_dict(ast).to_markdown()
+    assert tm.from_markdown(md).to_dict()["content"][0]["type"] == "orderedList"

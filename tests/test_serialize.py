@@ -185,3 +185,44 @@ def test_image_alt_falls_back_to_content():
         "content": [{"type": "image", "attrs": {"src": "i.png"}, "content": [{"type": "text", "text": "ALT"}]}],
     }
     assert doc_with(node) == "![ALT](i.png)"
+
+
+def ordered(start):
+    item = {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "a"}]}]}
+    return doc_with({"type": "orderedList", "attrs": {"start": start}, "content": [item, dict(item)]})
+
+
+@pytest.mark.parametrize(
+    "start, first",
+    [
+        (1, "1."),
+        (0, "0."),
+        (-5, "0."),  # "-5. a" is not a list at all on reparse
+        (999999999, "999999999."),
+        (10**12, "999999999."),  # a 10-digit marker stops being a list marker
+    ],
+)
+def test_ordered_list_start_is_clamped_to_the_commonmark_range(start, first):
+    assert ordered(start).startswith(first + " a\n")
+
+
+def test_ordered_list_numbering_stops_at_the_ceiling():
+    # Only the first number is honoured on reparse, so repeating it changes nothing.
+    assert ordered(999999999) == "999999999. a\n999999999. a"
+
+
+def code_block(language, code="q"):
+    return doc_with({"type": "codeBlock", "attrs": {"language": language}, "content": [{"type": "text", "text": code}]})
+
+
+def test_code_fence_info_is_truncated_at_the_first_newline():
+    # The tail used to land in the fence body, so the code gained a line on reparse.
+    assert code_block("py\nx") == "```py\nq\n```"
+    assert code_block("py\r\nx") == "```py\nq\n```"
+
+
+def test_code_fence_switches_to_tildes_when_the_language_holds_a_backtick():
+    # A backtick closes a backtick fence. Tildes carry the same info string losslessly.
+    assert code_block("py`x") == "~~~py`x\nq\n~~~"
+    assert code_block("py`x", "~~~ inside") == "~~~~py`x\n~~~ inside\n~~~~"
+    assert code_block("py", "``` inside") == "````py\n``` inside\n````"

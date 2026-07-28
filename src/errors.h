@@ -59,7 +59,9 @@ public:
     const std::string& field() const noexcept { return field_; }
 
 private:
-    std::string field_;  // "type" | "attrs" | "marks" | "content", or the offending attr name ("href" | "src")
+    // "type" | "attrs" | "marks" | "content", or the offending attr's own name
+    // ("href" | "src" for the URI policy, any attr key under strict).
+    std::string field_;
 };
 
 // Raised by from_markdown when the markdown itself cannot be parsed.

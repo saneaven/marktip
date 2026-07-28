@@ -16,6 +16,10 @@ namespace marktip {
 // at build time so those traversals cannot overflow the C stack.
 inline constexpr std::size_t kMaxNodeDepth = 2048;
 
+// CommonMark ordered-list markers are at most 9 digits and cannot be negative.
+// The serializer clamps to this range; strict mode refuses instead.
+inline constexpr long long kMaxListStart = 999999999;
+
 struct AttrValue {
     enum class Kind { String, Int, Bool };
 
@@ -103,7 +107,10 @@ void enforce_uri_policy(const Document& document, const UriPolicy& policy);
 UriPolicy uri_policy_from_py(pybind11::object link_schemes, pybind11::object image_schemes,
                              pybind11::object link_relative, pybind11::object image_relative);
 
+// `strict` refuses any attr the serializer would drop or alter, rather than converting
+// around it. It is from_dict-only: the parser cannot produce an attr it does not itself
+// understand, so there would be nothing for from_markdown to catch.
 Document from_dict_py(pybind11::dict root, pybind11::object link_schemes, pybind11::object image_schemes,
-                      pybind11::object link_relative, pybind11::object image_relative);
+                      pybind11::object link_relative, pybind11::object image_relative, bool strict);
 
 }  // namespace marktip
