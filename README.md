@@ -83,46 +83,86 @@ An attr the serializer never reads is dropped without a word, so a `colspan: 2` 
 
 ```python
 tm.from_dict(ast).to_markdown()                 # '| x |\n| --- |' — the colspan is gone
-tm.from_dict(ast, strict=True)                  # InvalidNodeError: attr 'colspan' cannot be
+tm.from_dict(ast, strict="content")             # InvalidNodeError: attr 'colspan' cannot be
                                                 # expressed in markdown: GFM tables have no cell spanning
 ```
 
-`strict=True` refuses anything markdown would drop or alter, from the walk that is already happening, so a consumer does not have to re-traverse the tree in Python to find out whether the document survives intact.
-It is off by default and keyword-only, and it is a `from_dict` option only — the parser emits nothing but attrs it understands, with values in range, so there is nothing on the `from_markdown` path for it to catch.
+`strict` names what the conversion may not lose, from the walk that is already happening, so a consumer does not have to re-traverse the tree in Python to find out whether the document survives intact.
+It is keyword-only and a `from_dict` option only — the parser emits nothing but attrs it understands, with values in range, so there is nothing on the `from_markdown` path for it to catch.
 
-| Node | Accepted attrs |
+| `strict` | Keeps |
 | --- | --- |
-| `heading` | `level`: 1–6 |
-| `codeBlock` | `language`, `info`: single-line `str` or `None` |
-| `bulletList`, `taskList` | `tight`: `bool` |
-| `orderedList` | `start`: 0–999999999, `tight`: `bool` |
-| `taskItem` | `checked`: `bool` |
-| `table` | `colCount`: non-negative `int` |
-| `tableHeader`, `tableCell` | `align`: `"left"`/`"center"`/`"right"`/`None`, `colspan`: `1`, `rowspan`: `1`, `colwidth`: `None` |
-| `image` | `src`, `alt`, `title`: `str` or `None` |
-| `htmlBlock`, `htmlInline` | `html`: `str` |
-| `link` mark | `href`, `title`: `str` or `None` |
+| `"off"` (default) | nothing is checked |
+| `"content"` | content and structure. Presentation an editor stamped on is type-checked and dropped |
+| `"exact"` | every attr the JSON carries |
+
+The two levels differ over one thing, and it is worth being precise about which:
+
+```python
+# what a stock Tiptap Link extension submits for a link with only href set
+mark = {"type": "link", "attrs": {"href": "https://a", "target": "_blank",
+                                  "rel": "noopener noreferrer nofollow",
+                                  "class": None, "title": None}}
+
+tm.from_dict(ast, strict="content")             # fine — target and rel are dropped
+tm.from_dict(ast, strict="exact")               # InvalidNodeError: attr 'target' cannot be expressed
+                                                # in markdown: a markdown link carries only a
+                                                # destination and a title
+```
+
+Dropping that `target` costs the *author* nothing — the editor stamped it on and nobody wrote it.
+Dropping a `colspan` moves every cell after it under a different header, so `"content"` refuses that one too.
+Nothing in the JSON tells the two apart: ProseMirror serializes schema defaults onto every node, so a chosen `target` and a stamped one arrive identical.
+That is why the caller picks, rather than the library guessing — store markdown as the record and `"content"` is the promise you want; keep the JSON and it is `"exact"`.
+
+| Node | Accepted attrs | Dropped, no markdown form |
+| --- | --- | --- |
+| `heading` | `level`: 1–6 | |
+| `codeBlock` | `language`, `info`: single-line `str` | |
+| `bulletList`, `taskList` | `tight`: `bool` | |
+| `orderedList` | `start`: 0–999999999, `tight`: `bool` | `type`: `str` |
+| `taskItem` | `checked`: `bool` | |
+| `table` | `colCount`: non-negative `int` | |
+| `tableHeader`, `tableCell` | `align`: `"left"`/`"center"`/`"right"`/`None`, `colspan`: `1`, `rowspan`: `1` | `colwidth`: list of `int` |
+| `image` | `src` **(required)**, `alt`, `title`: `str` | `width`, `height`: `str` or `int` |
+| `htmlBlock`, `htmlInline` | `html`: `str` | |
+| `link` mark | `href` **(required)**, `title`: `str` | `target`, `rel`, `class`: `str` |
 
 Every other type takes no attrs at all.
-Under strict, `bool` and `int` stay distinct — `{"level": True}` is refused rather than read as `1`.
+A name in neither column is an `unknown_attr` at both levels — that is the rule that stops an `onclick` from vanishing silently.
+`bool` and `int` stay distinct: `{"level": True}` is refused rather than read as `1`.
+Most of these also take `None`, meaning the attr was never set; the paragraph below says which do not.
 
-> **Changed in 0.6.0** — `None` on the attrs above that accept it now means the attr is unset, and the key is dropped on the way in rather than coerced to `""`.
+> **Changed in 0.7.0** — `strict` takes a level name instead of a bool, so `strict=True` now raises `TypeError`; `strict="exact"` is what it used to mean.
+> Three things move with the new `"content"` level: the attrs in the right-hand column above are accepted and dropped rather than refused, `href`/`src` are required, and a refused presentation attr reports `unrepresentable` where it used to report `unknown_attr`.
+
+> **Changed in 0.6.0** — `None` on the optional attrs above now means the attr is unset, and the key is dropped on the way in rather than coerced to `""`.
 > Two things move with it: an `image` whose `alt` is `None` *and* which carries content children now renders that child text, and `to_dict()` omits such a key instead of echoing `""`.
 
-`None` is accepted exactly where Tiptap's own schema declares `default: null` — `codeBlock`'s `language`/`info`, `image`'s `src`/`alt`/`title`, and `link`'s `href`/`title`.
-ProseMirror serializes every attr in the schema, defaults included, so `None` is what the editor submits for an attr nobody ever filled in, and an unset attr is accepted already; the markdown is the same either way.
-There are two carve-outs.
-`html` is marktip's own attr with no Tiptap counterpart, and the serializer reads it as the node's payload when it is present but empty, so a `None` there would drop content rather than leave an attr unset.
-The rest — `level`, `start`, `tight`, `checked`, `colCount`, `colspan`, `rowspan` — are settings Tiptap gives a non-null default, so a `None` on one of those is a caller mistake and stays refused.
-`align` and `colwidth` are unchanged: `None` was already a *value* there, not an unset marker.
+`None` reads as unset wherever Tiptap declares `default: null`, which is most of the schema.
+ProseMirror serializes every attr including defaults, so `None` is what the editor submits for an attr nobody filled in, and an unset attr is accepted already; the markdown is the same either way.
+The exceptions are the settings Tiptap gives a non-null default — `level`, `start`, `tight`, `checked`, `colspan`, `rowspan` — plus `html`, which is marktip's own attr with no Tiptap counterpart.
+Tiptap never emits a `None` for those, so one means the dict was built wrong; the conversion would survive it, and strict reports it because it is a bug rather than a loss.
+`align` is unchanged: `None` was already a *value* there ("no alignment"), not an unset marker.
 
-`colspan`/`rowspan`/`colwidth` are *known* attrs whose only accepted values are the no-ops Tiptap's table extension puts on every cell.
+`href` and `src` are the one place a `None` is not "unset" but "missing", and both levels refuse it:
+
+```python
+tm.from_dict(link_without_href).to_markdown()   # '[a]()' — reads back as a real link
+tm.from_dict(link_without_href, strict="content")  # InvalidNodeError: attr 'href' is required
+                                                   # for mark type 'link'
+```
+
+A link with no destination is not a link, so writing `[a]()` is not a lossy conversion but an invented one, and the empty destination survives into stored Markdown.
+An `href` of `""` is a different case and is accepted: that is what `from_markdown` itself produces for `[a]()`, and it round-trips exactly.
+Rejecting an empty destination is the URI policy's job (`link_relative="reject"`).
+
+`colspan`/`rowspan` are *known* attrs whose only accepted values are the no-ops Tiptap's table extension puts on every cell.
 Refusing the names outright would leave strict unusable for the documents it exists to check.
-Tiptap's Link extension is the other direction: its default `target` and `rel` have no markdown form, so they are refused, which is the same rule that stops an `onclick` from vanishing silently.
 
-Two attrs are accepted and then ignored, and they are the only two.
+Two attrs are accepted and then ignored at every level.
 The serializer derives a table's column count from its rows, so `colCount` is never read, and it takes cell alignment from the header row only, so `align` on a body row is never read either.
-Both are refused nowhere because `from_markdown` emits both: rejecting them would break re-parsing stored canonical Markdown on the read path, where a write-time refusal is much harder to notice.
+Neither is a loss — the structure they describe is what survives — and `from_markdown` emits both, so refusing them would break re-parsing stored canonical Markdown on the read path, where a write-time refusal is much harder to notice.
 
 ## Errors
 
@@ -159,17 +199,22 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `disallowed_scheme` | `InvalidNodeError` | a link `href` / image `src` scheme is outside the allowlist |
 | `disallowed_relative_url` | `InvalidNodeError` | a scheme-less `href`/`src` violates the relative policy |
 | `invalid_uri_char` | `InvalidNodeError` | an `href`/`src` contains an ASCII control character |
-| `unknown_attr` | `InvalidNodeError` | `strict`: the attr has no markdown form for that type |
+| `unknown_attr` | `InvalidNodeError` | `strict`: the attr name is in neither dialect for that type |
 | `invalid_attr_value` | `InvalidNodeError` | `strict`: the attr's value has the wrong type or is out of range |
-| `unrepresentable` | `InvalidNodeError` | `strict`: the value is well-formed, but GFM cannot carry it |
+| `unrepresentable` | `InvalidNodeError` | `strict`: the value is well-formed, but markdown cannot carry it |
+| `missing_attr` | `InvalidNodeError` | `strict`: a required attr is absent or `None` — a `link` with no `href`, an `image` with no `src` |
 | `markdown_max_depth` | `ParseError` | markdown nesting exceeds 2048 |
 | `parse_failed` | `ParseError` | MD4C could not parse the input |
 
 `from_markdown` still raises a plain `TypeError` when the argument is not `str`/`bytes` — that is a caller bug, not a malformed document.
-So is a bad URI-policy option: a non-iterable `link_schemes` raises `TypeError`, and `link_schemes=("https://",)` or `link_relative="nope"` raises `ValueError`.
+So is a bad option value: a non-iterable `link_schemes` raises `TypeError`, and `link_schemes=("https://",)`, `link_relative="nope"` or `strict="strict"` raises `ValueError`.
+`strict` takes a level name, so `strict=True` raises `TypeError` rather than quietly meaning something.
 
 > **Changed in 0.4.0** — these were previously `ValueError` (`from_dict`) and `RuntimeError` (`from_markdown`).
 > `MarktipError` derives from `Exception` directly, so `except ValueError` no longer catches them.
+
+> **Changed in 0.7.0** — `missing_attr` is new, and an attr with no markdown form now reports `unrepresentable` rather than `unknown_attr`, which is left meaning "no schema declares this name".
+> `attrs` values that are not `str`/`int`/`bool` are dropped instead of stringified, so `to_dict()` no longer echoes a `"[1, 2]"` the caller never wrote.
 
 > **Changed in 0.5.0** — an ASCII control character in a link `href` or image `src` is now rejected outright, with or without the URI policy.
 > A URI cannot carry one unencoded (`%09` is the encoded form), and leaving it in would defeat the allowlist itself, because browsers strip tab/LF/CR before reading the scheme.
@@ -198,16 +243,15 @@ It guarantees, for the whole tree:
 A document that survives `from_dict` always serializes; callers do not need to re-check any of the above.
 `from_markdown` enforces the same two URI rules on what it parses.
 
-It deliberately does **not** validate, unless `strict=True` asks it to:
+It deliberately does **not** validate, unless `strict` asks it to:
 
 - **`attrs` names and value types.**
   Keys are free-form.
-  `str`, `int`, and `bool` round-trip unchanged; anything else is coerced to a string (`[1, 2]` → `"[1, 2]"`, `1.5` → `"1.5"`, `None` → `""`), so `to_dict()` will not always give back what you passed in.
-  The one exception is the attrs [Refusing lossy conversions](#refusing-lossy-conversions) lists as accepting `None`: there the key is dropped instead of coerced, because a `None` on those means the attr was never set.
+  `str`, `int`, and `bool` round-trip unchanged; every other value is dropped, `None` included, so `to_dict()` gives back what you passed in minus the keys markdown could not have carried anyway.
   An attr with no markdown form is dropped at serialization — see [Refusing lossy conversions](#refusing-lossy-conversions).
-- **Per-node required attrs**, `strict` included.
-  A `heading` without `level`, an `image` without `src`, or a `link` mark without `href` is accepted; the serializer substitutes a default rather than failing.
-  `strict` governs the attrs that are present, not which ones must be.
+- **Per-node required attrs.**
+  A `heading` without `level` or a `codeBlock` without `language` is accepted; the serializer substitutes a default rather than failing.
+  `strict` adds exactly two: a `link` needs an `href` and an `image` needs a `src`, because the default there is an empty destination that reads back as a real link.
   `{"src": None}` and no `src` key at all are the same thing to every part of the library, the URI policy included.
 - **Content models.**
   Which node may contain which is not checked — a `text` node directly under `doc` is accepted and serialized.

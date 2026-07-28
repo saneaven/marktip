@@ -107,10 +107,23 @@ void enforce_uri_policy(const Document& document, const UriPolicy& policy);
 UriPolicy uri_policy_from_py(pybind11::object link_schemes, pybind11::object image_schemes,
                              pybind11::object link_relative, pybind11::object image_relative);
 
-// `strict` refuses any attr the serializer would drop or alter, rather than converting
-// around it. It is from_dict-only: the parser cannot produce an attr it does not itself
-// understand, so there would be nothing for from_markdown to catch.
+// What `strict` promises to preserve, rather than what it happens to accept.
+//
+// Content sits in the middle because losses are not all one kind:
+// a colspan the serializer drops moves every cell after it under a different header,
+// while a link target it drops costs the author nothing —
+// the editor stamped that one on, and no one wrote it.
+// Nothing in the JSON tells those apart (ProseMirror serializes schema defaults onto every node),
+// so the caller has to say which loss is acceptable.
+enum class StrictMode {
+    Off,      // no attr checking at all
+    Content,  // content and structure survive; presentation attrs may be dropped
+    Exact,    // everything survives; an attr markdown cannot carry is an error
+};
+
+// `strict` is from_dict-only: the parser cannot produce an attr it does not itself understand,
+// so there would be nothing for from_markdown to catch.
 Document from_dict_py(pybind11::dict root, pybind11::object link_schemes, pybind11::object image_schemes,
-                      pybind11::object link_relative, pybind11::object image_relative, bool strict);
+                      pybind11::object link_relative, pybind11::object image_relative, pybind11::object strict);
 
 }  // namespace marktip

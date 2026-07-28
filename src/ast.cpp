@@ -127,9 +127,9 @@ py::dict attrs_to_py(const AttrList& attrs) {
 
 // --- the attr schema --------------------------------------------------------
 //
-// Which attrs each type may carry, and what each may hold.
-// Two readers: attrs_from_py just below, which drops a null that means "unset",
-// and strict mode further down, which refuses whatever markdown would drop or alter.
+// Which attrs each type may carry, what each may hold, and what is lost by converting it.
+// Two readers: attrs_from_py just below, which keeps the values markdown can act on,
+// and strict mode further down, which decides which of the losses a caller is willing to take.
 
 enum class AttrRule {
     Str,        // any str
@@ -139,38 +139,59 @@ enum class AttrRule {
     ListStart,  // int 0..kMaxListStart
     Count,      // int >= 0
     Align,      // "left" | "center" | "right" | None
+    Size,       // str or int: Tiptap parses width/height out of HTML as a str, apps store an int
+    ColWidth,   // list of ints
     NoSpan,     // int == 1: GFM tables have no cell spanning
-    NoWidth,    // None: GFM tables have no column widths
 };
 
 // A second axis, orthogonal to the value grammar: what a None means for this attr.
 //
 // ProseMirror serializes every attr in the schema, defaults included,
-// and Tiptap declares `default: null` for codeBlock's language/info,
-// image's src/alt/title and link's href/title.
+// and Tiptap declares `default: null` for most of what it puts on a node.
 // A None on one of those is not a wrongly typed value, it is the attr never having been set —
 // the absent-key case, which is accepted already and renders the same markdown either way.
-// attrs_from_py drops the key, so the two really are one case everywhere downstream:
+// attrs_from_py keeps no None at all, so the two really are one case everywhere downstream:
 // strict, the serializer, and the URI policy.
 //
 // Refused stays the default wherever Tiptap's default is not null
 // (level, start, tight, checked, colspan): a null there is a caller mistake, not an unset attr.
-// So is html, which is marktip's own attr with no Tiptap counterpart,
-// and which the serializer reads as the payload when it is present but empty —
-// dropping the node's content rather than leaving an attr unset.
+// So is html, which is marktip's own attr with no Tiptap counterpart.
 //
-// Align and NoWidth are untouched:
-// those rules take None as a *value* ("no alignment", "no column width") rather than as an unset marker,
-// so they handle it themselves.
+// Align is untouched: that rule takes None as a *value* ("no alignment") rather than as an unset marker.
 enum class NullAttr {
     Refused,  // the default
     Unset,    // None accepted: the attr was never set
+};
+
+// A third axis: can markdown carry this attr at all.
+//
+// Dropped is the presentation an editor stamps onto a node with no markdown counterpart.
+// Losing one costs the *author* nothing — nobody wrote it —
+// which is why Content lets it through while still refusing a colspan,
+// whose loss shifts every cell after it under a different header.
+// Exact refuses both, and reports `why` when it does.
+enum class MarkdownForm {
+    Carried,  // the default
+    Dropped,
+};
+
+// A fourth: must this attr be there for the node to mean anything.
+//
+// A link with no href and an image with no src have no valid unset state.
+// The serializer would write "[a]()", which is not a lossy conversion but an invented one:
+// it survives into stored markdown and reads back as a real link.
+enum class Presence {
+    Optional,  // the default
+    Required,
 };
 
 struct AttrSpec {
     std::string_view name;
     AttrRule rule;
     NullAttr null = NullAttr::Refused;
+    MarkdownForm form = MarkdownForm::Carried;
+    Presence presence = Presence::Optional;
+    const char* why = nullptr;  // Dropped only: the reason Exact reports
 };
 
 struct AttrTable {
@@ -178,25 +199,44 @@ struct AttrTable {
     std::size_t count;
 };
 
+// The sentences Exact reports for a Dropped attr, shared by the specs that mean the same thing.
+constexpr const char* kNoLinkPresentation = "a markdown link carries only a destination and a title";
+constexpr const char* kNoImageSize = "markdown images carry no dimensions";
+
 constexpr AttrSpec kHeadingAttrs[] = {{"level", AttrRule::Level}};
 constexpr AttrSpec kCodeBlockAttrs[] = {{"info", AttrRule::InfoStr, NullAttr::Unset},
                                         {"language", AttrRule::InfoStr, NullAttr::Unset}};
 constexpr AttrSpec kTightAttrs[] = {{"tight", AttrRule::Bool}};
-constexpr AttrSpec kOrderedListAttrs[] = {{"start", AttrRule::ListStart}, {"tight", AttrRule::Bool}};
+constexpr AttrSpec kOrderedListAttrs[] = {
+    {"start", AttrRule::ListStart},
+    {"tight", AttrRule::Bool},
+    {"type", AttrRule::Str, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional,
+     "markdown ordered lists are always numeric"},
+};
 constexpr AttrSpec kTaskItemAttrs[] = {{"checked", AttrRule::Bool}};
-constexpr AttrSpec kTableAttrs[] = {{"colCount", AttrRule::Count}};
+constexpr AttrSpec kTableAttrs[] = {{"colCount", AttrRule::Count, NullAttr::Unset}};
 constexpr AttrSpec kCellAttrs[] = {
     {"align", AttrRule::Align},
     {"colspan", AttrRule::NoSpan},
-    {"colwidth", AttrRule::NoWidth},
+    {"colwidth", AttrRule::ColWidth, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional,
+     "GFM tables have no column widths"},
     {"rowspan", AttrRule::NoSpan},
 };
-constexpr AttrSpec kImageAttrs[] = {{"alt", AttrRule::Str, NullAttr::Unset},
-                                    {"src", AttrRule::Str, NullAttr::Unset},
-                                    {"title", AttrRule::Str, NullAttr::Unset}};
+constexpr AttrSpec kImageAttrs[] = {
+    {"alt", AttrRule::Str, NullAttr::Unset},
+    {"height", AttrRule::Size, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional, kNoImageSize},
+    {"src", AttrRule::Str, NullAttr::Unset, MarkdownForm::Carried, Presence::Required},
+    {"title", AttrRule::Str, NullAttr::Unset},
+    {"width", AttrRule::Size, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional, kNoImageSize},
+};
 constexpr AttrSpec kHtmlAttrs[] = {{"html", AttrRule::Str}};
-constexpr AttrSpec kLinkAttrs[] = {{"href", AttrRule::Str, NullAttr::Unset},
-                                   {"title", AttrRule::Str, NullAttr::Unset}};
+constexpr AttrSpec kLinkAttrs[] = {
+    {"class", AttrRule::Str, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional, kNoLinkPresentation},
+    {"href", AttrRule::Str, NullAttr::Unset, MarkdownForm::Carried, Presence::Required},
+    {"rel", AttrRule::Str, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional, kNoLinkPresentation},
+    {"target", AttrRule::Str, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional, kNoLinkPresentation},
+    {"title", AttrRule::Str, NullAttr::Unset},
+};
 
 constexpr AttrTable kNoAttrs = {nullptr, 0};
 
@@ -255,28 +295,22 @@ const AttrSpec* find_attr_spec(const AttrTable& table, std::string_view name) {
     return nullptr;
 }
 
-AttrList attrs_from_py(py::dict attrs, const AttrTable& table) {
+// str, int and bool are the values the serializer can act on; every other key is dropped.
+// Stamping the rest through py::str turned [100] into "[100]" and a None into "",
+// which put a string the caller never wrote into to_dict() and lost the value anyway.
+// Dropping says the same thing without the invention,
+// and it is what collapses "None" and "no such key" into one shape for everything downstream:
+// strict, the serializer, the URI policy.
+AttrList attrs_from_py(py::dict attrs) {
     AttrList out;
     for (auto item : attrs) {
-        std::string key = py_to_string(item.first);
         py::handle value = item.second;
-        if (value.is_none()) {
-            const AttrSpec* spec = find_attr_spec(table, key);
-            if (spec != nullptr && spec->null == NullAttr::Unset) {
-                // An attr Tiptap serialized but never set.
-                // Dropping the key, rather than coercing it to "",
-                // is what makes it the absent-key case for real.
-                continue;
-            }
-        }
         if (py::isinstance<py::bool_>(value)) {
-            set_attr(out, std::move(key), AttrValue::boolean(py::cast<bool>(value)));
+            set_attr(out, py_to_string(item.first), AttrValue::boolean(py::cast<bool>(value)));
         } else if (py::isinstance<py::int_>(value)) {
-            set_attr(out, std::move(key), AttrValue::integer(py::cast<long long>(value)));
+            set_attr(out, py_to_string(item.first), AttrValue::integer(py::cast<long long>(value)));
         } else if (py::isinstance<py::str>(value)) {
-            set_attr(out, std::move(key), AttrValue::string(py::cast<std::string>(value)));
-        } else {
-            set_attr(out, std::move(key), AttrValue::string(py_to_string(value)));
+            set_attr(out, py_to_string(item.first), AttrValue::string(py::cast<std::string>(value)));
         }
     }
     return out;
@@ -327,13 +361,17 @@ py::dict node_to_py(const Document& document, std::size_t index) {
 //
 // Node and mark *types* are closed, but attrs are not:
 // an attr the serializer never reads is dropped without a word.
-// strict=True refuses those instead, from the walk that is already happening,
+// strict names what a caller refuses to lose, from the walk that is already happening,
 // so a consumer does not have to re-traverse the tree in Python
 // just to find out whether the document survives conversion intact.
 //
-// The check reads the raw py::dict rather than the built AttrList, because attrs_from_py coerces first:
-// [100] becomes "[100]" and a refused None becomes "",
-// which is exactly the difference between an accepted colwidth and a refused one.
+// Content and Exact differ over one thing, the Dropped attrs,
+// and they differ because nothing in the JSON says whether a `target: "_blank"` was chosen or stamped on:
+// ProseMirror serializes schema defaults onto every node, so both spellings arrive identical.
+// A caller storing markdown as the record wants Content; one keeping the JSON wants Exact.
+//
+// The check reads the raw py::dict rather than the built AttrList,
+// because attrs_from_py has already dropped a None and anything it cannot carry by then.
 // That also makes it from_dict-only, which is the whole story anyway —
 // the parser emits nothing but attrs it knows about, in range,
 // so there is nothing for from_markdown to catch.
@@ -415,6 +453,21 @@ void check_attr_value(py::handle value, AttrRule rule, const std::string& name, 
                 }
             }
             return;
+        case AttrRule::Size:
+            if (!py::isinstance<py::str>(value) && !is_plain_int(value)) {
+                expected("a str or an int");
+            }
+            return;
+        case AttrRule::ColWidth:
+            if (!py::isinstance<py::list>(value)) {
+                expected("a list of ints");
+            }
+            for (py::handle item : py::reinterpret_borrow<py::list>(value)) {
+                if (!is_plain_int(item) || !as_int(item, number)) {
+                    expected("a list of ints");
+                }
+            }
+            return;
         case AttrRule::NoSpan:
             if (!is_plain_int(value) || !as_int(value, number)) {
                 expected("an int");
@@ -423,35 +476,60 @@ void check_attr_value(py::handle value, AttrRule rule, const std::string& name, 
                 unrepresentable("GFM tables have no cell spanning");
             }
             return;
-        case AttrRule::NoWidth:
-            if (!value.is_none()) {
-                unrepresentable("GFM tables have no column widths");
-            }
-            return;
     }
 }
 
 void check_attrs_strict(py::dict attrs, const AttrTable& table, std::string_view owner_type, const char* kind,
-                        const PathStack& path) {
+                        StrictMode mode, const PathStack& path) {
     for (auto item : attrs) {
         std::string name = py_to_string(item.first);
         const AttrSpec* spec = find_attr_spec(table, name);
         if (spec == nullptr) {
+            // Outside both dialects: a typo, or a key an app invented and expects to survive.
             throw InvalidNodeError("unknown_attr", name,
                                    "attr '" + name + "' is not defined for " + kind + " type '" +
                                        std::string(owner_type) + "'",
                                    format_path(path));
         }
-        // Unset rather than wrongly typed, and attrs_from_py drops the key,
-        // so refusing it here would refuse a document identical to one that is accepted.
+        // Unset rather than wrongly typed: this is what the editor submits for an attr
+        // nobody filled in, so refusing it would refuse ordinary editor output.
+        // A Refused attr still fails the value rule below —
+        // Tiptap gives those a non-null default and never emits a null for one,
+        // so a null there is a caller bug worth reporting even though the conversion survives it.
         if (spec->null == NullAttr::Unset && item.second.is_none()) {
             continue;
+        }
+        // Refused before the value is looked at: under Exact the name alone settles it,
+        // and a caller who will not lose a width does not need to hear that this one is malformed too.
+        if (spec->form == MarkdownForm::Dropped && mode == StrictMode::Exact) {
+            throw InvalidNodeError("unrepresentable", name,
+                                   "attr '" + name + "' cannot be expressed in markdown: " + spec->why,
+                                   format_path(path));
         }
         check_attr_value(item.second, spec->rule, name, path);
     }
 }
 
-Mark mark_from_py(py::dict mark_dict, bool strict, const PathStack& path) {
+// Reads the built AttrList rather than the input dict, so "no such key" and "the key is None"
+// arrive here as one case — attrs_from_py has already dropped the None.
+// A node carrying no attrs dict at all is the third spelling, which is why the caller
+// runs this outside its `attrs` block.
+void check_required_attrs(const AttrList& attrs, const AttrTable& table, std::string_view owner_type,
+                          const char* kind, const PathStack& path) {
+    for (std::size_t i = 0; i < table.count; ++i) {
+        const AttrSpec& spec = table.specs[i];
+        if (spec.presence != Presence::Required || find_attr(attrs, spec.name) != nullptr) {
+            continue;
+        }
+        std::string name(spec.name);
+        throw InvalidNodeError("missing_attr", name,
+                               "attr '" + name + "' is required for " + kind + " type '" +
+                                   std::string(owner_type) + "'",
+                               format_path(path));
+    }
+}
+
+Mark mark_from_py(py::dict mark_dict, StrictMode mode, const PathStack& path) {
     Mark mark;
     mark.type = required_type(mark_dict, "mark", path);
     std::size_t type_pos = type_index(kKnownMarkTypes, mark.type);
@@ -459,20 +537,26 @@ Mark mark_from_py(py::dict mark_dict, bool strict, const PathStack& path) {
         throw UnknownTypeError("mark", mark.type, format_path(path));
     }
 
+    const AttrTable& table = kMarkAttrTables[type_pos];
     py::object attrs = dict_get(mark_dict, "attrs");
     if (!attrs.is_none()) {
         py::dict attr_dict = expect_dict(attrs, "mark attrs", "attrs", path);
-        if (strict) {
-            check_attrs_strict(attr_dict, kMarkAttrTables[type_pos], mark.type, "mark", path);
+        if (mode != StrictMode::Off) {
+            check_attrs_strict(attr_dict, table, mark.type, "mark", mode, path);
         }
-        mark.attrs = attrs_from_py(attr_dict, kMarkAttrTables[type_pos]);
+        mark.attrs = attrs_from_py(attr_dict);
+    }
+    // Outside the block above on purpose: a link mark with no attrs key at all
+    // is a link with no destination just as much as one whose href is None.
+    if (mode != StrictMode::Off) {
+        check_required_attrs(mark.attrs, table, mark.type, "mark", path);
     }
 
     return mark;
 }
 
 void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict, std::string_view context,
-                       std::size_t depth, bool strict, PathStack& path) {
+                       std::size_t depth, StrictMode mode, PathStack& path) {
     if (depth > kMaxNodeDepth) {
         throw InvalidNodeError("max_depth", "content", "node content nesting exceeds maximum depth",
                                format_path(path));
@@ -489,13 +573,18 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
         node.text = py_to_string(dict_get(node_dict, "text"));
     }
 
+    const AttrTable& table = kNodeAttrTables[type_pos];
     py::object attrs = dict_get(node_dict, "attrs");
     if (!attrs.is_none()) {
         py::dict attr_dict = expect_dict(attrs, "node attrs", "attrs", path);
-        if (strict) {
-            check_attrs_strict(attr_dict, kNodeAttrTables[type_pos], node.type, "node", path);
+        if (mode != StrictMode::Off) {
+            check_attrs_strict(attr_dict, table, node.type, "node", mode, path);
         }
-        node.attrs = attrs_from_py(attr_dict, kNodeAttrTables[type_pos]);
+        node.attrs = attrs_from_py(attr_dict);
+    }
+    // Outside the block above: an image with no attrs key at all still has no src.
+    if (mode != StrictMode::Off) {
+        check_required_attrs(node.attrs, table, node.type, "node", path);
     }
 
     py::object marks = dict_get(node_dict, "marks");
@@ -504,7 +593,7 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
         std::size_t mark_index = 0;
         for (py::handle mark_handle : mark_list) {
             path.push_back({"marks", mark_index});
-            node.marks.push_back(mark_from_py(expect_dict(mark_handle, "mark", "marks", path), strict, path));
+            node.marks.push_back(mark_from_py(expect_dict(mark_handle, "mark", "marks", path), mode, path));
             path.pop_back();
             ++mark_index;
         }
@@ -523,7 +612,7 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
         std::size_t child_index = document.append_child(index, Node{});
         path.push_back({"content", child_pos});
         fill_node_from_py(document, child_index, expect_dict(child_handle, "content child", "content", path), "node",
-                          depth + 1, strict, path);
+                          depth + 1, mode, path);
         path.pop_back();
         ++child_pos;
     }
@@ -865,6 +954,25 @@ void enforce_node(const Document& document, std::size_t index, const UriPolicy& 
     }
 }
 
+// Spelled like the relative policy below rather than as a bool,
+// because the interesting question has three answers and only one of them is "do not check".
+StrictMode strict_from_py(py::handle value, const char* arg_name) {
+    if (!py::isinstance<py::str>(value)) {
+        throw py::type_error(std::string(arg_name) + " must be a str");
+    }
+    std::string level = py::cast<std::string>(value);
+    if (level == "off") {
+        return StrictMode::Off;
+    }
+    if (level == "content") {
+        return StrictMode::Content;
+    }
+    if (level == "exact") {
+        return StrictMode::Exact;
+    }
+    throw py::value_error(std::string(arg_name) + " must be 'off', 'content' or 'exact', not '" + level + "'");
+}
+
 RelativePolicy relative_from_py(py::handle value, const char* arg_name) {
     if (!py::isinstance<py::str>(value)) {
         throw py::type_error(std::string(arg_name) + " must be a str");
@@ -1079,12 +1187,13 @@ UriPolicy uri_policy_from_py(py::object link_schemes, py::object image_schemes, 
 }
 
 Document from_dict_py(py::dict root, py::object link_schemes, py::object image_schemes, py::object link_relative,
-                      py::object image_relative, bool strict) {
+                      py::object image_relative, py::object strict) {
     // Options are validated before the tree is walked:
     // a bad option value is a caller bug,
     // and should surface whatever the document happens to contain.
     UriPolicy policy = uri_policy_from_py(std::move(link_schemes), std::move(image_schemes), std::move(link_relative),
                                           std::move(image_relative));
+    StrictMode mode = strict_from_py(strict, "strict");
 
     PathStack path;
     path.reserve(32);
@@ -1095,7 +1204,7 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
     }
 
     Document document;
-    fill_node_from_py(document, 0, root, "root node", 0, strict, path);
+    fill_node_from_py(document, 0, root, "root node", 0, mode, path);
     enforce_uri_policy(document, policy);
     return document;
 }

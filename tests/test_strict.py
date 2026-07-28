@@ -1,11 +1,17 @@
-"""Opt-in strict mode: refuse instead of silently altering the document.
+"""Opt-in strict levels: name what the conversion may not lose.
 
 Issue #3 — node and mark *types* are closed, but attrs are not. An attr the serializer
 never reads is dropped without a word, so a `colspan: 2` cell quietly becomes a plain
 one and `start: -5` renders as something that is not a list at all.
 
 Checking that in Python means walking the tree a second time, after marktip already
-walked it in C++. strict=True does it from the walk that is already happening.
+walked it in C++. strict does it from the walk that is already happening.
+
+There are two levels rather than one because losses are not all the same kind (#5). A
+colspan the serializer drops moves every cell after it under a different header; a link
+target it drops costs the author nothing, because the editor stamped it on and nobody
+wrote it. Nothing in the JSON tells those apart — ProseMirror serializes schema defaults
+onto every node — so the caller says which loss is acceptable: "content" or "exact".
 
 It is from_dict-only, unlike the URI policy: the parser only ever emits attrs it
 understands, with values in range, so there is nothing on the from_markdown path for it
@@ -60,6 +66,12 @@ def code_block(**attrs):
 # Where a violation is reported, for each of the shapes above.
 CELL_PATH = "content[0].content[0].content[0]"
 LINK_PATH = "content[0].content[0].marks[0]"
+IMAGE_PATH = "content[0].content[0]"
+
+# Both levels checked everywhere the two are meant to agree, which is everywhere but
+# the presentation attrs below. A rule that only ever ran at one level would be a rule
+# whose level nobody chose.
+LEVELS = ["content", "exact"]
 
 
 def code_for(ast, **options):
@@ -82,6 +94,8 @@ def code_for(ast, **options):
         cell(foo="bar"),
         cell(align="middle"),
         link(href="https://a", onclick="evil()"),
+        link(),
+        image(),
         doc(node("heading", level=9)),
         ordered(start=-5),
         code_block(language="py\nx"),
@@ -95,15 +109,16 @@ def test_documents_that_convert_today_still_convert(ast):
 
 def test_strict_is_off_by_default():
     assert code_for(cell(colspan=2)) is None
-    assert code_for(cell(colspan=2), strict=True) == "unrepresentable"
+    assert code_for(cell(colspan=2), strict="content") == "unrepresentable"
 
 
-# ── unknown_attr: no markdown form for this type ─────────────────────────────
+# ── unknown_attr: a name outside both dialects ───────────────────────────────
 
 
-def test_unknown_node_attr_reports_code_field_and_path():
+@pytest.mark.parametrize("level", LEVELS)
+def test_unknown_node_attr_reports_code_field_and_path(level):
     with pytest.raises(tm.InvalidNodeError) as excinfo:
-        tm.from_dict(cell(foo="bar"), strict=True)
+        tm.from_dict(cell(foo="bar"), strict=level)
 
     err = excinfo.value
     assert err.code == "unknown_attr"
@@ -113,33 +128,34 @@ def test_unknown_node_attr_reports_code_field_and_path():
     assert err.detail == str(err)
 
 
-@pytest.mark.parametrize("attr", ["target", "rel", "class", "onclick"])
-def test_tiptap_link_extension_attrs_have_no_markdown_form(attr):
-    # The Link extension emits target/rel by default, so this is the first thing a
-    # consumer turning strict on will hit. It is also the case the issue asks for:
-    # onclick="evil()" must not vanish silently.
+@pytest.mark.parametrize("level", LEVELS)
+def test_a_name_no_schema_declares_is_refused_at_every_level(level):
+    # The case that earns the check its keep: onclick="evil()" must not vanish silently,
+    # and no Tiptap extension in marktip's dialect declares it, so nothing is lost by saying so.
     with pytest.raises(tm.InvalidNodeError) as excinfo:
-        tm.from_dict(link(href="https://a", **{attr: "_blank"}), strict=True)
+        tm.from_dict(link(href="https://a", onclick="evil()"), strict=level)
 
     assert excinfo.value.code == "unknown_attr"
-    assert excinfo.value.field == attr
+    assert excinfo.value.field == "onclick"
     assert excinfo.value.path == LINK_PATH
     assert "mark type 'link'" in str(excinfo.value)
 
 
-def test_attrs_are_scoped_to_their_own_type():
+@pytest.mark.parametrize("level", LEVELS)
+def test_attrs_are_scoped_to_their_own_type(level):
     # level belongs to heading, not to paragraph; tight to a list, not to its items.
-    assert code_for(doc(node("heading", level=2)), strict=True) is None
-    assert code_for(doc({"type": "paragraph", "attrs": {"level": 2}}), strict=True) == "unknown_attr"
-    assert code_for(doc({"type": "bulletList", "attrs": {"tight": True}}), strict=True) is None
-    assert code_for(doc({"type": "listItem", "attrs": {"tight": True}}), strict=True) == "unknown_attr"
+    assert code_for(doc(node("heading", level=2)), strict=level) is None
+    assert code_for(doc({"type": "paragraph", "attrs": {"level": 2}}), strict=level) == "unknown_attr"
+    assert code_for(doc({"type": "bulletList", "attrs": {"tight": True}}), strict=level) is None
+    assert code_for(doc({"type": "listItem", "attrs": {"tight": True}}), strict=level) == "unknown_attr"
 
 
 # ── invalid_attr_value: known name, wrong type or out of range ───────────────
 
 
+@pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize(
-    "level, expected",
+    "value, expected",
     [
         (1, None),
         (6, None),
@@ -152,10 +168,11 @@ def test_attrs_are_scoped_to_their_own_type():
         (10**100, "invalid_attr_value"),  # too large for long long — a document problem, not an OverflowError
     ],
 )
-def test_heading_level_range(level, expected):
-    assert code_for(doc(node("heading", level=level)), strict=True) == expected
+def test_heading_level_range(value, expected, level):
+    assert code_for(doc(node("heading", level=value)), strict=level) == expected
 
 
+@pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize(
     "start, expected",
     [
@@ -167,15 +184,19 @@ def test_heading_level_range(level, expected):
         ("1", "invalid_attr_value"),
     ],
 )
-def test_ordered_list_start_range(start, expected):
-    assert code_for(ordered(start=start), strict=True) == expected
+def test_ordered_list_start_range(start, expected, level):
+    assert code_for(ordered(start=start), strict=level) == expected
 
 
-@pytest.mark.parametrize("value, expected", [(True, None), (False, None), (1, "invalid_attr_value"), ("yes", "invalid_attr_value")])
-def test_bool_attrs_are_not_coerced_under_strict(value, expected):
-    assert code_for(doc({"type": "taskList", "attrs": {"tight": value}}), strict=True) == expected
+@pytest.mark.parametrize("level", LEVELS)
+@pytest.mark.parametrize(
+    "value, expected", [(True, None), (False, None), (1, "invalid_attr_value"), ("yes", "invalid_attr_value")]
+)
+def test_bool_attrs_are_not_coerced_under_strict(value, expected, level):
+    assert code_for(doc({"type": "taskList", "attrs": {"tight": value}}), strict=level) == expected
 
 
+@pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize(
     "language, expected",
     [
@@ -188,21 +209,30 @@ def test_bool_attrs_are_not_coerced_under_strict(value, expected):
         (None, None),  # unset, not a wrong type — see below
     ],
 )
-def test_code_fence_info_must_be_a_single_line(language, expected):
-    assert code_for(code_block(language=language), strict=True) == expected
+def test_code_fence_info_must_be_a_single_line(language, expected, level):
+    assert code_for(code_block(language=language), strict=level) == expected
 
 
+@pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize(
     "align, expected",
-    [("left", None), ("center", None), ("right", None), (None, None), ("middle", "invalid_attr_value"), ("", "invalid_attr_value")],
+    [
+        ("left", None),
+        ("center", None),
+        ("right", None),
+        (None, None),
+        ("middle", "invalid_attr_value"),
+        ("", "invalid_attr_value"),
+    ],
 )
-def test_cell_align_values(align, expected):
-    assert code_for(cell(align=align), strict=True) == expected
+def test_cell_align_values(align, expected, level):
+    assert code_for(cell(align=align), strict=level) == expected
 
 
-def test_invalid_value_reports_the_attr_as_field():
+@pytest.mark.parametrize("level", LEVELS)
+def test_invalid_value_reports_the_attr_as_field(level):
     with pytest.raises(tm.InvalidNodeError) as excinfo:
-        tm.from_dict(doc(node("heading", level=9)), strict=True)
+        tm.from_dict(doc(node("heading", level=9)), strict=level)
 
     err = excinfo.value
     assert err.code == "invalid_attr_value"
@@ -214,25 +244,21 @@ def test_invalid_value_reports_the_attr_as_field():
 # ── unrepresentable: well-formed, but GFM cannot carry it ────────────────────
 
 
-def test_tiptap_table_defaults_are_accepted():
+@pytest.mark.parametrize("level", LEVELS)
+def test_tiptap_table_no_op_defaults_are_accepted(level):
     # The table extension puts these on every cell. Refusing the *names* would leave
-    # strict unusable for the consumer that asked for it, so only non-no-op values fail.
-    assert code_for(cell(colspan=1, rowspan=1, colwidth=None), strict=True) is None
+    # strict unusable for the consumer that asked for it, and a span of 1 is no span at all,
+    # so there is nothing to lose by taking them.
+    assert code_for(cell(colspan=1, rowspan=1), strict=level) is None
 
 
-@pytest.mark.parametrize(
-    "attrs, field",
-    [
-        ({"colspan": 2}, "colspan"),
-        ({"rowspan": 3}, "rowspan"),
-        ({"colspan": 0}, "colspan"),
-        ({"colwidth": [100]}, "colwidth"),
-        ({"colwidth": [100, 200]}, "colwidth"),
-    ],
-)
-def test_table_features_gfm_cannot_express(attrs, field):
+@pytest.mark.parametrize("level", LEVELS)
+@pytest.mark.parametrize("attrs, field", [({"colspan": 2}, "colspan"), ({"rowspan": 3}, "rowspan"), ({"colspan": 0}, "colspan")])
+def test_structure_gfm_cannot_express_is_refused_at_every_level(attrs, field, level):
+    # Not presentation: dropping a colspan shifts every cell after it under a different
+    # header, so the loss reaches the content itself. Both levels refuse it.
     with pytest.raises(tm.InvalidNodeError) as excinfo:
-        tm.from_dict(cell(**attrs), strict=True)
+        tm.from_dict(cell(**attrs), strict=level)
 
     err = excinfo.value
     assert err.code == "unrepresentable"
@@ -241,56 +267,241 @@ def test_table_features_gfm_cannot_express(attrs, field):
     assert "cannot be expressed in markdown" in str(err)
 
 
-def test_unrepresentable_is_distinct_from_a_malformed_value():
+@pytest.mark.parametrize("level", LEVELS)
+def test_unrepresentable_is_distinct_from_a_malformed_value(level):
     # Different remediation for the caller: colspan=2 is a valid Tiptap document that
     # markdown cannot carry, level=9 is simply wrong.
-    assert code_for(cell(colspan=2), strict=True) == "unrepresentable"
-    assert code_for(doc(node("heading", level=9)), strict=True) == "invalid_attr_value"
+    assert code_for(cell(colspan=2), strict=level) == "unrepresentable"
+    assert code_for(doc(node("heading", level=9)), strict=level) == "invalid_attr_value"
+
+
+# ── content vs exact: the presentation an editor stamps on ───────────────────
+
+
+# Every attr a stock Tiptap schema declares that markdown has no form for, at a value
+# someone could plausibly have chosen. Issue #5 is that "content" has to take all of these.
+PRESENTATION = [
+    (link(href="https://a", target="_blank"), "target", LINK_PATH),
+    (link(href="https://a", rel="noopener noreferrer nofollow"), "rel", LINK_PATH),
+    (link(href="https://a", **{"class": "external"}), "class", LINK_PATH),
+    (image(src="a.png", width=300), "width", IMAGE_PATH),
+    (image(src="a.png", height="200"), "height", IMAGE_PATH),
+    (ordered(type="a"), "type", "content[0]"),
+    (cell(colwidth=[100, 200]), "colwidth", CELL_PATH),
+]
+
+
+@pytest.mark.parametrize("ast, field, path", PRESENTATION)
+def test_content_takes_presentation_and_drops_it(ast, field, path):
+    assert code_for(ast, strict="content") is None
+
+
+@pytest.mark.parametrize("ast, field, path", PRESENTATION)
+def test_exact_refuses_presentation_by_name(ast, field, path):
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_dict(ast, strict="exact")
+
+    err = excinfo.value
+    assert err.code == "unrepresentable"
+    assert err.field == field
+    assert err.path == path
+    assert "cannot be expressed in markdown" in str(err)
+
+
+def test_a_stock_tiptap_document_converts_under_content():
+    # Issue #5, verbatim: StarterKit + Image + Link, a link with only href set. Node.toJSON()
+    # serializes the computed attrs including defaults, so target/rel/class ride along on
+    # every link whether or not the author touched them.
+    stock = doc(
+        p(
+            {
+                "type": "text",
+                "text": "a",
+                "marks": [
+                    {
+                        "type": "link",
+                        "attrs": {
+                            "href": "https://example.com",
+                            "target": "_blank",
+                            "rel": "noopener noreferrer nofollow",
+                            "class": None,
+                            "title": None,
+                        },
+                    }
+                ],
+            }
+        ),
+        p(
+            {
+                "type": "image",
+                "attrs": {
+                    "src": "https://example.com/x.png",
+                    "alt": None,
+                    "title": None,
+                    "width": None,
+                    "height": None,
+                },
+            }
+        ),
+        {
+            "type": "orderedList",
+            "attrs": {"start": 1, "type": None},
+            "content": [{"type": "listItem", "content": [p(text("x"))]}],
+        },
+    )
+    expected = "[a](https://example.com)\n\n![](https://example.com/x.png)\n\n1. x"
+
+    assert tm.from_dict(stock, strict="content").to_markdown() == expected
+    assert tm.from_dict(stock).to_markdown() == expected
+    assert code_for(stock, strict="exact") == "unrepresentable"
+
+
+@pytest.mark.parametrize(
+    "ast, expected",
+    [
+        (image(src="a.png", width=[1, 2]), "invalid_attr_value"),
+        (image(src="a.png", width=300), None),
+        (image(src="a.png", width="300"), None),
+        (image(src="a.png", width=True), "invalid_attr_value"),  # a width is not a bool
+        (link(href="https://a", target=123), "invalid_attr_value"),
+        (cell(colwidth=[100]), None),
+        (cell(colwidth="100"), "invalid_attr_value"),
+        (cell(colwidth=[1.5]), "invalid_attr_value"),
+    ],
+)
+def test_content_still_type_checks_what_it_drops(ast, expected):
+    # Dropped is not unchecked: a width of [1, 2] is a bug in the caller either way,
+    # and saying so costs nothing since the value was never going to reach the markdown.
+    assert code_for(ast, strict="content") == expected
+
+
+def test_exact_refuses_a_dropped_attr_before_reading_its_value():
+    # The name settles it at exact, so the caller is not told about a malformed width
+    # they were never going to be allowed to keep.
+    assert code_for(image(src="a.png", width=[1, 2]), strict="exact") == "unrepresentable"
+
+
+# ── missing_attr: a destination that was never supplied ──────────────────────
+
+
+@pytest.mark.parametrize("level", LEVELS)
+@pytest.mark.parametrize("attrs", [{"href": None}, {}, {"title": "t"}])
+def test_a_link_with_no_destination_is_refused(attrs, level):
+    # Issue #7. The three spellings of "this link has no destination" are one case:
+    # absent, null, and no attrs dict at all. Writing "[a]()" for any of them is not a
+    # lossy conversion but an invented one — it reads back as a real link node.
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_dict(link(**attrs), strict=level)
+
+    err = excinfo.value
+    assert err.code == "missing_attr"
+    assert err.field == "href"
+    assert err.path == LINK_PATH
+    assert str(err) == "attr 'href' is required for mark type 'link'"
+
+
+@pytest.mark.parametrize("level", LEVELS)
+def test_a_mark_or_node_with_no_attrs_key_at_all_is_the_same_case(level):
+    # The check runs outside the `attrs` block for exactly this: there is no dict to walk.
+    bare_link = doc(p({"type": "text", "text": "x", "marks": [{"type": "link"}]}))
+    bare_image = doc(p({"type": "image"}))
+
+    assert code_for(bare_link, strict=level) == "missing_attr"
+    assert code_for(bare_image, strict=level) == "missing_attr"
+
+
+@pytest.mark.parametrize("level", LEVELS)
+@pytest.mark.parametrize("attrs", [{"src": None}, {}, {"alt": "a"}])
+def test_an_image_with_no_source_is_refused(attrs, level):
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_dict(image(**attrs), strict=level)
+
+    err = excinfo.value
+    assert err.code == "missing_attr"
+    assert err.field == "src"
+    assert err.path == IMAGE_PATH
+
+
+@pytest.mark.parametrize("level", LEVELS)
+def test_an_empty_destination_is_supplied_not_missing(level):
+    # "" is what the parser itself emits for "[a]()", and it round-trips exactly, so strict
+    # has nothing to refuse. Rejecting an empty destination is the URI policy's job.
+    assert tm.from_dict(link(href=""), strict=level).to_markdown() == "[x]()"
+    assert code_for(image(src=""), strict=level) is None
+    assert code_for(link(href=""), strict=level, link_relative="reject") == "disallowed_relative_url"
+
+
+@pytest.mark.parametrize("level", LEVELS)
+def test_a_missing_destination_is_reported_before_the_uri_policy(level):
+    # Both would fire; the missing attr is the more specific answer, and it is the one a
+    # caller can act on. The walk reaches it first, which is what makes that deterministic.
+    assert code_for(link(href=None), strict=level, link_relative="reject") == "missing_attr"
+
+
+def test_a_missing_destination_is_still_converted_when_strict_is_off():
+    assert tm.from_dict(link()).to_markdown() == "[x]()"
+    assert tm.from_dict(image()).to_markdown() == "![]()"
 
 
 # ── None: an attr Tiptap serialized but never set ────────────────────────────
 
 
+@pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize(
     "ast",
     [
         code_block(language=None),
         code_block(info=None),
         image(src="a.png", alt=None, title=None),
-        image(src=None),
         link(href="https://a", title=None),
-        link(href=None),
+        doc({"type": "table", "attrs": {"colCount": None}}),
+        cell(colwidth=None),
     ],
 )
-def test_none_on_an_optional_attr_is_unset_not_a_wrong_type(ast):
+def test_none_on_an_optional_attr_is_unset_not_a_wrong_type(ast, level):
     # Issue #4. ProseMirror serializes every attr in the schema, defaults included,
     # and Tiptap declares `default: null` for each of these,
     # so this is what the editor submits for an attr nobody ever filled in.
-    assert code_for(ast, strict=True) is None
+    assert code_for(ast, strict=level) is None
 
 
+@pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize(
     "with_null, without",
     [
         (code_block(language=None), code_block()),
         (image(src="a.png", alt=None, title=None), image(src="a.png")),
         (link(href="https://a", title=None), link(href="https://a")),
-        (link(href=None), link()),
+        (doc({"type": "table", "attrs": {"colCount": None}}), doc({"type": "table"})),
     ],
 )
-def test_a_null_attr_converts_exactly_like_an_absent_one(with_null, without):
+def test_a_null_attr_converts_exactly_like_an_absent_one(with_null, without, level):
     # Why accepting it is not a loosening:
     # strict admits no markdown here it was not already admitting from the absent-key form.
-    assert tm.from_dict(with_null, strict=True).to_markdown() == tm.from_dict(without, strict=True).to_markdown()
+    assert tm.from_dict(with_null, strict=level).to_markdown() == tm.from_dict(without, strict=level).to_markdown()
 
 
-def test_a_null_attr_is_dropped_rather_than_coerced_to_empty():
-    # The fix is in the coercion and not only in the strict check,
-    # which is what makes the equivalence above hold for the serializer and the URI policy too.
+@pytest.mark.parametrize("level", LEVELS)
+def test_a_null_required_attr_fails_exactly_like_an_absent_one(level):
+    # The same equivalence, in the direction where both sides are refused (#7).
+    assert code_for(link(href=None), strict=level) == code_for(link(), strict=level) == "missing_attr"
+
+
+def test_a_null_attr_is_dropped_rather_than_coerced():
+    # from_dict keeps str, int and bool and drops every other value, so a null never
+    # becomes a "" that to_dict() then hands back as if the caller had written it.
     assert "attrs" not in tm.from_dict(code_block(language=None)).to_dict()["content"][0]
     assert tm.from_dict(code_block(language=None, info="")).to_dict()["content"][0]["attrs"] == {"info": ""}
 
 
+def test_a_value_markdown_cannot_carry_is_dropped_rather_than_stringified():
+    # It used to arrive as "[100]" — a string the caller never wrote, standing in for a
+    # value that was lost anyway.
+    stored = tm.from_dict(cell(colwidth=[100], align="left")).to_dict()
+    assert stored["content"][0]["content"][0]["content"][0]["attrs"] == {"align": "left"}
+
+
+@pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize(
     "ast, field",
     [
@@ -298,48 +509,49 @@ def test_a_null_attr_is_dropped_rather_than_coerced_to_empty():
         (ordered(start=None), "start"),
         (doc({"type": "taskList", "attrs": {"tight": None}}), "tight"),
         (doc(node("taskItem", checked=None)), "checked"),
-        (doc({"type": "table", "attrs": {"colCount": None}}), "colCount"),
         (cell(colspan=None), "colspan"),
     ],
 )
-def test_none_stays_wrong_where_tiptap_declares_a_non_null_default(ast, field):
-    # These are settings rather than optional values.
-    # Tiptap gives every one of them a non-null default, so a null is a caller mistake.
+def test_none_stays_wrong_where_tiptap_declares_a_non_null_default(ast, field, level):
+    # These are settings rather than optional values. Tiptap gives every one a non-null
+    # default, so it never emits a null here and one means the caller built the dict wrong.
+    # The conversion would survive it; strict reports it because it is a bug, not a loss.
     with pytest.raises(tm.InvalidNodeError) as excinfo:
-        tm.from_dict(ast, strict=True)
+        tm.from_dict(ast, strict=level)
 
     assert excinfo.value.code == "invalid_attr_value"
     assert excinfo.value.field == field
 
 
-def test_a_null_html_attr_is_refused_because_it_erases_the_content():
-    # htmlBlock/htmlInline are marktip's own node types, declared by no Tiptap schema,
-    # and an html attr that is present but empty is the payload —
-    # so a null there is not an unset attr, it is the content drop 0.4.1 fixed.
+@pytest.mark.parametrize("level", LEVELS)
+def test_a_null_html_attr_is_unset_and_still_reported(level):
+    # htmlBlock/htmlInline are marktip's own node types, declared by no Tiptap schema, so a
+    # null there is a caller mistake. It no longer erases the content — the key is dropped
+    # and the child text is the payload, exactly as when the attr is absent.
     nulled = doc({"type": "htmlBlock", "attrs": {"html": None}, "content": [text("<div>hi</div>")]})
     absent = doc({"type": "htmlBlock", "content": [text("<div>hi</div>")]})
 
-    assert tm.from_dict(nulled).to_markdown() == ""
-    assert tm.from_dict(absent).to_markdown() == "<div>hi</div>"
-    assert code_for(nulled, strict=True) == "invalid_attr_value"
+    assert tm.from_dict(nulled).to_markdown() == tm.from_dict(absent).to_markdown() == "<div>hi</div>"
+    assert code_for(nulled, strict=level) == "invalid_attr_value"
 
 
 def test_a_null_alt_falls_back_to_the_child_text_like_an_absent_one():
-    # The one place the coercion change is visible in the markdown:
-    # an alt of "" is the caption, an unset alt is not, and a null now lands on the second.
+    # An alt of "" is the caption, an unset alt is not, and a null lands on the second.
     assert tm.from_dict(captioned_image(src="a.png", alt=None)).to_markdown() == "![cap](a.png)"
     assert tm.from_dict(captioned_image(src="a.png")).to_markdown() == "![cap](a.png)"
     assert tm.from_dict(captioned_image(src="a.png", alt="")).to_markdown() == "![](a.png)"
 
 
-# ── the two attrs that are accepted and ignored ──────────────────────────────
+# ── accepted at every level: the structure already carries it ────────────────
 
 
-def test_col_count_and_body_row_align_are_accepted_though_unused():
+@pytest.mark.parametrize("level", LEVELS)
+def test_col_count_and_body_row_align_are_accepted_though_unused(level):
     # The serializer derives the column count from the rows and reads align only from the
-    # header row. Both are still accepted, because from_markdown emits both — see
-    # test_strict_accepts_what_the_parser_produces for why that matters.
-    assert code_for(doc({"type": "table", "attrs": {"colCount": 2}}), strict=True) is None
+    # header row, so neither attr is read — but neither is lost either, because the
+    # structure it was describing survives. from_markdown emits both, which is why
+    # refusing them would break re-parsing stored markdown; see the invariant below.
+    assert code_for(doc({"type": "table", "attrs": {"colCount": 2}}), strict=level) is None
     body = doc(
         {
             "type": "table",
@@ -349,15 +561,16 @@ def test_col_count_and_body_row_align_are_accepted_though_unused():
             ],
         }
     )
-    assert code_for(body, strict=True) is None
+    assert code_for(body, strict=level) is None
 
 
-def test_col_count_is_still_an_int():
-    assert code_for(doc({"type": "table", "attrs": {"colCount": -1}}), strict=True) == "invalid_attr_value"
-    assert code_for(doc({"type": "table", "attrs": {"colCount": "2"}}), strict=True) == "invalid_attr_value"
+@pytest.mark.parametrize("level", LEVELS)
+def test_col_count_is_still_an_int(level):
+    assert code_for(doc({"type": "table", "attrs": {"colCount": -1}}), strict=level) == "invalid_attr_value"
+    assert code_for(doc({"type": "table", "attrs": {"colCount": "2"}}), strict=level) == "invalid_attr_value"
 
 
-# ── the invariant that keeps the two exceptions above honest ─────────────────
+# ── the invariant that keeps the exceptions above honest ─────────────────────
 
 
 PARSER_CORPUS = [
@@ -368,19 +581,21 @@ PARSER_CORPUS = [
     "> quote\n>\n> > nested\n",
     "```py\nprint(1)\n```\n\n~~~py`x\ninfo string with a backtick\n~~~\n",
     '[link](https://a.example "t") and ![img](i.png "cap")\n',
+    "[empty]() and ![]()\n",
     "<div>raw</div>\n\ntext <span>inline</span> more\n",
     "---\n\npara with  \nhard break\n",
     "999999998. a\n999999999. b\n",
 ]
 
 
+@pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize("markdown", PARSER_CORPUS)
-def test_strict_accepts_what_the_parser_produces(markdown):
+def test_strict_accepts_what_the_parser_produces(markdown, level):
     # A consumer that stores canonical markdown re-parses it on the read path (issue #1).
     # If strict rejected marktip's own output, that path would break on rows that were
     # written successfully — the failure mode that is hardest to notice.
     parsed = tm.from_markdown(markdown)
-    assert tm.from_dict(parsed.to_dict(), strict=True).to_markdown() == parsed.to_markdown()
+    assert tm.from_dict(parsed.to_dict(), strict=level).to_markdown() == parsed.to_markdown()
 
 
 # ── surface ──────────────────────────────────────────────────────────────────
@@ -388,17 +603,26 @@ def test_strict_accepts_what_the_parser_produces(markdown):
 
 def test_strict_is_keyword_only():
     with pytest.raises(TypeError):
-        tm.from_dict(doc(p(text())), True)
+        tm.from_dict(doc(p(text())), "off")
+
+
+def test_strict_takes_a_level_name_and_nothing_else():
+    # Spelled like link_relative: a bad option value is a caller bug rather than a
+    # malformed document, so it raises TypeError/ValueError instead of a MarktipError.
+    with pytest.raises(TypeError, match="strict must be a str"):
+        tm.from_dict(doc(p(text())), strict=True)
+    with pytest.raises(ValueError, match="'off', 'content' or 'exact'"):
+        tm.from_dict(doc(p(text())), strict="strict")
 
 
 def test_strict_composes_with_the_uri_policy():
     ast = link(href="javascript:alert(1)", target="_blank")
     assert code_for(ast, link_schemes=("https",)) == "disallowed_scheme"
-    assert code_for(ast, strict=True) == "unknown_attr"
-    assert code_for(link(href="javascript:alert(1)"), strict=True, link_schemes=("https",)) == "disallowed_scheme"
+    assert code_for(ast, strict="exact") == "unrepresentable"
+    assert code_for(ast, strict="content", link_schemes=("https",)) == "disallowed_scheme"
 
 
 def test_every_violation_is_a_marktip_error():
-    for ast in [cell(foo="bar"), cell(colspan=2), doc(node("heading", level=9))]:
+    for ast in [cell(foo="bar"), cell(colspan=2), doc(node("heading", level=9)), link(), image(width=1)]:
         with pytest.raises(tm.MarktipError):
-            tm.from_dict(ast, strict=True)
+            tm.from_dict(ast, strict="content")

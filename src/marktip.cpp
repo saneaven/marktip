@@ -11,7 +11,7 @@
 namespace py = pybind11;
 
 #ifndef MARKTIP_VERSION
-#define MARKTIP_VERSION "0.6.0"
+#define MARKTIP_VERSION "0.7.0"
 #endif
 
 namespace {
@@ -129,16 +129,21 @@ PYBIND11_MODULE(_core, module) {
     // the parser only ever emits attrs it understands, with values in range.
     const std::string from_dict_doc =
         "Build a Document from a Tiptap-style JSON dict." + uri_policy_doc +
-        " Set strict=True to refuse any attr that would be dropped or altered on the way to markdown"
-        " instead of converting around it."
-        " Violations raise InvalidNodeError with .code 'unknown_attr' (no markdown form for that type),"
-        " 'invalid_attr_value' (wrong type or out of range) or 'unrepresentable'"
-        " (well-formed, but GFM cannot carry it, e.g. colspan=2), and .field set to the attr name."
-        " table 'colCount' and a non-header row's 'align' are accepted and ignored,"
-        " because from_markdown emits both."
-        " None is accepted on the attrs Tiptap declares `default: null`"
-        " (codeBlock language/info, image src/alt/title, link href/title):"
-        " it means the attr is unset, and from_dict drops the key rather than coercing it to ''.";
+        " strict names what the conversion may not lose, rather than converting around everything:"
+        " 'off' (the default) checks no attrs at all,"
+        " 'content' keeps content and structure and drops presentation only,"
+        " 'exact' keeps every attr the JSON carries."
+        " The two differ over the attrs an editor stamps on that markdown has no form for"
+        " (link target/rel/class, image width/height, orderedList type, tableCell colwidth):"
+        " 'content' type-checks them and drops them, 'exact' refuses them."
+        " Violations raise InvalidNodeError with .field set to the attr name and .code one of"
+        " 'unknown_attr' (a name outside both dialects), 'invalid_attr_value' (wrong type or out of range),"
+        " 'unrepresentable' (well-formed, but GFM cannot carry it, e.g. colspan=2)"
+        " or 'missing_attr' (a link with no href, an image with no src, which would serialize as '[a]()')."
+        " table 'colCount' and a non-header row's 'align' are accepted at every level,"
+        " because from_markdown emits both and the structure carries them anyway."
+        " None means the attr was never set wherever Tiptap declares `default: null`,"
+        " and from_dict drops the key rather than coercing it.";
 
     module.def("from_markdown", &marktip::from_markdown_py, py::arg("markdown"), py::arg("cjk_friendly") = false,
                py::arg("html") = true, py::kw_only(), py::arg("link_schemes") = py::none(),
@@ -146,6 +151,6 @@ PYBIND11_MODULE(_core, module) {
                py::arg("image_relative") = "allow", from_markdown_doc.c_str());
     module.def("from_dict", &marktip::from_dict_py, py::arg("ast"), py::kw_only(),
                py::arg("link_schemes") = py::none(), py::arg("image_schemes") = py::none(),
-               py::arg("link_relative") = "allow", py::arg("image_relative") = "allow", py::arg("strict") = false,
+               py::arg("link_relative") = "allow", py::arg("image_relative") = "allow", py::arg("strict") = "off",
                from_dict_doc.c_str());
 }
