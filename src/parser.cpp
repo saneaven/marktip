@@ -8,7 +8,6 @@ extern "C" {
 
 #include <algorithm>
 #include <cstddef>
-#include <iterator>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -279,10 +278,10 @@ public:
     int enter_span(MD_SPANTYPE type, void* detail) {
         switch (type) {
             case MD_SPAN_EM:
-                active_marks_.push_back(Mark{"italic", {}});
+                push_mark(Mark{"italic", {}});
                 return 0;
             case MD_SPAN_STRONG:
-                active_marks_.push_back(Mark{"bold", {}});
+                push_mark(Mark{"bold", {}});
                 return 0;
             case MD_SPAN_A: {
                 auto* link = static_cast<MD_SPAN_A_DETAIL*>(detail);
@@ -294,7 +293,7 @@ public:
                         set_attr(attrs, "title", AttrValue::string(std::move(title)));
                     }
                 }
-                active_marks_.push_back(Mark{"link", std::move(attrs)});
+                push_mark(Mark{"link", std::move(attrs)});
                 return 0;
             }
             case MD_SPAN_IMG: {
@@ -314,10 +313,10 @@ public:
                 return 0;
             }
             case MD_SPAN_CODE:
-                active_marks_.push_back(Mark{"code", {}});
+                push_mark(Mark{"code", {}});
                 return 0;
             case MD_SPAN_DEL:
-                active_marks_.push_back(Mark{"strike", {}});
+                push_mark(Mark{"strike", {}});
                 return 0;
             case MD_SPAN_LATEXMATH:
             case MD_SPAN_LATEXMATH_DISPLAY:
@@ -419,6 +418,7 @@ private:
     Document document_;
     std::vector<std::size_t> stack_;
     std::vector<Mark> active_marks_;
+    std::vector<std::size_t> active_mark_depths_;
     std::string error_;
     std::string error_code_;
     bool html_ = true;
@@ -455,10 +455,30 @@ private:
         }
     }
 
+    void push_mark(Mark mark) {
+        // MD4C can report nested spans that map to the same ProseMirror mark,
+        // such as *outer _inner_ outer*. Keep their callback depth, but expose
+        // one self-exclusive mark in the AST produced for nodes inside them.
+        for (std::size_t i = 0; i < active_marks_.size(); ++i) {
+            if (active_marks_[i].type == mark.type) {
+                ++active_mark_depths_[i];
+                return;
+            }
+        }
+        active_marks_.push_back(std::move(mark));
+        active_mark_depths_.push_back(1);
+    }
+
     void pop_mark(std::string_view type) {
-        for (auto it = active_marks_.rbegin(); it != active_marks_.rend(); ++it) {
-            if (it->type == type) {
-                active_marks_.erase(std::next(it).base());
+        for (std::size_t i = active_marks_.size(); i > 0; --i) {
+            std::size_t index = i - 1;
+            if (active_marks_[index].type == type) {
+                if (active_mark_depths_[index] > 1) {
+                    --active_mark_depths_[index];
+                    return;
+                }
+                active_marks_.erase(active_marks_.begin() + index);
+                active_mark_depths_.erase(active_mark_depths_.begin() + index);
                 return;
             }
         }

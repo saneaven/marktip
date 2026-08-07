@@ -28,6 +28,27 @@ def test_parse_heading_marks_and_link():
     }
 
 
+def test_parse_collapses_nested_same_type_spans_into_one_self_exclusive_mark():
+    cases = [
+        ("****x****", "x", "bold"),
+        ("*outer _inner_ outer*", "outer inner outer", "italic"),
+        ("**outer __inner__ outer**", "outer inner outer", "bold"),
+        ("~~outer ~~inner~~ outer~~", "outer inner outer", "strike"),
+    ]
+
+    for markdown, expected_text, mark_type in cases:
+        content = tm.from_markdown(markdown).to_dict()["content"][0]["content"]
+        assert content == [
+            {"type": "text", "text": expected_text, "marks": [{"type": mark_type}]},
+        ]
+
+    content = tm.from_markdown("*outer _inner_ outer* plain").to_dict()["content"][0]["content"]
+    assert content == [
+        {"type": "text", "text": "outer inner outer", "marks": [{"type": "italic"}]},
+        {"type": "text", "text": " plain"},
+    ]
+
+
 def test_parse_gfm_task_list_and_table():
     ast = tm.from_markdown("- [x] done\n- [ ] todo\n\n| A | B |\n| :- | -: |\n| x | y |\n").to_dict()
 

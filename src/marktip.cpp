@@ -11,7 +11,7 @@
 namespace py = pybind11;
 
 #ifndef MARKTIP_VERSION
-#define MARKTIP_VERSION "0.7.0"
+#define MARKTIP_VERSION "0.7.1"
 #endif
 
 namespace {
@@ -140,6 +140,8 @@ PYBIND11_MODULE(_core, module) {
         " 'unknown_attr' (a name outside both dialects), 'invalid_attr_value' (wrong type or out of range),"
         " 'unrepresentable' (well-formed, but GFM cannot carry it, e.g. colspan=2)"
         " or 'missing_attr' (a link with no href, an image with no src, which would serialize as '[a]()')."
+        " With strict enabled, a duplicate same-type mark raises InvalidNodeError"
+        " with .field 'marks' and .code 'invalid_mark_set'."
         " table 'colCount' and a non-header row's 'align' are accepted at every level,"
         " because from_markdown emits both and the structure carries them anyway."
         " None means the attr was never set wherever Tiptap declares `default: null`,"

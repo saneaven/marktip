@@ -96,6 +96,13 @@ It is keyword-only and a `from_dict` option only — the parser emits nothing bu
 | `"content"` | content and structure. Presentation an editor stamped on is type-checked and dropped |
 | `"exact"` | every attr the JSON carries |
 
+Both enabled levels also enforce the ProseMirror same-type self-exclusion rule on each node's marks.
+The standard marks represented by marktip are self-exclusive, so a node cannot carry the same mark type twice — including two `link` marks with different destinations.
+The conflicting mark is rejected with `InvalidNodeError` rather than being serialized into Markdown that reparses with different formatting or structure.
+`strict="off"` skips this check because strict validation is disabled.
+
+> **Changed in 0.7.1** — `strict="content"` and `strict="exact"` now reject duplicate same-type marks with `invalid_mark_set`. Markdown parsing collapses nested spans that map to the same self-exclusive mark, so parser output remains valid on the strict read path.
+
 The two levels differ over one thing, and it is worth being precise about which:
 
 ```python
@@ -203,6 +210,7 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `invalid_attr_value` | `InvalidNodeError` | `strict`: the attr's value has the wrong type or is out of range |
 | `unrepresentable` | `InvalidNodeError` | `strict`: the value is well-formed, but markdown cannot carry it |
 | `missing_attr` | `InvalidNodeError` | `strict`: a required attr is absent or `None` — a `link` with no `href`, an `image` with no `src` |
+| `invalid_mark_set` | `InvalidNodeError` | `strict`: a node carries conflicting marks of the same type |
 | `markdown_max_depth` | `ParseError` | markdown nesting exceeds 2048 |
 | `parse_failed` | `ParseError` | MD4C could not parse the input |
 
@@ -253,6 +261,9 @@ It deliberately does **not** validate, unless `strict` asks it to:
   A `heading` without `level` or a `codeBlock` without `language` is accepted; the serializer substitutes a default rather than failing.
   `strict` adds exactly two: a `link` needs an `href` and an `image` needs a `src`, because the default there is an empty destination that reads back as a real link.
   `{"src": None}` and no `src` key at all are the same thing to every part of the library, the URI policy included.
+- **Mark sets.**
+  With strict validation disabled, two marks of the same type may appear on one node and are serialized independently.
+  `strict="content"` and `strict="exact"` reject the second mark because marktip's standard ProseMirror/Tiptap marks are self-exclusive.
 - **Content models.**
   Which node may contain which is not checked — a `text` node directly under `doc` is accepted and serialized.
 - **Raw HTML.**
@@ -277,7 +288,7 @@ except tm.InvalidNodeError as e:
 ## Defined normalizations
 
 Markdown cannot represent every Tiptap document exactly.
-Rather than emitting markdown that reparses into a different structure, marktip applies these deterministic (and idempotent) normalizations at serialization time:
+Rather than emitting or retaining a representation that changes on the next conversion, marktip applies these deterministic (and idempotent) normalizations during parsing and serialization:
 
 - **Hard breaks in headings** — ATX headings are single-line, so a `hardBreak` (or a literal newline carried over from setext input) inside a heading serializes as a single space: `heading("a", hardBreak, "b")` → `# a b`.
 - **Multi-block table cells** — blocks inside a cell are joined with `<br>` and the cell is flattened to one line; two paragraphs in a cell reparse as one paragraph containing a `hardBreak`.
@@ -285,6 +296,7 @@ Rather than emitting markdown that reparses into a different structure, marktip 
 - **Heading levels** — clamped to 1–6 at serialization (`0` → `#`, `7` → `######`).
 - **Ordered list start** — clamped to CommonMark's 0–999999999 (`-5` → `0.`), and the running number stops at that ceiling rather than emitting a 10-digit marker. Only the first number is honoured on reparse, so a repeated ceiling changes nothing.
 - **Code fence info strings** — a `language` is truncated at the first newline, since an info string is a single line; one containing a backtick switches the fence to `~~~`, which carries it losslessly.
+- **Nested same-type marks** — Markdown spans that map to the same self-exclusive mark are collapsed (`*outer _inner_ outer*` becomes one continuous `italic` mark) rather than producing an invalid ProseMirror mark set.
 - **Emphasis boundary whitespace** — whitespace touching an emphasis delimiter has no valid markdown form and is expelled outside the marks (`bold("굵게 ")` → `**굵게** `), cf. prosemirror-markdown's `expelEnclosingWhitespace`.
 - **Adjacent same-family lists** — consecutive lists of the same family alternate markers (`-`/`*`, `1.`/`1)`) so they stay separate lists on reparse instead of merging (which would renumber ordered items or spread task checkboxes).
 

@@ -16,6 +16,10 @@ onto every node — so the caller says which loss is acceptable: "content" or "e
 It is from_dict-only, unlike the URI policy: the parser only ever emits attrs it
 understands, with values in range, so there is nothing on the from_markdown path for it
 to catch. test_strict_accepts_what_the_parser_produces is the guard on that claim.
+
+Issue #8 adds the collection-level half of that promise: when strict validation is
+enabled, self-exclusive ProseMirror marks cannot repeat on a node. With strict="off",
+that validation is intentionally not performed.
 """
 
 import pytest
@@ -33,6 +37,17 @@ def p(*children):
 
 def text(value="x"):
     return {"type": "text", "text": value}
+
+
+def marked(*marks):
+    return doc(p({"type": "text", "text": "x", "marks": list(marks)}))
+
+
+def mark(type_, **attrs):
+    value = {"type": type_}
+    if attrs:
+        value["attrs"] = attrs
+    return value
 
 
 def node(type_, **attrs):
@@ -67,6 +82,7 @@ def code_block(**attrs):
 CELL_PATH = "content[0].content[0].content[0]"
 LINK_PATH = "content[0].content[0].marks[0]"
 IMAGE_PATH = "content[0].content[0]"
+SECOND_MARK_PATH = "content[0].content[0].marks[1]"
 
 # Both levels checked everywhere the two are meant to agree, which is everywhere but
 # the presentation attrs below. A rule that only ever ran at one level would be a rule
@@ -110,6 +126,104 @@ def test_documents_that_convert_today_still_convert(ast):
 def test_strict_is_off_by_default():
     assert code_for(cell(colspan=2)) is None
     assert code_for(cell(colspan=2), strict="content") == "unrepresentable"
+
+
+# ── invalid_mark_set: self-exclusive marks cannot repeat ────────────────────
+
+
+DUPLICATE_MARK_CASES = [
+    pytest.param([mark("bold"), mark("bold")], id="bold"),
+    pytest.param([mark("italic"), mark("italic")], id="italic"),
+    pytest.param([mark("strike"), mark("strike")], id="strike"),
+    pytest.param([mark("code"), mark("code")], id="code"),
+    pytest.param(
+        [mark("link", href="https://a.example"), mark("link", href="https://a.example")],
+        id="identical-link",
+    ),
+    pytest.param(
+        [mark("link", href="https://a.example"), mark("link", href="https://b.example")],
+        id="conflicting-link",
+    ),
+]
+
+
+@pytest.mark.parametrize("level", LEVELS)
+@pytest.mark.parametrize("marks", DUPLICATE_MARK_CASES)
+def test_strict_rejects_duplicate_same_type_marks(level, marks):
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_dict(marked(*marks), strict=level)
+
+    err = excinfo.value
+    assert err.code == "invalid_mark_set"
+    assert err.field == "marks"
+    assert err.path == SECOND_MARK_PATH
+    assert str(err) == f"mark type '{marks[1]['type']}' conflicts with an earlier mark of the same type"
+    assert err.detail == str(err)
+
+
+@pytest.mark.parametrize("marks", DUPLICATE_MARK_CASES)
+def test_mark_set_validation_is_skipped_when_strict_is_off(marks):
+    # Off means the strict mark-set check is disabled; accepting these inputs is
+    # the option's semantics, not a compatibility exception.
+    ast = marked(*marks)
+    document = tm.from_dict(ast, strict="off")
+    assert document.to_dict() == ast
+    assert isinstance(document.to_markdown(), str)
+
+
+@pytest.mark.parametrize("level", LEVELS)
+def test_strict_reports_a_nonadjacent_duplicate_at_the_conflicting_mark(level):
+    ast = marked(mark("italic"), mark("bold"), mark("italic"))
+
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_dict(ast, strict=level)
+
+    assert excinfo.value.code == "invalid_mark_set"
+    assert excinfo.value.path == "content[0].content[0].marks[2]"
+
+
+@pytest.mark.parametrize("level", LEVELS)
+def test_strict_checks_mark_sets_on_non_text_inline_nodes(level):
+    ast = doc(
+        p(
+            {
+                "type": "image",
+                "attrs": {"src": "x.png"},
+                "marks": [mark("link", href="https://a.example"), mark("link", href="https://b.example")],
+            }
+        )
+    )
+
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_dict(ast, strict=level)
+
+    assert excinfo.value.code == "invalid_mark_set"
+    assert excinfo.value.path == SECOND_MARK_PATH
+
+
+@pytest.mark.parametrize("level", LEVELS)
+def test_strict_allows_distinct_mark_types_and_reuse_on_another_node(level):
+    ast = doc(
+        p(
+            {"type": "text", "text": "a", "marks": [mark("italic"), mark("bold")]},
+            {"type": "text", "text": "b", "marks": [mark("bold"), mark("italic")]},
+            {"type": "text", "text": "c", "marks": [mark("italic"), mark("link", href="https://a.example")]},
+        )
+    )
+
+    assert code_for(ast, strict=level) is None
+
+
+@pytest.mark.parametrize("level", LEVELS)
+def test_an_invalid_duplicate_mark_is_reported_before_the_set_conflict(level):
+    ast = marked(mark("link", href="https://a.example"), mark("link"))
+
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_dict(ast, strict=level)
+
+    assert excinfo.value.code == "missing_attr"
+    assert excinfo.value.field == "href"
+    assert excinfo.value.path == SECOND_MARK_PATH
 
 
 # ── unknown_attr: a name outside both dialects ───────────────────────────────
@@ -575,6 +689,9 @@ def test_col_count_is_still_an_int(level):
 
 PARSER_CORPUS = [
     "# h1\n\n## h2\n\ntext with **bold**, *em*, `code` and ~~strike~~\n",
+    "*outer _inner_ outer*\n",
+    "**outer __inner__ outer**\n",
+    "~~outer ~~inner~~ outer~~\n",
     "| a | b | c |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n",
     "- a\n- b\n  - nested\n\n1. one\n2. two\n\n5. five\n",
     "- [ ] todo\n- [x] done\n",
