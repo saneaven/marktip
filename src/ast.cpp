@@ -555,6 +555,37 @@ Mark mark_from_py(py::dict mark_dict, StrictMode mode, const PathStack& path) {
     return mark;
 }
 
+// Keep mark parsing outside fill_node_from_py's recursive frame: kMaxNodeDepth must
+// remain safe on the smaller Windows worker stack even as strict checks grow.
+void fill_marks_from_py(Node& node, py::object marks, StrictMode mode, PathStack& path) {
+    if (marks.is_none()) {
+        return;
+    }
+
+    py::list mark_list = expect_list(marks, "node marks", "marks", path);
+    std::size_t mark_index = 0;
+    for (py::handle mark_handle : mark_list) {
+        path.push_back({"marks", mark_index});
+        Mark mark = mark_from_py(expect_dict(mark_handle, "mark", "marks", path), mode, path);
+        if (mode != StrictMode::Off) {
+            // Marktip's standard ProseMirror marks are self-exclusive. This is a strict
+            // semantic check: Off intentionally stores the collection exactly as supplied.
+            bool conflicts = std::any_of(node.marks.begin(), node.marks.end(), [&](const Mark& existing) {
+                return existing.type == mark.type;
+            });
+            if (conflicts) {
+                throw InvalidNodeError("invalid_mark_set", "marks",
+                                       "mark type '" + mark.type +
+                                           "' conflicts with an earlier mark of the same type",
+                                       format_path(path));
+            }
+        }
+        node.marks.push_back(std::move(mark));
+        path.pop_back();
+        ++mark_index;
+    }
+}
+
 void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict, std::string_view context,
                        std::size_t depth, StrictMode mode, PathStack& path) {
     if (depth > kMaxNodeDepth) {
@@ -587,31 +618,7 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
         check_required_attrs(node.attrs, table, node.type, "node", path);
     }
 
-    py::object marks = dict_get(node_dict, "marks");
-    if (!marks.is_none()) {
-        py::list mark_list = expect_list(marks, "node marks", "marks", path);
-        std::size_t mark_index = 0;
-        for (py::handle mark_handle : mark_list) {
-            path.push_back({"marks", mark_index});
-            Mark mark = mark_from_py(expect_dict(mark_handle, "mark", "marks", path), mode, path);
-            if (mode != StrictMode::Off) {
-                // Marktip's standard ProseMirror marks are self-exclusive. This is a strict
-                // semantic check: Off intentionally stores the collection exactly as supplied.
-                bool conflicts = std::any_of(node.marks.begin(), node.marks.end(), [&](const Mark& existing) {
-                    return existing.type == mark.type;
-                });
-                if (conflicts) {
-                    throw InvalidNodeError("invalid_mark_set", "marks",
-                                           "mark type '" + mark.type +
-                                               "' conflicts with an earlier mark of the same type",
-                                           format_path(path));
-                }
-            }
-            node.marks.push_back(std::move(mark));
-            path.pop_back();
-            ++mark_index;
-        }
-    }
+    fill_marks_from_py(node, dict_get(node_dict, "marks"), mode, path);
 
     document.node(index) = std::move(node);
 
