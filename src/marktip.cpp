@@ -11,7 +11,7 @@
 namespace py = pybind11;
 
 #ifndef MARKTIP_VERSION
-#define MARKTIP_VERSION "0.7.1"
+#define MARKTIP_VERSION "0.7.2"
 #endif
 
 namespace {
@@ -113,8 +113,13 @@ PYBIND11_MODULE(_core, module) {
         " Pass link_relative/image_relative one of 'allow' (the default), 'path_only' or 'reject'."
         " Those govern references carrying no scheme; 'path_only' rejects protocol-relative '//host/x'."
         " Violations raise InvalidNodeError with .code 'disallowed_scheme' or 'disallowed_relative_url'."
-        " An ASCII control character in href/src is always rejected with .code 'invalid_uri_char',"
-        " options or not.";
+        " An ASCII control character that reaches href/src is always rejected with .code 'invalid_uri_char';"
+        " Markdown U+0000 is normalized to U+FFFD before parsing.";
+    const std::string node_policy_doc =
+        " Pass reject_node_types an iterable of known node type names to refuse those nodes."
+        " None (the default) refuses none."
+        " A match raises InvalidNodeError with .code 'disallowed_node_type', .field 'type'"
+        " and .path locating the node.";
 
     // Held in locals rather than passed as temporaries:
     // pybind11 takes the doc as a bare const char* and only copies it while def() runs.
@@ -124,11 +129,11 @@ PYBIND11_MODULE(_core, module) {
         " (non-standard extension; the default follows GFM/CommonMark exactly)."
         " Set html=False to parse raw HTML as literal text instead of htmlBlock/htmlInline nodes;"
         " <br> inside table cells still maps to hardBreak." +
-        uri_policy_doc;
-    // strict has no from_markdown counterpart on purpose:
-    // the parser only ever emits attrs it understands, with values in range.
+        uri_policy_doc + node_policy_doc;
+    // strict has no from_markdown counterpart on purpose: the parser only ever emits
+    // declared fields, valid content relationships and attrs it understands.
     const std::string from_dict_doc =
-        "Build a Document from a Tiptap-style JSON dict." + uri_policy_doc +
+        "Build a Document from a Tiptap-style JSON dict." + uri_policy_doc + node_policy_doc +
         " strict names what the conversion may not lose, rather than converting around everything:"
         " 'off' (the default) checks no attrs at all,"
         " 'content' keeps content and structure and drops presentation only,"
@@ -142,6 +147,8 @@ PYBIND11_MODULE(_core, module) {
         " or 'missing_attr' (a link with no href, an image with no src, which would serialize as '[a]()')."
         " With strict enabled, a duplicate same-type mark raises InvalidNodeError"
         " with .field 'marks' and .code 'invalid_mark_set'."
+        " Strict also closes node/mark top-level fields and each node's content model;"
+        " violations use .code 'unknown_field' or 'invalid_content'."
         " table 'colCount' and a non-header row's 'align' are accepted at every level,"
         " because from_markdown emits both and the structure carries them anyway."
         " None means the attr was never set wherever Tiptap declares `default: null`,"
@@ -150,9 +157,11 @@ PYBIND11_MODULE(_core, module) {
     module.def("from_markdown", &marktip::from_markdown_py, py::arg("markdown"), py::arg("cjk_friendly") = false,
                py::arg("html") = true, py::kw_only(), py::arg("link_schemes") = py::none(),
                py::arg("image_schemes") = py::none(), py::arg("link_relative") = "allow",
-               py::arg("image_relative") = "allow", from_markdown_doc.c_str());
+               py::arg("image_relative") = "allow", py::arg("reject_node_types") = py::none(),
+               from_markdown_doc.c_str());
     module.def("from_dict", &marktip::from_dict_py, py::arg("ast"), py::kw_only(),
                py::arg("link_schemes") = py::none(), py::arg("image_schemes") = py::none(),
-               py::arg("link_relative") = "allow", py::arg("image_relative") = "allow", py::arg("strict") = "off",
-               from_dict_doc.c_str());
+               py::arg("link_relative") = "allow",
+               py::arg("image_relative") = "allow", py::arg("reject_node_types") = py::none(),
+               py::arg("strict") = "off", from_dict_doc.c_str());
 }

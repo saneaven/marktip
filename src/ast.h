@@ -95,17 +95,30 @@ struct UriPolicy {
     UriRule image;
 };
 
+// Node types a caller's own ProseMirror dialect refuses even though marktip
+// itself knows how to parse and serialize them. Keeping this as a boundary
+// policy lets both Markdown and dict inputs report the same located error.
+struct NodeTypePolicy {
+    std::vector<std::string> rejected;
+};
+
 // Rejects ASCII control characters in href/src unconditionally,
 // then enforces `policy` on top.
 // Reads nothing but Node/Mark, which hold no pybind11 objects,
 // so this is safe to call with the GIL released (from_markdown does).
 void enforce_uri_policy(const Document& document, const UriPolicy& policy);
 
+// Rejects any node whose type appears in `policy`, with a path into the built
+// document. Plain C++ data only, so from_markdown may call it with the GIL
+// released.
+void enforce_node_type_policy(const Document& document, const NodeTypePolicy& policy);
+
 // Requires the GIL.
 // Malformed option values are a caller bug rather than a malformed document,
 // so these raise TypeError/ValueError instead of a MarktipError.
 UriPolicy uri_policy_from_py(pybind11::object link_schemes, pybind11::object image_schemes,
                              pybind11::object link_relative, pybind11::object image_relative);
+NodeTypePolicy node_type_policy_from_py(pybind11::object reject_node_types);
 
 // What `strict` promises to preserve, rather than what it happens to accept.
 //
@@ -121,9 +134,11 @@ enum class StrictMode {
     Exact,    // everything survives; an attr markdown cannot carry is an error
 };
 
-// `strict` is from_dict-only: the parser cannot produce an attr it does not itself understand,
-// so there would be nothing for from_markdown to catch.
+// `strict` is from_dict-only: the parser emits only declared fields, valid
+// content relationships and attrs it understands, so there is nothing on
+// from_markdown to catch.
 Document from_dict_py(pybind11::dict root, pybind11::object link_schemes, pybind11::object image_schemes,
-                      pybind11::object link_relative, pybind11::object image_relative, pybind11::object strict);
+                      pybind11::object link_relative, pybind11::object image_relative,
+                      pybind11::object reject_node_types, pybind11::object strict);
 
 }  // namespace marktip

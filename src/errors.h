@@ -59,9 +59,10 @@ public:
     const std::string& field() const noexcept { return field_; }
 
 private:
-    // "type" | "attrs" | "marks" | "content", or the offending attr's own name.
+    // "type" | "attrs" | "marks" | "content" | "text", a strict top-level field,
+    // or the offending attr's own name.
     // "marks" also names a strict mark-set conflict located at the offending mark.
-    // ("href" | "src" for the URI policy, any attr key under strict).
+    // ("href" | "src" for the URI policy, any attr/field key under strict).
     std::string field_;
 };
 

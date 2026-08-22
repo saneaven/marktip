@@ -76,9 +76,30 @@ doc = tm.from_markdown(untrusted, link_schemes=("https",), image_relative="rejec
 Violations raise `InvalidNodeError` with `.field` set to `"href"` or `"src"`.
 The options are keyword-only.
 
+### Rejecting node types
+
+marktip's schema includes every node it can serialize, but an application may use a smaller ProseMirror dialect.
+Both write boundaries accept `reject_node_types`, so that dialect can be enforced after either Markdown parsing or dict conversion without a second application-side tree walk:
+
+```python
+NO_RAW_HTML = ("htmlBlock", "htmlInline")
+
+doc = tm.from_dict(editor_json, reject_node_types=NO_RAW_HTML)
+doc = tm.from_markdown(imported_markdown, reject_node_types=NO_RAW_HTML)
+```
+
+`None` (the default) rejects nothing; an empty iterable has the same effect.
+Every entry must name a node type marktip knows, and matching is exact and case-sensitive.
+A bare string or a non-string entry raises `TypeError`; an unknown node name raises `ValueError`.
+A document containing a configured type raises `InvalidNodeError` with `.code == "disallowed_node_type"`, `.field == "type"`, and `.path` locating the node.
+The option is keyword-only.
+
+This differs from `html=False`: `html=False` preserves raw markup as escaped literal text on Markdown input, while rejecting `htmlBlock`/`htmlInline` refuses markup that parsed as a raw-HTML node.
+`reject_node_types` also works for dict input, where there is no parser flag.
+
 ### Refusing lossy conversions
 
-Node and mark *types* are closed, but `attrs` are not.
+Node and mark *types* are always closed, but fields, attrs and content models are only closed when `strict` is enabled.
 An attr the serializer never reads is dropped without a word, so a `colspan: 2` cell quietly becomes a plain one:
 
 ```python
@@ -93,13 +114,34 @@ It is keyword-only and a `from_dict` option only — the parser emits nothing bu
 | `strict` | Keeps |
 | --- | --- |
 | `"off"` (default) | nothing is checked |
-| `"content"` | content and structure. Presentation an editor stamped on is type-checked and dropped |
+| `"content"` | content and structure, including closed node fields and content models. Presentation an editor stamped on is type-checked and dropped |
 | `"exact"` | every attr the JSON carries |
 
 Both enabled levels also enforce the ProseMirror same-type self-exclusion rule on each node's marks.
 The standard marks represented by marktip are self-exclusive, so a node cannot carry the same mark type twice — including two `link` marks with different destinations.
 The conflicting mark is rejected with `InvalidNodeError` rather than being serialized into Markdown that reparses with different formatting or structure.
 `strict="off"` skips this check because strict validation is disabled.
+
+Both enabled levels reject a node or mark top-level key that its type does not declare (`unknown_field`), and enforce the following content models (`invalid_content`):
+
+| Parent | Allowed children |
+| --- | --- |
+| `doc`, `blockquote`, `listItem`, `taskItem`, `tableCell`, `tableHeader` | block nodes |
+| `paragraph`, `heading` | inline nodes (`text`, `hardBreak`, `image`, `htmlInline`) |
+| `codeBlock` | unmarked `text` only |
+| `bulletList` | `listItem` |
+| `orderedList` | `listItem`, `taskItem` |
+| `taskList` | `taskItem` |
+| `table` | `tableRow` |
+| `tableRow` | `tableHeader`, `tableCell` |
+| `text`, `hardBreak`, `horizontalRule`, `image`, `htmlBlock`, `htmlInline` | none |
+
+Block nodes are `paragraph`, `heading`, `blockquote`, `codeBlock`, `horizontalRule`, `bulletList`, `orderedList`, `taskList`, `table`, and `htmlBlock`.
+A strict text node must carry a non-empty string `text` field.
+This is marktip's canonical child grammar, not a verbatim copy of one editor's schema: in particular, ordered Markdown task items remain `orderedList` → `taskItem`, and empty parser-produced containers remain valid.
+These rules prevent a nested block submitted inside a paragraph, content attached to a leaf, or an arbitrary child key from being silently flattened or omitted by the serializer.
+
+> **Changed in 0.7.2** — `strict="content"` and `strict="exact"` now close node/mark top-level fields and per-node content models with `unknown_field` and `invalid_content`. `strict="off"` keeps the previous permissive converter behavior.
 
 > **Changed in 0.7.1** — `strict="content"` and `strict="exact"` now reject duplicate same-type marks with `invalid_mark_set`. Markdown parsing collapses nested spans that map to the same self-exclusive mark, so parser output remains valid on the strict read path.
 
@@ -206,6 +248,9 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `disallowed_scheme` | `InvalidNodeError` | a link `href` / image `src` scheme is outside the allowlist |
 | `disallowed_relative_url` | `InvalidNodeError` | a scheme-less `href`/`src` violates the relative policy |
 | `invalid_uri_char` | `InvalidNodeError` | an `href`/`src` contains an ASCII control character |
+| `disallowed_node_type` | `InvalidNodeError` | a node type appears in `reject_node_types` |
+| `unknown_field` | `InvalidNodeError` | `strict`: a node/mark top-level key is not defined for that type |
+| `invalid_content` | `InvalidNodeError` | `strict`: a node violates its content model or text payload contract |
 | `unknown_attr` | `InvalidNodeError` | `strict`: the attr name is in neither dialect for that type |
 | `invalid_attr_value` | `InvalidNodeError` | `strict`: the attr's value has the wrong type or is out of range |
 | `unrepresentable` | `InvalidNodeError` | `strict`: the value is well-formed, but markdown cannot carry it |
@@ -215,7 +260,7 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `parse_failed` | `ParseError` | MD4C could not parse the input |
 
 `from_markdown` still raises a plain `TypeError` when the argument is not `str`/`bytes` — that is a caller bug, not a malformed document.
-So is a bad option value: a non-iterable `link_schemes` raises `TypeError`, and `link_schemes=("https://",)`, `link_relative="nope"` or `strict="strict"` raises `ValueError`.
+So is a bad option value: a non-iterable `link_schemes` or `reject_node_types` raises `TypeError`, and `link_schemes=("https://",)`, `reject_node_types=("callout",)`, `link_relative="nope"` or `strict="strict"` raises `ValueError`.
 `strict` takes a level name, so `strict=True` raises `TypeError` rather than quietly meaning something.
 
 > **Changed in 0.4.0** — these were previously `ValueError` (`from_dict`) and `RuntimeError` (`from_markdown`).
@@ -247,9 +292,10 @@ It guarantees, for the whole tree:
 - **Depth** is at most 2048 levels.
 - **No ASCII control character** in a link `href` or image `src`, entity references included (`&Tab;`, `&#09;`).
 - **The URI policy**, when `link_schemes`/`image_schemes`/`link_relative`/`image_relative` ask for it — see [Restricting link and image URIs](#restricting-link-and-image-uris).
+- **The node-type policy**, when `reject_node_types` names a type — see [Rejecting node types](#rejecting-node-types).
 
 A document that survives `from_dict` always serializes; callers do not need to re-check any of the above.
-`from_markdown` enforces the same two URI rules on what it parses.
+`from_markdown` enforces the same URI and rejected-node rules on what it parses.
 
 It deliberately does **not** validate, unless `strict` asks it to:
 
@@ -264,11 +310,15 @@ It deliberately does **not** validate, unless `strict` asks it to:
 - **Mark sets.**
   With strict validation disabled, two marks of the same type may appear on one node and are serialized independently.
   `strict="content"` and `strict="exact"` reject the second mark because marktip's standard ProseMirror/Tiptap marks are self-exclusive.
+- **Node and mark top-level fields.**
+  With strict validation disabled, a key the converter does not read is ignored.
+  Both enabled levels reject it with `unknown_field`, including `marks` on a block or `text` on a non-text node.
 - **Content models.**
-  Which node may contain which is not checked — a `text` node directly under `doc` is accepted and serialized.
+  With strict validation disabled, which node may contain which is not checked — a `text` node directly under `doc` is accepted and serialized.
+  Both enabled levels enforce the content-model table above, the text payload shape, and the absence of marks inside a code block.
 - **Raw HTML.**
   The URI policy governs `link` marks and `image` nodes, not markup inside `htmlBlock`/`htmlInline`, so `<a href="javascript:...">` passes it.
-  Pair the policy with `html=False` to close that.
+  Reject those node types with `reject_node_types=("htmlBlock", "htmlInline")`; on Markdown input, `html=False` is the alternative that retains the markup as literal text.
 - **URI syntax beyond the scheme.**
   Everything after the scheme is opaque, and the stored value is never rewritten — an `href` is checked in its entity-decoded form but stored exactly as given.
   Under `link_relative="allow"` a protocol-relative `//evil.com/x` also passes, since it carries no scheme; `"path_only"` is the setting that rejects it.
@@ -290,6 +340,7 @@ except tm.InvalidNodeError as e:
 Markdown cannot represent every Tiptap document exactly.
 Rather than emitting or retaining a representation that changes on the next conversion, marktip applies these deterministic (and idempotent) normalizations during parsing and serialization:
 
+- **NUL in content strings** — U+0000 in text or a non-URI string attr (`alt`, `title`, `language`, `html`, etc.) becomes U+FFFD. Markdown input is replaced once before tokenization, including inline/fenced/indented code and raw HTML, so reparsing cannot retain a NUL or accumulate replacement characters. On dict input, `link.href` and `image.src` are excluded and retain their unconditional `invalid_uri_char` rejection.
 - **Hard breaks in headings** — ATX headings are single-line, so a `hardBreak` (or a literal newline carried over from setext input) inside a heading serializes as a single space: `heading("a", hardBreak, "b")` → `# a b`.
 - **Multi-block table cells** — blocks inside a cell are joined with `<br>` and the cell is flattened to one line; two paragraphs in a cell reparse as one paragraph containing a `hardBreak`.
 - **Headerless tables** — GFM tables require a header row, so the first row is always emitted as the header; a leading `tableCell` row reparses as `tableHeader`.

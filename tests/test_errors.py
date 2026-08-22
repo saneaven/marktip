@@ -190,6 +190,89 @@ def test_every_documented_code_is_reachable():
     record(lambda: tm.from_dict(linked("javascript:alert(1)"), link_schemes=("https",)))
     record(lambda: tm.from_dict(linked("/foo"), link_relative="reject"))
     record(lambda: tm.from_dict(linked("https://a\x01b")))  # no options: unconditional
+    record(lambda: tm.from_markdown("<div>x</div>", reject_node_types=("htmlBlock",)))
+    record(
+        lambda: tm.from_dict(
+            {"type": "doc", "content": [{"type": "paragraph", "unexpected": True}]}, strict="content"
+        )
+    )
+    record(
+        lambda: tm.from_dict(
+            {"type": "doc", "content": [{"type": "text", "text": "x"}]}, strict="content"
+        )
+    )
+    record(
+        lambda: tm.from_dict(
+            {"type": "doc", "content": [{"type": "paragraph", "attrs": {"foo": "bar"}}]},
+            strict="content",
+        )
+    )
+    record(
+        lambda: tm.from_dict(
+            {"type": "doc", "content": [{"type": "heading", "attrs": {"level": 9}}]}, strict="content"
+        )
+    )
+    record(
+        lambda: tm.from_dict(
+            {
+                "type": "doc",
+                "content": [
+                    {
+                        "type": "table",
+                        "content": [
+                            {
+                                "type": "tableRow",
+                                "content": [
+                                    {
+                                        "type": "tableCell",
+                                        "attrs": {"colspan": 2},
+                                        "content": [{"type": "paragraph"}],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
+            strict="content",
+        )
+    )
+    record(
+        lambda: tm.from_dict(
+            {
+                "type": "doc",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {"type": "text", "text": "x", "marks": [{"type": "link"}]}
+                        ],
+                    }
+                ],
+            },
+            strict="content",
+        )
+    )
+    record(
+        lambda: tm.from_dict(
+            {
+                "type": "doc",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "x",
+                                "marks": [{"type": "bold"}, {"type": "bold"}],
+                            }
+                        ],
+                    }
+                ],
+            },
+            strict="content",
+        )
+    )
 
     assert reachable == {
         "unknown_node_type",
@@ -202,4 +285,12 @@ def test_every_documented_code_is_reachable():
         "disallowed_scheme",
         "disallowed_relative_url",
         "invalid_uri_char",
+        "disallowed_node_type",
+        "unknown_field",
+        "invalid_content",
+        "unknown_attr",
+        "invalid_attr_value",
+        "unrepresentable",
+        "missing_attr",
+        "invalid_mark_set",
     }

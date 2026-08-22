@@ -13,9 +13,10 @@ target it drops costs the author nothing, because the editor stamped it on and n
 wrote it. Nothing in the JSON tells those apart — ProseMirror serializes schema defaults
 onto every node — so the caller says which loss is acceptable: "content" or "exact".
 
-It is from_dict-only, unlike the URI policy: the parser only ever emits attrs it
-understands, with values in range, so there is nothing on the from_markdown path for it
-to catch. test_strict_accepts_what_the_parser_produces is the guard on that claim.
+It is from_dict-only, unlike the boundary policies: the parser only ever emits declared
+fields, valid content relationships and attrs it understands, so there is nothing on the
+from_markdown path for it to catch. test_strict_accepts_what_the_parser_produces is the
+guard on that claim.
 
 Issue #8 adds the collection-level half of that promise: when strict validation is
 enabled, self-exclusive ProseMirror marks cannot repeat on a node. With strict="off",
@@ -51,7 +52,8 @@ def mark(type_, **attrs):
 
 
 def node(type_, **attrs):
-    return {"type": type_, "attrs": attrs, "content": [p(text())]}
+    content = [text()] if type_ == "heading" else [p(text())]
+    return {"type": type_, "attrs": attrs, "content": content}
 
 
 def cell(**attrs):
@@ -695,6 +697,7 @@ PARSER_CORPUS = [
     "| a | b | c |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n",
     "- a\n- b\n  - nested\n\n1. one\n2. two\n\n5. five\n",
     "- [ ] todo\n- [x] done\n",
+    "1. [x] ordered task\n2. [ ] second\n",
     "> quote\n>\n> > nested\n",
     "```py\nprint(1)\n```\n\n~~~py`x\ninfo string with a backtick\n~~~\n",
     '[link](https://a.example "t") and ![img](i.png "cap")\n',

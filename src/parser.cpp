@@ -68,6 +68,29 @@ void append_utf8(std::string& out, unsigned codepoint) {
     }
 }
 
+// CommonMark replaces U+0000 before tokenization. Doing it once on the whole
+// input is important: md4c's code/raw-HTML paths can otherwise report both a
+// MD_TEXT_NULLCHAR callback and a following slice that still begins with the
+// same NUL, leaving either a duplicate replacement or a raw NUL in the AST.
+void replace_nul(std::string& value) {
+    std::size_t nul = value.find('\0');
+    if (nul == std::string::npos) {
+        return;
+    }
+
+    std::string normalized;
+    normalized.reserve(value.size() + 2);
+    std::size_t start = 0;
+    while (nul != std::string::npos) {
+        normalized.append(value.data() + start, nul - start);
+        normalized.append("\xEF\xBF\xBD");
+        start = nul + 1;
+        nul = value.find('\0', start);
+    }
+    normalized.append(value.data() + start, value.size() - start);
+    value = std::move(normalized);
+}
+
 // Decode an entity reported by md4c ("&amp;", "&#65;", "&#x41;"; delimiters included).
 std::string decode_entity(std::string_view value) {
     if (value.size() >= 4 && value[1] == '#') {
@@ -745,10 +768,12 @@ Document parse_to_document(const std::string& markdown, bool cjk_friendly, bool 
 }  // namespace
 
 Document from_markdown_py(py::object markdown, bool cjk_friendly, bool html, py::object link_schemes,
-                          py::object image_schemes, py::object link_relative, py::object image_relative) {
+                          py::object image_schemes, py::object link_relative, py::object image_relative,
+                          py::object reject_node_types) {
     std::string input;
     if (py::isinstance<py::str>(markdown) || py::isinstance<py::bytes>(markdown)) {
         input = py::cast<std::string>(markdown);
+        replace_nul(input);
     } else {
         throw py::type_error("from_markdown() expects str or bytes");
     }
@@ -757,6 +782,7 @@ Document from_markdown_py(py::object markdown, bool cjk_friendly, bool html, py:
     // The policy itself is plain std::string, so enforcing it below is safe without one.
     UriPolicy policy = uri_policy_from_py(std::move(link_schemes), std::move(image_schemes), std::move(link_relative),
                                           std::move(image_relative));
+    NodeTypePolicy node_policy = node_type_policy_from_py(std::move(reject_node_types));
 
     Document document;
     {
@@ -765,6 +791,7 @@ Document from_markdown_py(py::object markdown, bool cjk_friendly, bool html, py:
         // parse_to_document replaces the whole Document,
         // so anything checked earlier would be thrown away.
         document = parse_to_document(input, cjk_friendly, html);
+        enforce_node_type_policy(document, node_policy);
         enforce_uri_policy(document, policy);
     }
     return document;

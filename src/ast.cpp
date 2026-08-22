@@ -42,6 +42,84 @@ std::size_t type_index(const std::string_view (&table)[N], std::string_view type
     return static_cast<std::size_t>(found - std::begin(table));
 }
 
+// Marktip's canonical child grammar for each known node, reduced to the
+// categories strict validation needs to distinguish. This table is parallel to
+// kKnownNodeTypes so adding a new serializer branch also requires deciding
+// where that node may appear under strict validation.
+enum class ContentModel {
+    None,
+    Blocks,
+    Inlines,
+    Text,
+    ListItems,
+    OrderedListItems,
+    TaskItems,
+    Rows,
+    Cells,
+};
+
+constexpr ContentModel kNodeContentModels[] = {
+    ContentModel::Blocks,     // blockquote
+    ContentModel::ListItems,  // bulletList
+    ContentModel::Text,       // codeBlock
+    ContentModel::Blocks,     // doc
+    ContentModel::None,       // hardBreak
+    ContentModel::Inlines,    // heading
+    ContentModel::None,       // horizontalRule
+    ContentModel::None,       // htmlBlock
+    ContentModel::None,       // htmlInline
+    ContentModel::None,       // image
+    ContentModel::Blocks,     // listItem
+    ContentModel::OrderedListItems,  // orderedList
+    ContentModel::Inlines,    // paragraph
+    ContentModel::Rows,       // table
+    ContentModel::Blocks,     // tableCell
+    ContentModel::Blocks,     // tableHeader
+    ContentModel::Cells,      // tableRow
+    ContentModel::Blocks,     // taskItem
+    ContentModel::TaskItems,  // taskList
+    ContentModel::None,       // text
+};
+
+static_assert(std::size(kNodeContentModels) == std::size(kKnownNodeTypes), "every node type needs a content model");
+
+bool is_block_type(std::string_view type) {
+    return type == "blockquote" || type == "bulletList" || type == "codeBlock" || type == "heading" ||
+           type == "horizontalRule" || type == "htmlBlock" || type == "orderedList" || type == "paragraph" ||
+           type == "table" || type == "taskList";
+}
+
+bool is_inline_type(std::string_view type) {
+    return type == "hardBreak" || type == "htmlInline" || type == "image" || type == "text";
+}
+
+bool content_model_allows(ContentModel model, std::string_view child_type) {
+    switch (model) {
+        case ContentModel::None:
+            return false;
+        case ContentModel::Blocks:
+            return is_block_type(child_type);
+        case ContentModel::Inlines:
+            return is_inline_type(child_type);
+        case ContentModel::Text:
+            return child_type == "text";
+        case ContentModel::ListItems:
+            return child_type == "listItem";
+        case ContentModel::OrderedListItems:
+            // MD4C preserves an ordered task marker as orderedList -> taskItem;
+            // this has been part of marktip's public parser/serializer grammar
+            // since before strict content-model validation was introduced.
+            return child_type == "listItem" || child_type == "taskItem";
+        case ContentModel::TaskItems:
+            return child_type == "taskItem";
+        case ContentModel::Rows:
+            return child_type == "tableRow";
+        case ContentModel::Cells:
+            return child_type == "tableHeader" || child_type == "tableCell";
+    }
+    return false;
+}
+
 // Breadcrumb into the input dict, e.g. content[0].content[2].marks[1].
 // Segments are static strings so pushing a frame never allocates; the path
 // string is only rendered when an error is actually thrown.
@@ -96,6 +174,29 @@ std::string py_to_string(py::handle value) {
         return "";
     }
     return py::cast<std::string>(py::str(value));
+}
+
+// CommonMark replaces an insecure NUL with U+FFFD before parsing. from_dict
+// has to make the same normalization or a dict write can serialize bytes that
+// change the next time its Markdown is parsed. URI fields are deliberately
+// excluded by their caller: raw controls there are an unconditional rejection.
+std::string normalize_content_string(std::string value) {
+    std::size_t nul = value.find('\0');
+    if (nul == std::string::npos) {
+        return value;
+    }
+
+    std::string normalized;
+    normalized.reserve(value.size() + 2);
+    std::size_t start = 0;
+    while (nul != std::string::npos) {
+        normalized.append(value, start, nul - start);
+        normalized.append("\xEF\xBF\xBD");
+        start = nul + 1;
+        nul = value.find('\0', start);
+    }
+    normalized.append(value, start, std::string::npos);
+    return normalized;
 }
 
 std::string required_type(py::dict value, std::string_view context, const PathStack& path) {
@@ -301,16 +402,23 @@ const AttrSpec* find_attr_spec(const AttrTable& table, std::string_view name) {
 // Dropping says the same thing without the invention,
 // and it is what collapses "None" and "no such key" into one shape for everything downstream:
 // strict, the serializer, the URI policy.
-AttrList attrs_from_py(py::dict attrs) {
+AttrList attrs_from_py(py::dict attrs, std::string_view owner_type, bool owner_is_mark) {
     AttrList out;
     for (auto item : attrs) {
+        std::string name = py_to_string(item.first);
         py::handle value = item.second;
         if (py::isinstance<py::bool_>(value)) {
-            set_attr(out, py_to_string(item.first), AttrValue::boolean(py::cast<bool>(value)));
+            set_attr(out, std::move(name), AttrValue::boolean(py::cast<bool>(value)));
         } else if (py::isinstance<py::int_>(value)) {
-            set_attr(out, py_to_string(item.first), AttrValue::integer(py::cast<long long>(value)));
+            set_attr(out, std::move(name), AttrValue::integer(py::cast<long long>(value)));
         } else if (py::isinstance<py::str>(value)) {
-            set_attr(out, py_to_string(item.first), AttrValue::string(py::cast<std::string>(value)));
+            bool is_uri = (owner_is_mark && owner_type == "link" && name == "href") ||
+                          (!owner_is_mark && owner_type == "image" && name == "src");
+            std::string string_value = py::cast<std::string>(value);
+            if (!is_uri) {
+                string_value = normalize_content_string(std::move(string_value));
+            }
+            set_attr(out, std::move(name), AttrValue::string(std::move(string_value)));
         }
     }
     return out;
@@ -359,22 +467,63 @@ py::dict node_to_py(const Document& document, std::size_t index) {
 
 // --- strict mode ------------------------------------------------------------
 //
-// Node and mark *types* are closed, but attrs are not:
-// an attr the serializer never reads is dropped without a word.
-// strict names what a caller refuses to lose, from the walk that is already happening,
-// so a consumer does not have to re-traverse the tree in Python
-// just to find out whether the document survives conversion intact.
+// Node and mark *types* are always closed, while strict additionally closes
+// their top-level fields, content models and attrs. Without it, a field or attr
+// the serializer never reads is dropped without a word.
+// strict names what a caller refuses to lose, from the walk that is already
+// happening, so a consumer does not have to re-traverse the tree in Python just
+// to find out whether the document survives conversion intact.
 //
 // Content and Exact differ over one thing, the Dropped attrs,
 // and they differ because nothing in the JSON says whether a `target: "_blank"` was chosen or stamped on:
 // ProseMirror serializes schema defaults onto every node, so both spellings arrive identical.
 // A caller storing markdown as the record wants Content; one keeping the JSON wants Exact.
 //
-// The check reads the raw py::dict rather than the built AttrList,
-// because attrs_from_py has already dropped a None and anything it cannot carry by then.
-// That also makes it from_dict-only, which is the whole story anyway —
+// The attr check reads the raw py::dict rather than the built AttrList,
+// because attrs_from_py has already dropped a None and anything it cannot carry
+// by then. That also makes it from_dict-only, which is the whole story anyway —
 // the parser emits nothing but attrs it knows about, in range,
 // so there is nothing for from_markdown to catch.
+
+void check_top_level_fields(py::dict value, std::string_view owner_type, const char* kind, const PathStack& path) {
+    for (auto item : value) {
+        std::string name = py_to_string(item.first);
+        bool allowed = name == "type" || name == "attrs";
+        if (std::string_view(kind) == "mark") {
+            if (!allowed) {
+                throw InvalidNodeError("unknown_field", name,
+                                       "field '" + name + "' is not defined for mark type '" + std::string(owner_type) +
+                                           "'",
+                                       format_path(path));
+            }
+            continue;
+        }
+
+        allowed = allowed || name == "content" || (name == "text" && owner_type == "text") ||
+                  (name == "marks" && is_inline_type(owner_type));
+        if (!allowed) {
+            throw InvalidNodeError("unknown_field", name,
+                                   "field '" + name + "' is not defined for node type '" + std::string(owner_type) +
+                                       "'",
+                                   format_path(path));
+        }
+    }
+}
+
+void check_text_payload(py::dict node_dict, const PathStack& path) {
+    if (!dict_contains(node_dict, "text")) {
+        throw InvalidNodeError("invalid_content", "text", "text node is missing required field 'text'",
+                               format_path(path));
+    }
+    py::object value = node_dict[py::str("text")];
+    if (!py::isinstance<py::str>(value)) {
+        throw InvalidNodeError("invalid_content", "text", "text node field 'text' must be a str", format_path(path));
+    }
+    if (py::cast<std::string>(value).empty()) {
+        throw InvalidNodeError("invalid_content", "text", "text node field 'text' must not be empty",
+                               format_path(path));
+    }
+}
 
 // Out-of-range values (10 ** 100) come back false rather than raising, so they report as
 // a document problem with a path, not as an unlocated OverflowError.
@@ -536,15 +685,18 @@ Mark mark_from_py(py::dict mark_dict, StrictMode mode, const PathStack& path) {
     if (type_pos == kUnknownType) {
         throw UnknownTypeError("mark", mark.type, format_path(path));
     }
+    if (mode != StrictMode::Off) {
+        check_top_level_fields(mark_dict, mark.type, "mark", path);
+    }
 
     const AttrTable& table = kMarkAttrTables[type_pos];
     py::object attrs = dict_get(mark_dict, "attrs");
-    if (!attrs.is_none()) {
+    if (!attrs.is_none() || (mode != StrictMode::Off && dict_contains(mark_dict, "attrs"))) {
         py::dict attr_dict = expect_dict(attrs, "mark attrs", "attrs", path);
         if (mode != StrictMode::Off) {
             check_attrs_strict(attr_dict, table, mark.type, "mark", mode, path);
         }
-        mark.attrs = attrs_from_py(attr_dict);
+        mark.attrs = attrs_from_py(attr_dict, mark.type, true);
     }
     // Outside the block above on purpose: a link mark with no attrs key at all
     // is a link with no destination just as much as one whose href is None.
@@ -586,13 +738,11 @@ void fill_marks_from_py(Node& node, py::object marks, StrictMode mode, PathStack
     }
 }
 
-void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict, std::string_view context,
-                       std::size_t depth, StrictMode mode, PathStack& path) {
-    if (depth > kMaxNodeDepth) {
-        throw InvalidNodeError("max_depth", "content", "node content nesting exceeds maximum depth",
-                               format_path(path));
-    }
-
+// Keep node field/attr/mark parsing outside fill_node_from_py's recursive
+// frame. kMaxNodeDepth must remain safe on small Windows worker stacks even as
+// strict validation grows.
+std::size_t fill_node_fields_from_py(Document& document, std::size_t index, py::dict node_dict,
+                                     std::string_view context, StrictMode mode, PathStack& path) {
     Node node;
     node.type = required_type(node_dict, context, path);
     std::size_t type_pos = type_index(kKnownNodeTypes, node.type);
@@ -600,40 +750,81 @@ void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict
         throw UnknownTypeError("node", node.type, format_path(path));
     }
 
+    if (mode != StrictMode::Off) {
+        check_top_level_fields(node_dict, node.type, "node", path);
+        if (node.type == "text") {
+            check_text_payload(node_dict, path);
+        }
+    }
+
     if (node.type == "text") {
-        node.text = py_to_string(dict_get(node_dict, "text"));
+        node.text = normalize_content_string(py_to_string(dict_get(node_dict, "text")));
     }
 
     const AttrTable& table = kNodeAttrTables[type_pos];
     py::object attrs = dict_get(node_dict, "attrs");
-    if (!attrs.is_none()) {
+    if (!attrs.is_none() || (mode != StrictMode::Off && dict_contains(node_dict, "attrs"))) {
         py::dict attr_dict = expect_dict(attrs, "node attrs", "attrs", path);
         if (mode != StrictMode::Off) {
             check_attrs_strict(attr_dict, table, node.type, "node", mode, path);
         }
-        node.attrs = attrs_from_py(attr_dict);
+        node.attrs = attrs_from_py(attr_dict, node.type, false);
     }
     // Outside the block above: an image with no attrs key at all still has no src.
     if (mode != StrictMode::Off) {
         check_required_attrs(node.attrs, table, node.type, "node", path);
     }
 
-    fill_marks_from_py(node, dict_get(node_dict, "marks"), mode, path);
+    py::object marks = dict_get(node_dict, "marks");
+    if (mode != StrictMode::Off && marks.is_none() && dict_contains(node_dict, "marks")) {
+        expect_list(marks, "node marks", "marks", path);
+    }
+    fill_marks_from_py(node, marks, mode, path);
 
     document.node(index) = std::move(node);
+    return type_pos;
+}
 
+void fill_node_from_py(Document& document, std::size_t index, py::dict node_dict, std::string_view context,
+                       std::size_t depth, StrictMode mode, PathStack& path) {
+    if (depth > kMaxNodeDepth) {
+        throw InvalidNodeError("max_depth", "content", "node content nesting exceeds maximum depth",
+                               format_path(path));
+    }
+
+    std::size_t type_pos = fill_node_fields_from_py(document, index, node_dict, context, mode, path);
+    std::string node_type(kKnownNodeTypes[type_pos]);
+
+    bool has_content = dict_contains(node_dict, "content");
     py::object content = dict_get(node_dict, "content");
-    if (content.is_none()) {
+    if (!has_content || (content.is_none() && mode == StrictMode::Off)) {
         return;
     }
 
     py::list content_list = expect_list(content, "node content", "content", path);
+    ContentModel content_model = kNodeContentModels[type_pos];
+    if (mode != StrictMode::Off && content_model == ContentModel::None) {
+        throw InvalidNodeError("invalid_content", "content", "node type '" + node_type + "' must not carry content",
+                               format_path(path));
+    }
     std::size_t child_pos = 0;
     for (py::handle child_handle : content_list) {
-        std::size_t child_index = document.append_child(index, Node{});
         path.push_back({"content", child_pos});
-        fill_node_from_py(document, child_index, expect_dict(child_handle, "content child", "content", path), "node",
-                          depth + 1, mode, path);
+        py::dict child_dict = expect_dict(child_handle, "content child", "content", path);
+        std::size_t child_index = document.append_child(index, Node{});
+        fill_node_from_py(document, child_index, child_dict, "node", depth + 1, mode, path);
+        if (mode != StrictMode::Off) {
+            const Node& child = document.node(child_index);
+            if (!content_model_allows(content_model, child.type)) {
+                throw InvalidNodeError("invalid_content", "content",
+                                       "node type '" + node_type + "' cannot contain node type '" + child.type + "'",
+                                       format_path(path));
+            }
+            if (node_type == "codeBlock" && !child.marks.empty()) {
+                throw InvalidNodeError("invalid_content", "marks", "text inside codeBlock must not carry marks",
+                                       format_path(path));
+            }
+        }
         path.pop_back();
         ++child_pos;
     }
@@ -975,6 +1166,20 @@ void enforce_node(const Document& document, std::size_t index, const UriPolicy& 
     }
 }
 
+void enforce_rejected_node_types(const Document& document, std::size_t index, const NodeTypePolicy& policy,
+                                 PathStack& path) {
+    const Node& node = document.node(index);
+    if (std::binary_search(policy.rejected.begin(), policy.rejected.end(), node.type)) {
+        throw InvalidNodeError("disallowed_node_type", "type", "node type '" + node.type + "' is not allowed",
+                               format_path(path));
+    }
+    for (std::size_t i = 0; i < node.content.size(); ++i) {
+        path.push_back({"content", i});
+        enforce_rejected_node_types(document, node.content[i], policy, path);
+        path.pop_back();
+    }
+}
+
 // Spelled like the relative policy below rather than as a bool,
 // because the interesting question has three answers and only one of them is "do not check".
 StrictMode strict_from_py(py::handle value, const char* arg_name) {
@@ -1036,6 +1241,28 @@ void schemes_from_py(py::handle value, const char* arg_name, UriRule& rule) {
     }
     std::sort(rule.schemes.begin(), rule.schemes.end());
     rule.schemes.erase(std::unique(rule.schemes.begin(), rule.schemes.end()), rule.schemes.end());
+}
+
+void rejected_node_types_from_py(py::handle value, const char* arg_name, NodeTypePolicy& policy) {
+    if (value.is_none()) {
+        return;
+    }
+    if (py::isinstance<py::str>(value) || py::isinstance<py::bytes>(value)) {
+        throw py::type_error(std::string(arg_name) + " must be an iterable of str, not a single str");
+    }
+
+    for (py::handle item : py::reinterpret_borrow<py::object>(value)) {
+        if (!py::isinstance<py::str>(item)) {
+            throw py::type_error(std::string(arg_name) + " entries must be str");
+        }
+        std::string type = py::cast<std::string>(item);
+        if (type_index(kKnownNodeTypes, type) == kUnknownType) {
+            throw py::value_error(std::string(arg_name) + " entry '" + type + "' is not a known node type");
+        }
+        policy.rejected.push_back(std::move(type));
+    }
+    std::sort(policy.rejected.begin(), policy.rejected.end());
+    policy.rejected.erase(std::unique(policy.rejected.begin(), policy.rejected.end()), policy.rejected.end());
 }
 
 }  // namespace
@@ -1197,6 +1424,15 @@ void enforce_uri_policy(const Document& document, const UriPolicy& policy) {
     enforce_node(document, 0, policy, path);
 }
 
+void enforce_node_type_policy(const Document& document, const NodeTypePolicy& policy) {
+    if (policy.rejected.empty()) {
+        return;
+    }
+    PathStack path;
+    path.reserve(32);
+    enforce_rejected_node_types(document, 0, policy, path);
+}
+
 UriPolicy uri_policy_from_py(py::object link_schemes, py::object image_schemes, py::object link_relative,
                              py::object image_relative) {
     UriPolicy policy;
@@ -1207,13 +1443,20 @@ UriPolicy uri_policy_from_py(py::object link_schemes, py::object image_schemes, 
     return policy;
 }
 
+NodeTypePolicy node_type_policy_from_py(py::object reject_node_types) {
+    NodeTypePolicy policy;
+    rejected_node_types_from_py(reject_node_types, "reject_node_types", policy);
+    return policy;
+}
+
 Document from_dict_py(py::dict root, py::object link_schemes, py::object image_schemes, py::object link_relative,
-                      py::object image_relative, py::object strict) {
+                      py::object image_relative, py::object reject_node_types, py::object strict) {
     // Options are validated before the tree is walked:
     // a bad option value is a caller bug,
     // and should surface whatever the document happens to contain.
     UriPolicy policy = uri_policy_from_py(std::move(link_schemes), std::move(image_schemes), std::move(link_relative),
                                           std::move(image_relative));
+    NodeTypePolicy node_policy = node_type_policy_from_py(std::move(reject_node_types));
     StrictMode mode = strict_from_py(strict, "strict");
 
     PathStack path;
@@ -1226,6 +1469,7 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
 
     Document document;
     fill_node_from_py(document, 0, root, "root node", 0, mode, path);
+    enforce_node_type_policy(document, node_policy);
     enforce_uri_policy(document, policy);
     return document;
 }
