@@ -11,7 +11,7 @@
 namespace py = pybind11;
 
 #ifndef MARKTIP_VERSION
-#define MARKTIP_VERSION "0.7.2"
+#define MARKTIP_VERSION "0.7.3"
 #endif
 
 namespace {
@@ -125,7 +125,7 @@ PYBIND11_MODULE(_core, module) {
     // pybind11 takes the doc as a bare const char* and only copies it while def() runs.
     const std::string from_markdown_doc =
         "Parse Markdown into a Document."
-        " Set cjk_friendly=True to relax the emphasis rules around CJK text"
+        " Set cjk_friendly=True to use CJK-friendly emphasis and strikethrough rules"
         " (non-standard extension; the default follows GFM/CommonMark exactly)."
         " Set html=False to parse raw HTML as literal text instead of htmlBlock/htmlInline nodes;"
         " <br> inside table cells still maps to hardBreak." +

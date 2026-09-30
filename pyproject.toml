@@ -4,12 +4,12 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "marktip"
-version = "0.7.2"
+version = "0.7.3"
 description = "Fast C++/MD4C Markdown parser and canonical Markdown serializer for Tiptap-style JSON"
 readme = "README.md"
 requires-python = ">=3.9"
-license = "MIT"
-license-files = ["LICENSE", "third_party/md4c/LICENSE.md"]
+license = "MIT AND Unicode-3.0"
+license-files = ["LICENSE", "third_party/md4c/LICENSE.md", "third_party/md4c/upstream_metadata/Unicode-LICENSE.txt"]
 authors = [{ name = "Saneaven (Minjae Kyung)" }]
 keywords = ["markdown", "tiptap", "md4c", "parser"]
 classifiers = [
@@ -38,9 +38,11 @@ wheel.packages = ["python/marktip"]
 sdist.include = [
   "third_party/md4c/src/md4c.c",
   "third_party/md4c/src/md4c.h",
+  "third_party/md4c/src/cjk.h",
   "third_party/md4c/src/entity.c",
   "third_party/md4c/src/entity.h",
   "third_party/md4c/LICENSE.md",
+  "third_party/md4c/upstream_metadata/Unicode-LICENSE.txt",
 ]
 
 [tool.pytest.ini_options]

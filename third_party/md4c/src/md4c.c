@@ -678,40 +678,27 @@ struct MD_UNICODE_FOLD_INFO_tag {
         return (md_unicode_bsearch__(codepoint, PUNCT_MAP, SIZEOF_ARRAY(PUNCT_MAP)) >= 0);
     }
 
-    /* MARKTIP LOCAL PATCH (MD_FLAG_CJKFRIENDLYEMPHASIS):
-     * CJK letters (Hangul, kana, Han ideographs, fullwidth forms). Used to
-     * relax the emphasis flanking rules around CJK text. */
+    /* MARKTIP LOCAL PATCH: CJK-friendly uses Unicode width, script and emoji data. */
+    #include "cjk.h"
+
     static int
     md_is_cjk_char__(unsigned codepoint)
     {
-#define R(cp_min, cp_max)   ((cp_min) | 0x40000000), ((cp_max) | 0x80000000)
-#define S(cp)               (cp)
-        static const unsigned CJK_MAP[] = {
-            R(0x1100,0x11ff),   /* Hangul jamo */
-            S(0x3005), S(0x3007), S(0x303b),
-            R(0x3040,0x30fa),   /* hiragana, katakana (except middle dot) */
-            R(0x30fc,0x30ff),
-            R(0x3105,0x312f),   /* bopomofo */
-            R(0x3130,0x318f),   /* Hangul compatibility jamo */
-            R(0x31f0,0x31ff),   /* katakana phonetic extensions */
-            R(0x3400,0x4dbf),   /* CJK ideographs extension A */
-            R(0x4e00,0x9fff),   /* CJK unified ideographs */
-            R(0xa960,0xa97f),   /* Hangul jamo extended-A */
-            R(0xac00,0xd7a3),   /* Hangul syllables */
-            R(0xd7b0,0xd7ff),   /* Hangul jamo extended-B */
-            R(0xf900,0xfaff),   /* CJK compatibility ideographs */
-            R(0xff21,0xff3a),   /* fullwidth Latin capitals */
-            R(0xff41,0xff5a),   /* fullwidth Latin small letters */
-            R(0xff66,0xff9f),   /* halfwidth katakana */
-            R(0x20000,0x3ffff)  /* CJK ideographs extensions B..H */
-        };
-#undef R
-#undef S
-
         if(codepoint < 0x1100)
             return FALSE;
 
-        return (md_unicode_bsearch__(codepoint, CJK_MAP, SIZEOF_ARRAY(CJK_MAP)) >= 0);
+        return (md_unicode_bsearch__(codepoint, MD_CJK_MAP, SIZEOF_ARRAY(MD_CJK_MAP)) >= 0);
+    }
+
+    static int
+    md_is_cjk_ambiguous_punct__(unsigned codepoint, unsigned selector)
+    {
+        unsigned i;
+        for(i = 0; i < SIZEOF_ARRAY(MD_CJK_AMBIGUOUS_PUNCT); i++) {
+            if(MD_CJK_AMBIGUOUS_PUNCT[i][0] == codepoint && MD_CJK_AMBIGUOUS_PUNCT[i][1] == selector)
+                return TRUE;
+        }
+        return FALSE;
     }
 
     static void
@@ -907,10 +894,6 @@ struct MD_UNICODE_FOLD_INFO_tag {
     #define ISUNICODEPUNCT(off)             md_is_unicode_punct__(md_decode_utf16le__(STR(off), ctx->size - (off), NULL))
     #define ISUNICODEPUNCTBEFORE(off)       md_is_unicode_punct__(md_decode_utf16le_before__(ctx, off))
 
-    /* MARKTIP LOCAL PATCH (MD_FLAG_CJKFRIENDLYEMPHASIS) */
-    #define ISCJK(off)                      md_is_cjk_char__(md_decode_utf16le__(STR(off), ctx->size - (off), NULL))
-    #define ISCJKBEFORE(off)                md_is_cjk_char__(md_decode_utf16le_before__(ctx, off))
-
     static inline int
     md_decode_unicode(const CHAR* str, OFF off, SZ str_size, SZ* p_char_size)
     {
@@ -992,10 +975,6 @@ struct MD_UNICODE_FOLD_INFO_tag {
     #define ISUNICODEPUNCT(off)             md_is_unicode_punct__(md_decode_utf8__(STR(off), ctx->size - (off), NULL))
     #define ISUNICODEPUNCTBEFORE(off)       md_is_unicode_punct__(md_decode_utf8_before__(ctx, off))
 
-    /* MARKTIP LOCAL PATCH (MD_FLAG_CJKFRIENDLYEMPHASIS) */
-    #define ISCJK(off)                      md_is_cjk_char__(md_decode_utf8__(STR(off), ctx->size - (off), NULL))
-    #define ISCJKBEFORE(off)                md_is_cjk_char__(md_decode_utf8_before__(ctx, off))
-
     static inline unsigned
     md_decode_unicode(const CHAR* str, OFF off, SZ str_size, SZ* p_char_size)
     {
@@ -1008,10 +987,6 @@ struct MD_UNICODE_FOLD_INFO_tag {
 
     #define ISUNICODEPUNCT(off)             ISPUNCT(off)
     #define ISUNICODEPUNCTBEFORE(off)       ISPUNCT((off)-1)
-
-    /* MARKTIP LOCAL PATCH (MD_FLAG_CJKFRIENDLYEMPHASIS): no CJK in ASCII mode. */
-    #define ISCJK(off)                      FALSE
-    #define ISCJKBEFORE(off)                FALSE
 
     static inline void
     md_get_unicode_fold_info(unsigned codepoint, MD_UNICODE_FOLD_INFO* info)
@@ -3039,6 +3014,101 @@ md_is_autolink(MD_CTX* ctx, OFF beg, OFF max_end, OFF* p_end, int* p_missing_mai
     return FALSE;
 }
 
+/* MARKTIP LOCAL PATCH: CJK-friendly flanking also classifies the preceding sequence. */
+#define MD_ATTN_SPACE 0x01
+#define MD_ATTN_PUNCT 0x02
+#define MD_ATTN_CJK   0x04
+#define MD_ATTN_IVS   0x08
+#define MD_ATTN_VS    0x10
+
+static unsigned
+md_decode_attention_before(MD_CTX* ctx, OFF off, OFF* p_start)
+{
+    OFF start = off - 1;
+    SZ size;
+#if defined MD4C_USE_UTF16
+    if(start > 0 && IS_UTF16_SURROGATE_LO(CH(start)) && IS_UTF16_SURROGATE_HI(CH(start-1)))
+        start--;
+#elif defined MD4C_USE_UTF8
+    while(start > 0 && off - start < 4 && IS_UTF8_TAIL(CH(start)))
+        start--;
+#endif
+    *p_start = start;
+    return md_decode_unicode(STR(0), start, ctx->size, &size);
+}
+
+static unsigned
+md_attention_category(unsigned codepoint, int cjk_friendly)
+{
+    unsigned category = 0;
+    if(ISUNICODEWHITESPACE_(codepoint))
+        return MD_ATTN_SPACE;
+#if defined MD4C_USE_UTF16 || defined MD4C_USE_UTF8
+    if(md_is_unicode_punct__(codepoint))
+        category |= MD_ATTN_PUNCT;
+    if(cjk_friendly) {
+        if(0xfe00 <= codepoint && codepoint <= 0xfe0e)
+            return MD_ATTN_VS;
+        if(0xe0100 <= codepoint && codepoint <= 0xe01ef)
+            return MD_ATTN_IVS;
+        if(md_is_cjk_char__(codepoint))
+            category |= MD_ATTN_CJK;
+    }
+#else
+    MD_UNUSED(cjk_friendly);
+    if(ISPUNCT_(codepoint))
+        category |= MD_ATTN_PUNCT;
+#endif
+    return category;
+}
+
+static unsigned
+md_attention_flags(MD_CTX* ctx, OFF line_beg, OFF line_end, OFF beg, OFF end, CHAR ch)
+{
+    int cjk_friendly = (ctx->parser.flags & MD_FLAG_CJKFRIENDLYEMPHASIS) != 0;
+    unsigned before = MD_ATTN_SPACE;
+    unsigned after = MD_ATTN_SPACE;
+    unsigned flags = 0;
+    OFF previous = beg;
+    unsigned previous_codepoint = 0;
+    int left_flanking, right_flanking;
+    SZ size;
+
+    if(beg > line_beg) {
+        previous_codepoint = md_decode_attention_before(ctx, beg, &previous);
+        before = md_attention_category(previous_codepoint, cjk_friendly);
+    }
+    if(end < line_end)
+        after = md_attention_category(md_decode_unicode(STR(0), end, ctx->size, &size), cjk_friendly);
+
+#if defined MD4C_USE_UTF16 || defined MD4C_USE_UTF8
+    if(before == MD_ATTN_VS && previous > line_beg) {
+        OFF base_start;
+        unsigned base = md_decode_attention_before(ctx, previous, &base_start);
+        unsigned category = md_attention_category(base, cjk_friendly);
+        if(!(category & MD_ATTN_SPACE)) {
+            before = category & ~MD_ATTN_IVS;
+            if(md_is_cjk_ambiguous_punct__(base, previous_codepoint))
+                before = MD_ATTN_CJK | MD_ATTN_PUNCT;
+        }
+    }
+#endif
+
+    left_flanking = !(after & MD_ATTN_SPACE) &&
+        (!(after & MD_ATTN_PUNCT) || (before & (MD_ATTN_SPACE | MD_ATTN_PUNCT)) ||
+         (after & MD_ATTN_CJK) || (before & (MD_ATTN_CJK | MD_ATTN_IVS)));
+    right_flanking = !(before & MD_ATTN_SPACE) &&
+        (!(before & MD_ATTN_PUNCT) || (after & (MD_ATTN_SPACE | MD_ATTN_PUNCT)) ||
+         (before & MD_ATTN_CJK) || (after & MD_ATTN_CJK));
+
+    /* Underscores retain CommonMark's additional intraword restrictions. */
+    if(left_flanking && (ch != _T('_') || !right_flanking || (before & MD_ATTN_PUNCT)))
+        flags |= MD_MARK_POTENTIAL_OPENER;
+    if(right_flanking && (ch != _T('_') || !left_flanking || (after & MD_ATTN_PUNCT)))
+        flags |= MD_MARK_POTENTIAL_CLOSER;
+    return flags;
+}
+
 static int
 md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_mode)
 {
@@ -3090,51 +3160,14 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
             /* A potential (string) emphasis start/end. */
             if(ch == _T('*')  ||  ch == _T('_')) {
                 OFF tmp = off+1;
-                int left_level;     /* What precedes: 0 = whitespace; 1 = punctuation; 2 = other char. */
-                int right_level;    /* What follows: 0 = whitespace; 1 = punctuation; 2 = other char. */
-                int left_is_cjk = FALSE;
-                int right_is_cjk = FALSE;
+                unsigned flags;
 
                 while(tmp < line->end  &&  CH(tmp) == ch)
                     tmp++;
 
-                if(off == line->beg  ||  ISUNICODEWHITESPACEBEFORE(off))
-                    left_level = 0;
-                else if(ISUNICODEPUNCTBEFORE(off))
-                    left_level = 1;
-                else
-                    left_level = 2;
-
-                if(tmp == line->end  ||  ISUNICODEWHITESPACE(tmp))
-                    right_level = 0;
-                else if(ISUNICODEPUNCT(tmp))
-                    right_level = 1;
-                else
-                    right_level = 2;
-
-                /* MARKTIP LOCAL PATCH: a CJK character next to the delimiter
-                 * does not block it from being an opener/closer on the other
-                 * side (cf. markdown-it-cjk-friendly). */
-                if(ctx->parser.flags & MD_FLAG_CJKFRIENDLYEMPHASIS) {
-                    if(off > line->beg)
-                        left_is_cjk = ISCJKBEFORE(off);
-                    if(tmp < line->end)
-                        right_is_cjk = ISCJK(tmp);
-                }
-
-                /* Intra-word underscore doesn't have special meaning. */
-                if(ch == _T('_')  &&  left_level == 2  &&  right_level == 2) {
-                    left_level = 0;
-                    right_level = 0;
-                }
-
-                if(left_level != 0  ||  right_level != 0) {
-                    unsigned flags = 0;
-
-                    if(left_level > 0  &&  (left_level >= right_level  ||  right_is_cjk))
-                        flags |= MD_MARK_POTENTIAL_CLOSER;
-                    if(right_level > 0  &&  (right_level >= left_level  ||  left_is_cjk))
-                        flags |= MD_MARK_POTENTIAL_OPENER;
+                /* MARKTIP LOCAL PATCH: '*' and '_' share the CJK-friendly classifier. */
+                flags = md_attention_flags(ctx, line->beg, line->end, off, tmp, ch);
+                if(flags != 0) {
                     if(flags == (MD_MARK_POTENTIAL_OPENER | MD_MARK_POTENTIAL_CLOSER))
                         flags |= MD_MARK_EMPH_OC;
 
@@ -3357,40 +3390,8 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                     unsigned flags = 0;
 
                     if(ch == _T('~')) {
-                        /* MARKTIP LOCAL PATCH: strikethrough uses the same
-                         * graded flanking rules as '*' (cf. cmark-gfm, which
-                         * treats '~' like '*'), so intra-word "~~" opens and
-                         * closes (e.g. "a~~b~~c"). The CJK-friendly relaxation
-                         * mirrors the emphasis patch above. */
-                        int left_level, right_level;
-                        int left_is_cjk = FALSE;
-                        int right_is_cjk = FALSE;
-
-                        if(off == line->beg  ||  ISUNICODEWHITESPACEBEFORE(off))
-                            left_level = 0;
-                        else if(ISUNICODEPUNCTBEFORE(off))
-                            left_level = 1;
-                        else
-                            left_level = 2;
-
-                        if(tmp == line->end  ||  ISUNICODEWHITESPACE(tmp))
-                            right_level = 0;
-                        else if(ISUNICODEPUNCT(tmp))
-                            right_level = 1;
-                        else
-                            right_level = 2;
-
-                        if(ctx->parser.flags & MD_FLAG_CJKFRIENDLYEMPHASIS) {
-                            if(off > line->beg)
-                                left_is_cjk = ISCJKBEFORE(off);
-                            if(tmp < line->end)
-                                right_is_cjk = ISCJK(tmp);
-                        }
-
-                        if(left_level > 0  &&  (left_level >= right_level  ||  right_is_cjk))
-                            flags |= MD_MARK_POTENTIAL_CLOSER;
-                        if(right_level > 0  &&  (right_level >= left_level  ||  left_is_cjk))
-                            flags |= MD_MARK_POTENTIAL_OPENER;
+                        /* MARKTIP LOCAL PATCH: '~' uses '*' flanking, including intraword runs. */
+                        flags = md_attention_flags(ctx, line->beg, line->end, off, tmp, ch);
                     } else {
                         /* '$' keeps the original strict flanking behavior. */
                         flags = MD_MARK_POTENTIAL_OPENER | MD_MARK_POTENTIAL_CLOSER;

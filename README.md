@@ -24,14 +24,20 @@ doc = tm.from_dict(ast)
 ```
 
 `from_markdown` follows GFM/CommonMark by default.
-Pass `cjk_friendly=True` to relax the emphasis and strikethrough rules so delimiters next to CJK text still open and close (e.g. `**볼드**은` parses as bold), a non-standard extension that is off by default:
+Pass `cjk_friendly=True` to follow the [CommonMark CJK-friendly Amendments Specification](https://github.com/tats-u/markdown-cjk-friendly/blob/main/specification.md) for emphasis (`*`, `_`) and strikethrough (`~`). This opt-in extension recognizes CJK punctuation as well as letters, so `**《제목》**a`, `a**《제목》**`, and `**「約束」**a` retain their bold marks:
 
 ```python
 doc = tm.from_markdown("**볼드**은 강조", cjk_friendly=True)
 ```
 
 Strikethrough follows the GFM reference implementations (cmark-gfm/micromark): intra-word `~~` strikes (`a~~b~~c`), including next to CJK letters (`~~삭제~~은`).
-`cjk_friendly` still matters for `*`/`_`, and for `~` in punctuation-adjacent cases such as `~~"인용"~~라고`.
+`cjk_friendly` still matters for punctuation-adjacent cases such as `~~"인용"~~라고`.
+
+The CJK classifier uses Unicode 17.0.0 East Asian Width `W`, `F`, or `H` (excluding default emoji presentation characters), plus the Hangul script. This includes fullwidth digits such as `１`. Before a delimiter, CJK characters followed by a non-emoji general-use variation selector (`U+FE00`–`U+FE0E`) are classified as one sequence; ideographic variation selectors (`U+E0100`–`U+E01EF`) and standardized fullwidth quotation-mark sequences are also recognized. `U+FE0F` is an emoji presentation selector and is excluded from that sequence rule.
+
+Underscores retain CommonMark's additional restriction on emphasis inside words. The CJK-friendly specification changes delimiter flanking without removing that protection for names such as `snake_case`: `_《제목》_을` and `__《제목》__을` stay literal, even with `cjk_friendly=True`. Use `*` or `**` when emphasis must adjoin a word.
+
+> **Changed in 0.7.3** — CJK-friendly character classification, variation-selector sequences, flanking, and underscore conditions follow the specification. The same flanking rules apply to `~~`. An editor document containing bold `《제목》` followed by `a` now survives serialization and reparsing with `cjk_friendly=True`.
 
 Pass `html=False` to parse raw HTML as literal text instead of `htmlBlock`/`htmlInline` nodes.
 Content is preserved (the serializer escapes it), and `<br>` inside table cells still maps to `hardBreak` so marktip's own table output round-trips:
