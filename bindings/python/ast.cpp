@@ -313,7 +313,7 @@ const NodeSpec* fill_node_fields_from_py(Document& document, std::size_t index, 
     // Outside the block above: an image with no attrs key at all still has no src.
     if (mode != StrictMode::Off) {
         check_required_attrs(node.attrs, specs, node.type, "node", path);
-        check_raw_html(node, schema, path);
+        check_raw_carriers(node, schema, path);
     }
 
     py::object marks = dict_get(node_dict, "marks");

@@ -343,6 +343,8 @@ public:
                 return 0;
             case MD_SPAN_LATEXMATH:
             case MD_SPAN_LATEXMATH_DISPLAY:
+                math_text_.clear();
+                return 0;
             case MD_SPAN_WIKILINK:
             case MD_SPAN_U:
                 return 0;
@@ -372,7 +374,20 @@ public:
                 pop_mark("strike");
                 return 0;
             case MD_SPAN_LATEXMATH:
-            case MD_SPAN_LATEXMATH_DISPLAY:
+            case MD_SPAN_LATEXMATH_DISPLAY: {
+                const NodeSpec* spec = type == MD_SPAN_LATEXMATH ? document_.schema().inline_math()
+                                                                : document_.schema().display_math();
+                if (spec == nullptr) {
+                    std::string_view delimiter = type == MD_SPAN_LATEXMATH ? "$" : "$$";
+                    add_text(std::string(delimiter) + math_text_ + std::string(delimiter));
+                } else {
+                    AttrList attrs;
+                    set_attr(attrs, spec->attrs[spec->body].name, AttrValue::string(std::move(math_text_)));
+                    std::size_t index = append_node(spec->name, std::move(attrs));
+                    document_.node(index).marks = active_marks_;
+                }
+                return 0;
+            }
             case MD_SPAN_WIKILINK:
             case MD_SPAN_U:
                 return 0;
@@ -409,8 +424,10 @@ public:
                 add_text(decode_entity(std::string_view(text, size)));
                 return 0;
             case MD_TEXT_NORMAL:
-            case MD_TEXT_LATEXMATH:
                 add_text(std::string_view(text, size));
+                return 0;
+            case MD_TEXT_LATEXMATH:
+                math_text_.append(text, size);
                 return 0;
         }
         return 0;
@@ -444,6 +461,7 @@ private:
     std::vector<std::size_t> active_mark_depths_;
     std::string error_;
     std::string error_code_;
+    std::string math_text_;
     bool html_ = true;
 
     Node& current() {
@@ -618,6 +636,16 @@ private:
         if (node.type == "image") {
             return attr_string(node.attrs, "alt");
         }
+        if (document_.schema().has_math()) {
+            const NodeSpec* spec = document_.schema().inline_math();
+            if (spec != nullptr && node.type == spec->name) {
+                return attr_string(node.attrs, spec->attrs[spec->body].name);
+            }
+            spec = document_.schema().display_math();
+            if (spec != nullptr && node.type == spec->name) {
+                return attr_string(node.attrs, spec->attrs[spec->body].name);
+            }
+        }
 
         std::string out;
         for (std::size_t child : node.content) {
@@ -665,7 +693,18 @@ private:
 
     bool is_inline_node(std::size_t index) const {
         const std::string& type = document_.node(index).type;
-        return type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline";
+        if (type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline") {
+            return true;
+        }
+        if (document_.schema().has_math()) {
+            const NodeSpec* spec = document_.schema().inline_math();
+            if (spec != nullptr && type == spec->name) {
+                return true;
+            }
+            spec = document_.schema().display_math();
+            return spec != nullptr && type == spec->name;
+        }
+        return false;
     }
 
     void wrap_inline_runs_in_paragraph(std::size_t index) {
@@ -748,6 +787,7 @@ Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
             typed_tags.push_back({entry.tag.c_str(), entry.block_line});
         }
     }
+    unsigned math_flag = schema->has_math() ? MD_FLAG_LATEXMATHSPANS : 0;
     AstBuilder builder(markdown.size(), html, std::move(schema));
     MD_PARSER parser {};
     parser.abi_version = 0;
@@ -758,7 +798,7 @@ Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
     // so the <br>-in-cell hardBreak mapping keeps working.
     // AstBuilder handles literal conversion without declared tags; lift handles it otherwise.
     parser.flags = MD_DIALECT_GITHUB | (cjk_friendly ? MD_FLAG_CJKFRIENDLYEMPHASIS : 0) |
-                   (html ? 0 : MD_FLAG_NOHTMLBLOCKS);
+                   (html ? 0 : MD_FLAG_NOHTMLBLOCKS) | math_flag;
     parser.enter_block = enter_block_callback;
     parser.leave_block = leave_block_callback;
     parser.enter_span = enter_span_callback;

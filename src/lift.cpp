@@ -10,6 +10,7 @@
 #include "compiler.h"
 #include "entities.h"
 #include "errors.h"
+#include "form.h"
 #include "path.h"
 #include "schema.h"
 #include "tags.h"
@@ -86,6 +87,17 @@ AttrList decode_tag_attrs(const HtmlConstruct& tag, const std::vector<AttrSpec>&
         }
     }
     return ordered_attrs;
+}
+
+AttrList carrier_attrs(std::string body, const NodeSpec& spec, const PathStack& path) {
+    const AttrSpec& body_spec = spec.attrs[spec.body];
+    AttrInput input(std::move(body));
+    check_attr_value(input, body_spec, path);
+    AttrList attrs;
+    store_attr(attrs, std::string(body_spec.name), AttrValue::string(std::get<std::string>(std::move(input))),
+               spec.attrs);
+    check_required_attrs(attrs, spec.attrs, spec.name, "node", path);
+    return attrs;
 }
 
 struct OpenMark {
@@ -223,7 +235,46 @@ MARKTIP_NOINLINE void process_blocks(Document& document, std::size_t index, cons
     std::vector<std::size_t> original = std::move(document.node(index).content);
     std::vector<InlinePiece> pieces;
     pieces.reserve(original.size());
+    const Schema& schema = document.schema();
+    bool fences = schema.has_fences();
+    const NodeSpec* display_math = schema.display_math();
     for (std::size_t child : original) {
+        Node& parsed = document.node(child);
+        const NodeSpec* carrier = nullptr;
+        std::string body;
+        if (fences && parsed.type == "codeBlock") {
+            CodeInfo info = code_info(parsed.attrs);
+            carrier = schema.fence(info.word);
+            if (carrier != nullptr) {
+                for (std::size_t line : parsed.content) {
+                    body += document.node(line).text;
+                }
+                if (!body.empty() && body.back() == '\n') {
+                    body.pop_back();
+                }
+            }
+        } else if (display_math != nullptr && parsed.type == "paragraph" && parsed.content.size() == 1) {
+            const Node& span = document.node(parsed.content.front());
+            if (span.type == display_math->name) {
+                carrier = display_math;
+                body = attr_string(span.attrs, carrier->attrs[carrier->body].name);
+                constexpr const char* whitespace = " \t\r\n\f\v";
+                std::size_t begin = body.find_first_not_of(whitespace);
+                if (begin == std::string::npos) {
+                    body.clear();
+                } else {
+                    std::size_t end = body.find_last_not_of(whitespace);
+                    body = body.substr(begin, end - begin + 1);
+                }
+            }
+        }
+        if (carrier != nullptr) {
+            parsed.type = carrier->name;
+            parsed.attrs = carrier_attrs(std::move(body), *carrier, path);
+            parsed.content.clear();
+            pieces.push_back({InlinePieceKind::Atom, child, carrier});
+            continue;
+        }
         std::string payload;
         HtmlConstruct token;
         const TagEntry* tag = nullptr;
@@ -382,10 +433,26 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
     std::vector<OpenMark> open;
     std::vector<Mark> effective;
     const Schema& schema = document.schema();
+    bool math = schema.has_math();
+    const NodeSpec* inline_math = math ? schema.inline_math() : nullptr;
+    const NodeSpec* display_math = math ? schema.display_math() : nullptr;
     for (std::size_t child : original) {
         if (document.node(child).type != "htmlInline") {
-            apply_declared_marks(document.node(child).marks, effective, schema, path);
-            pieces.push_back({InlinePieceKind::Node, child, nullptr});
+            Node& node = document.node(child);
+            const NodeSpec* carrier = nullptr;
+            if (math) {
+                if (inline_math != nullptr && node.type == inline_math->name) {
+                    carrier = inline_math;
+                    node.attrs = carrier_attrs(attr_string(node.attrs, carrier->attrs[carrier->body].name),
+                                               *carrier, path);
+                } else if (display_math != nullptr && node.type == display_math->name) {
+                    node.text = "$$" + attr_string(node.attrs, display_math->attrs[display_math->body].name) + "$$";
+                    node.type = "text";
+                    node.attrs.clear();
+                }
+            }
+            apply_declared_marks(node.marks, effective, schema, path);
+            pieces.push_back({carrier != nullptr ? InlinePieceKind::Atom : InlinePieceKind::Node, child, carrier});
             continue;
         }
 

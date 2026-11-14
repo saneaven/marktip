@@ -96,6 +96,7 @@ struct AttrSpec {
 };
 
 enum class Shape { InlineAtom, InlineContainer, BlockAtom, BlockContainer, TextBlock };
+enum class MathMode { None, Inline, Display };
 
 struct NodeSpec {
     std::string name;
@@ -112,6 +113,9 @@ struct NodeSpec {
     std::string tag = {};
     Shape shape = Shape::InlineAtom;
     int dfa = -1;
+    std::string fence = {};
+    MathMode math = MathMode::None;
+    int body = -1;
 };
 
 struct ExcludeSet {
@@ -152,12 +156,22 @@ public:
     bool has_declared_marks() const;
     bool has_declared_nodes() const;
     bool has_inline_containers() const;
+    bool has_fences() const;
+    const NodeSpec* fence(std::string_view word) const;
+    bool has_math() const;
+    const NodeSpec* inline_math() const;
+    const NodeSpec* display_math() const;
 
     bool content_model_allows(ContentModel model, const NodeSpec& child) const;
 
 private:
     friend class SchemaBuilder;
     Schema();
+
+    struct FenceEntry {
+        std::string word;
+        std::size_t spec;
+    };
 
     std::vector<NodeSpec> nodes_;
     std::vector<MarkSpec> marks_;
@@ -167,6 +181,9 @@ private:
     std::vector<TagEntry> tags_;
     bool declared_nodes_ = false;
     bool inline_containers_ = false;
+    std::vector<FenceEntry> fences_;
+    int inline_math_ = -1;
+    int display_math_ = -1;
 };
 
 }  // namespace marktip

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "errors.h"
+#include "form.h"
 #include "schema.h"
 #include "tags.h"
 
@@ -88,6 +89,23 @@ std::string escape_inline(std::string_view value, bool table_cell = false) {
             out.push_back('\\');
         }
         out.push_back(ch);
+    }
+    return out;
+}
+
+std::string escape_dollars(std::string value) {
+    std::size_t first = value.find('$');
+    if (first == std::string::npos) {
+        return value;
+    }
+    std::string out;
+    out.reserve(value.size());
+    out.append(value.data(), first);
+    for (std::size_t i = first; i < value.size(); ++i) {
+        if (value[i] == '$') {
+            out.push_back('\\');
+        }
+        out.push_back(value[i]);
     }
     return out;
 }
@@ -221,6 +239,11 @@ std::string apply_marks(std::string rendered, const std::vector<Mark>& marks, co
 struct InlineRun {
     std::vector<Mark> marks;
     std::string content;
+};
+
+struct MathToken {
+    const Node* node;
+    const NodeSpec* spec;
 };
 
 // Where inline content is being rendered. TableCell and Heading are
@@ -397,13 +420,18 @@ class MarkdownWriter {
 public:
     explicit MarkdownWriter(const Document& document)
         : document_(document), schema_(document.schema()), extended_(schema_.has_declared_marks()),
-          declared_nodes_(schema_.has_declared_nodes()), inline_containers_(schema_.has_inline_containers()) {}
+          declared_nodes_(schema_.has_declared_nodes()), inline_containers_(schema_.has_inline_containers()),
+          math_(schema_.has_math()) {}
 
     std::string render() {
         if (document_.root().type != "doc") {
             throw InvalidNodeError("invalid_root", "type", "root node must have type 'doc'", "");
         }
-        return render_doc(document_.root());
+        std::string rendered = render_doc(document_.root());
+        if (!math_tokens_.empty()) {
+            return resolve_math(std::move(rendered));
+        }
+        return rendered;
     }
 
 private:
@@ -412,6 +440,55 @@ private:
     bool extended_;
     bool declared_nodes_;
     bool inline_containers_;
+    bool math_;
+    std::vector<MathToken> math_tokens_;
+
+    std::string escape_text(std::string_view value, bool table_cell) {
+        std::string escaped = escape_inline(value, table_cell);
+        if (math_) {
+            escaped = escape_dollars(std::move(escaped));
+        }
+        return escaped;
+    }
+
+    std::string math_token(const Node& node, const NodeSpec& spec) {
+        // Stored text has no NUL, so a marker survives escaping without matching document text.
+        std::string token(1, '\0');
+        token += std::to_string(math_tokens_.size());
+        token.push_back('\0');
+        math_tokens_.push_back({&node, &spec});
+        return token;
+    }
+
+    std::string resolve_math(std::string rendered) {
+        std::string out;
+        out.reserve(rendered.size());
+        std::size_t begin = 0;
+        std::size_t marker = rendered.find('\0');
+        while (marker != std::string::npos) {
+            out.append(rendered.data() + begin, marker - begin);
+            std::size_t end = marker + 1;
+            std::size_t index = 0;
+            while (rendered[end] != '\0') {
+                index = index * 10 + static_cast<std::size_t>(rendered[end] - '0');
+                ++end;
+            }
+            const MathToken& token = math_tokens_[index];
+            std::string_view after(rendered.data() + end + 1, rendered.size() - end - 1);
+            // Delimiters and expelled whitespace decide flanking only after the runs have been emitted.
+            if (inline_math_boundary(out, true) && inline_math_boundary(after, false)) {
+                out.push_back('$');
+                out += token.node->attrs.front().second.string_value;
+                out.push_back('$');
+            } else {
+                out += open_node_tag(*token.spec, token.node->attrs);
+            }
+            begin = end + 1;
+            marker = rendered.find('\0', begin);
+        }
+        out.append(rendered.data() + begin, rendered.size() - begin);
+        return out;
+    }
 
     std::string render_doc(const Node& node) {
         return render_blocks(node, 0);
@@ -542,6 +619,9 @@ private:
                                                 close_node_tag(spec)), indent);
         }
         if (spec.shape == Shape::BlockAtom) {
+            if (const AttrValue* body = fence_body(spec, node.attrs, ctx == InlineContext::TableCell)) {
+                return add_indent(render_fenced_code(body->string_value + "\n", spec.fence), indent);
+            }
             return add_indent(open_node_tag(spec, node.attrs), indent);
         }
         return add_indent(render_inline(node, ctx), indent);
@@ -708,20 +788,14 @@ private:
     }
 
     std::string render_code_block(const Node& node) {
-        std::string code = plain_text(node);
-        std::string language = attr_string(node.attrs, "language");
-        if (language.empty()) {
-            language = attr_string(node.attrs, "info");
-        }
+        return render_fenced_code(plain_text(node), code_info(node.attrs).value);
+    }
 
-        // An info string is a single line. Everything after a newline would land in the
-        // code content on reparse, so the tail is dropped rather than emitted.
-        language.erase(std::min(language.size(), language.find_first_of("\r\n")));
-
-        // A backtick inside the info string closes a backtick fence, so those switch to
-        // tildes — which have no such restriction, and lose nothing.
-        // The parser reaches this too: "~~~py`x" is a valid tilde fence, and its info
-        // string comes back out through here.
+    std::string render_fenced_code(std::string code, std::string language) {
+        // A backtick inside the info string closes a backtick fence,
+        // so those switch to tildes — which have no such restriction, and lose nothing.
+        // The parser reaches this too: "~~~py`x" is a valid tilde fence,
+        // and its info string comes back out through here.
         char fence_char = language.find('`') == std::string::npos ? '`' : '~';
         std::size_t fence_len = std::max<std::size_t>(3, max_run(code, fence_char) + 1);
         std::string fence(fence_len, fence_char);
@@ -835,9 +909,9 @@ private:
                 // over from setext input) demote to spaces.
                 std::string flattened = node.text;
                 std::replace(flattened.begin(), flattened.end(), '\n', ' ');
-                return in_code ? flattened : escape_inline(flattened, false);
+                return in_code ? flattened : escape_text(flattened, false);
             }
-            return in_code ? node.text : escape_inline(node.text, ctx == InlineContext::TableCell);
+            return in_code ? node.text : escape_text(node.text, ctx == InlineContext::TableCell);
         }
         if (type == "hardBreak") {
             if (ctx == InlineContext::TableCell) {
@@ -852,7 +926,7 @@ private:
             std::string src = attr_string(node.attrs, "src");
             std::string alt = attr_string(node.attrs, "alt", plain_text(node));
             std::string title = attr_string(node.attrs, "title");
-            return "![" + escape_inline(alt, ctx == InlineContext::TableCell) + "](" + escape_link_destination(src) +
+            return "![" + escape_text(alt, ctx == InlineContext::TableCell) + "](" + escape_link_destination(src) +
                    (title.empty() ? "" : " \"" + escape_title(title) + "\"") + ")";
         }
         if (type == "htmlInline") {
@@ -861,6 +935,14 @@ private:
         if (declared_nodes_) {
             const NodeSpec& spec = *schema_.node(type);
             if (!spec.core) {
+                if (spec.math == MathMode::Inline) {
+                    const AttrValue* body = carrier_body(spec, node.attrs);
+                    if (body != nullptr &&
+                        inline_math_body_allowed(body->string_value, ctx == InlineContext::TableCell,
+                                                 !node.marks.empty())) {
+                        return math_token(node, spec);
+                    }
+                }
                 return open_node_tag(spec, node.attrs);
             }
         }

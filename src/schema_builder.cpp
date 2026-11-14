@@ -256,6 +256,49 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
         schema->nodes_[core_nodes + i].dfa = static_cast<int>(schema->content_.size());
         schema->content_.push_back(std::move(content));
     }
+    std::unordered_set<std::string> fence_words;
+    std::unordered_set<std::string> math_modes;
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+        const NodeDeclaration& declaration = nodes[i];
+        NodeSpec& node = schema->nodes_[core_nodes + i];
+        if ((declaration.fence || declaration.math) && !declaration.body) {
+            throw std::invalid_argument("node '" + node.name + "' requires body for its fence or math carrier");
+        }
+        if (declaration.body) {
+            auto attr = std::find_if(node.attrs.begin(), node.attrs.end(), [&](const AttrSpec& spec) {
+                return spec.name == *declaration.body;
+            });
+            if (attr == node.attrs.end() || attr->rule != AttrRule::Str) {
+                throw std::invalid_argument("body for node '" + node.name + "' must name a declared str attr");
+            }
+            node.body = static_cast<int>(attr - node.attrs.begin());
+        }
+        if (declaration.fence) {
+            if (node.shape != Shape::BlockAtom) {
+                throw std::invalid_argument("fence carrier requires a block atom: '" + node.name + "'");
+            }
+            if (!fence_words.insert(*declaration.fence).second) {
+                throw std::invalid_argument("duplicate fence word '" + *declaration.fence + "'");
+            }
+            node.fence = *declaration.fence;
+        }
+        if (declaration.math) {
+            if (*declaration.math == "inline") {
+                node.math = MathMode::Inline;
+            } else if (*declaration.math == "display") {
+                node.math = MathMode::Display;
+            } else {
+                throw std::invalid_argument("math must be 'inline' or 'display'");
+            }
+            Shape required = node.math == MathMode::Inline ? Shape::InlineAtom : Shape::BlockAtom;
+            if (node.shape != required) {
+                throw std::invalid_argument("math carrier has an incompatible shape for node '" + node.name + "'");
+            }
+            if (!math_modes.insert(*declaration.math).second) {
+                throw std::invalid_argument("duplicate math mode '" + *declaration.math + "'");
+            }
+        }
+    }
     schema->declared_nodes_ = !nodes.empty();
     std::sort(schema->nodes_.begin(), schema->nodes_.end(),
               [](const NodeSpec& left, const NodeSpec& right) { return left.name < right.name; });
@@ -404,9 +447,19 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
             schema->tags_.push_back({node.tag, false,
                                       node.shape == Shape::BlockAtom || node.shape == Shape::BlockContainer, i});
         }
+        if (!node.fence.empty()) {
+            schema->fences_.push_back({node.fence, i});
+        }
+        if (node.math == MathMode::Inline) {
+            schema->inline_math_ = static_cast<int>(i);
+        } else if (node.math == MathMode::Display) {
+            schema->display_math_ = static_cast<int>(i);
+        }
     }
     std::sort(schema->tags_.begin(), schema->tags_.end(),
               [](const TagEntry& left, const TagEntry& right) { return left.tag < right.tag; });
+    std::sort(schema->fences_.begin(), schema->fences_.end(),
+              [](const Schema::FenceEntry& left, const Schema::FenceEntry& right) { return left.word < right.word; });
     return schema;
 }
 

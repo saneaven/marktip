@@ -22,6 +22,7 @@ add_library(marktip_core STATIC
   src/ast.cpp
   src/content.cpp
   src/entities.cpp
+  src/form.cpp
   src/lift.cpp
   src/parser.cpp
   src/policy.cpp

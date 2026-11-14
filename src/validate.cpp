@@ -6,6 +6,7 @@
 
 #include "ast.h"
 #include "errors.h"
+#include "form.h"
 #include "tags.h"
 
 namespace marktip {
@@ -62,6 +63,13 @@ const AttrSpec* find_attr_spec(const std::vector<AttrSpec>& specs, std::string_v
 [[noreturn]] void throw_declared_html(const PathStack& path) {
     throw InvalidNodeError("unrepresentable", "html",
                            "attr 'html' cannot be expressed in markdown: raw HTML is parsed as a declared tag",
+                           format_path(path));
+}
+
+[[noreturn]] void throw_declared_fence(const char* field, const PathStack& path) {
+    throw InvalidNodeError("unrepresentable", field,
+                           "attr '" + std::string(field) +
+                               "' cannot be expressed in markdown: code block is parsed as a declared node",
                            format_path(path));
 }
 
@@ -160,8 +168,17 @@ void check_text_payload(bool present, bool is_string, std::string_view value, co
     }
 }
 
-void check_raw_html(const Node& node, const Schema& schema, const PathStack& path) {
+void check_raw_carriers(const Node& node, const Schema& schema, const PathStack& path) {
     if (!schema.has_tags()) {
+        return;
+    }
+    if (node.type == "codeBlock") {
+        if (schema.has_fences()) {
+            CodeInfo info = code_info(node.attrs);
+            if (schema.fence(info.word) != nullptr) {
+                throw_declared_fence(info.field, path);
+            }
+        }
         return;
     }
     if (node.type != "htmlInline" && node.type != "htmlBlock") {

@@ -44,7 +44,7 @@ void check_top_level_field(const std::string& name, std::string_view owner_type,
                            bool inline_type, const PathStack& path);
 bool node_allows_marks(const NodeSpec& spec);
 void check_text_payload(bool present, bool is_string, std::string_view value, const PathStack& path);
-void check_raw_html(const Node& node, const Schema& schema, const PathStack& path);
+void check_raw_carriers(const Node& node, const Schema& schema, const PathStack& path);
 // A nullptr result means the attr is unset; callers skip value conversion and checking.
 const AttrSpec* check_attr_name(const std::vector<AttrSpec>& specs, const std::string& name, bool is_none,
                                 std::string_view owner_type, const char* kind, StrictMode mode,

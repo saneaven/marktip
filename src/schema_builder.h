@@ -36,6 +36,9 @@ struct NodeDeclaration {
     std::optional<std::string> tag = std::nullopt;
     std::vector<AttrDeclaration> attrs = {};
     bool implicit = false;
+    std::optional<std::string> fence = std::nullopt;
+    std::optional<std::string> math = std::nullopt;
+    std::optional<std::string> body = std::nullopt;
 };
 
 class SchemaBuilder {

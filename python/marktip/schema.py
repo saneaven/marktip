@@ -33,6 +33,9 @@ class NodeSpec:
     tag: str | None = None
     attrs: dict[str, Attr] = field(default_factory=dict)
     implicit: bool = False
+    fence: str | None = None
+    math: str | None = None
+    body: str | None = None
 
 
 def _attr_from_dict(data: dict) -> Attr:
@@ -70,7 +73,8 @@ class Schema(_CompiledSchema):
         self._nodes = nodes
         self._key = (
             tuple((mark.name, mark.tag, _attrs_key(mark.attrs), mark.excludes) for mark in marks),
-            tuple((node.name, node.kind, node.content, node.group, node.tag, _attrs_key(node.attrs), node.implicit)
+            tuple((node.name, node.kind, node.content, node.group, node.tag, _attrs_key(node.attrs), node.implicit,
+                   node.fence, node.math, node.body)
                   for node in nodes),
         )
 
@@ -91,7 +95,8 @@ class Schema(_CompiledSchema):
         if self._nodes:
             declaration["nodes"] = [
                 {"name": node.name, "kind": node.kind, "content": node.content, "group": node.group,
-                 "tag": node.tag, "attrs": _attrs_to_dict(node.attrs), "implicit": node.implicit}
+                 "tag": node.tag, "attrs": _attrs_to_dict(node.attrs), "implicit": node.implicit,
+                 "fence": node.fence, "math": node.math, "body": node.body}
                 for node in self._nodes
             ]
         return declaration
@@ -109,7 +114,7 @@ class Schema(_CompiledSchema):
         nodes = [
             NodeSpec(node.get("name"), node.get("kind"), node.get("content"), node.get("group"), node.get("tag"),
                      {name: _attr_from_dict(attr) for name, attr in node.get("attrs", {}).items()},
-                     node.get("implicit", False))
+                     node.get("implicit", False), node.get("fence"), node.get("math"), node.get("body"))
             for node in data.get("nodes", ())
         ]
         return cls(marks=marks, nodes=nodes)

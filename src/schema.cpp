@@ -128,6 +128,31 @@ bool Schema::has_inline_containers() const {
     return inline_containers_;
 }
 
+bool Schema::has_fences() const {
+    return !fences_.empty();
+}
+
+const NodeSpec* Schema::fence(std::string_view word) const {
+    auto found = std::lower_bound(fences_.begin(), fences_.end(), word,
+                                  [](const FenceEntry& entry, std::string_view value) { return entry.word < value; });
+    if (found == fences_.end() || found->word != word) {
+        return nullptr;
+    }
+    return &nodes_[found->spec];
+}
+
+bool Schema::has_math() const {
+    return inline_math_ >= 0 || display_math_ >= 0;
+}
+
+const NodeSpec* Schema::inline_math() const {
+    return inline_math_ < 0 ? nullptr : &nodes_[inline_math_];
+}
+
+const NodeSpec* Schema::display_math() const {
+    return display_math_ < 0 ? nullptr : &nodes_[display_math_];
+}
+
 const MarkSpec& Schema::mark(std::size_t index) const {
     return marks_[index];
 }

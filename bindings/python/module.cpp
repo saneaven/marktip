@@ -156,6 +156,9 @@ std::vector<marktip::NodeDeclaration> node_declarations_from_py(py::handle value
             throw py::type_error("implicit must be a bool");
         }
         node.implicit = py::cast<bool>(implicit);
+        node.fence = declaration_optional_string(value.attr("fence"), "fence");
+        node.math = declaration_optional_string(value.attr("math"), "math");
+        node.body = declaration_optional_string(value.attr("body"), "body");
         result.push_back(std::move(node));
     }
     return result;
