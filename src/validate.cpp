@@ -1,8 +1,10 @@
 #include "validate.h"
 
 #include <algorithm>
+#include <stdexcept>
 #include <utility>
 
+#include "ast.h"
 #include "errors.h"
 
 namespace marktip {
@@ -20,11 +22,151 @@ bool excludes(const ExcludeSet& set, std::string_view type) {
     return set.all || std::find(set.names.begin(), set.names.end(), type) != set.names.end();
 }
 
+// The schema is small enough that a linear scan beats anything cleverer,
+// and both readers need the same lookup: nullptr when the type does not declare that attr.
+const AttrSpec* find_attr_spec(const std::vector<AttrSpec>& specs, std::string_view name) {
+    for (const AttrSpec& spec : specs) {
+        if (spec.name == name) {
+            return &spec;
+        }
+    }
+    return nullptr;
+}
+
+[[noreturn]] void throw_unknown_field(const std::string& name, std::string_view owner_type, const char* kind,
+                                     const PathStack& path) {
+    throw InvalidNodeError("unknown_field", name,
+                           "field '" + name + "' is not defined for " + kind + " type '" +
+                               std::string(owner_type) + "'",
+                           format_path(path));
+}
+
+[[noreturn]] void throw_missing_attr(const AttrSpec& spec, std::string_view owner_type, const char* kind,
+                                    const PathStack& path) {
+    std::string name(spec.name);
+    throw InvalidNodeError("missing_attr", name,
+                           "attr '" + name + "' is required for " + kind + " type '" +
+                               std::string(owner_type) + "'",
+                           format_path(path));
+}
+
+[[noreturn]] void throw_invalid_child_content(const NodeSpec& parent, const NodeSpec& child,
+                                             const PathStack& path) {
+    throw InvalidNodeError("invalid_content", "content",
+                           "node type '" + parent.name + "' cannot contain node type '" + child.name + "'",
+                           format_path(path));
+}
+
+[[noreturn]] void throw_code_block_marks(const PathStack& path) {
+    throw InvalidNodeError("invalid_content", "marks", "text inside codeBlock must not carry marks",
+                           format_path(path));
+}
+
 }  // namespace
+
+void check_type_present(bool present, std::string_view context, const PathStack& path) {
+    if (!present) {
+        throw InvalidNodeError("missing_type", "type", std::string(context) + " is missing required key 'type'",
+                               format_path(path));
+    }
+}
+
+const NodeSpec* require_node_spec(const Schema& schema, std::string_view type, const PathStack& path) {
+    const NodeSpec* spec = schema.node(type);
+    if (spec == nullptr) {
+        throw UnknownTypeError("node", std::string(type), format_path(path));
+    }
+    return spec;
+}
+
+const MarkSpec* require_mark_spec(const Schema& schema, std::string_view type, const PathStack& path) {
+    const MarkSpec* spec = schema.mark(type);
+    if (spec == nullptr) {
+        throw UnknownTypeError("mark", std::string(type), format_path(path));
+    }
+    return spec;
+}
+
+void check_root_type(std::string_view type, const PathStack& path) {
+    if (type != "doc") {
+        throw InvalidNodeError("invalid_root", "type", "root node must have type 'doc'", format_path(path));
+    }
+}
+
+void check_node_depth(std::size_t depth, const PathStack& path) {
+    if (depth > kMaxNodeDepth) {
+        throw InvalidNodeError("max_depth", "content", "node content nesting exceeds maximum depth",
+                               format_path(path));
+    }
+}
+
+void check_top_level_field(const std::string& name, std::string_view owner_type, const char* kind,
+                           bool inline_type, const PathStack& path) {
+    bool allowed = name == "type" || name == "attrs";
+    if (std::string_view(kind) == "mark") {
+        if (!allowed) {
+            throw_unknown_field(name, owner_type, "mark", path);
+        }
+        return;
+    }
+
+    allowed = allowed || name == "content" || (name == "text" && owner_type == "text") ||
+              (name == "marks" && inline_type);
+    if (!allowed) {
+        throw_unknown_field(name, owner_type, "node", path);
+    }
+}
+
+void check_text_payload(bool present, bool is_string, std::string_view value, const PathStack& path) {
+    if (!present) {
+        throw InvalidNodeError("invalid_content", "text", "text node is missing required field 'text'",
+                               format_path(path));
+    }
+    if (!is_string) {
+        throw InvalidNodeError("invalid_content", "text", "text node field 'text' must be a str", format_path(path));
+    }
+    if (value.empty()) {
+        throw InvalidNodeError("invalid_content", "text", "text node field 'text' must not be empty",
+                               format_path(path));
+    }
+}
+
+const AttrSpec* check_attr_name(const std::vector<AttrSpec>& specs, const std::string& name, bool is_none,
+                                std::string_view owner_type, const char* kind, StrictMode mode,
+                                const PathStack& path) {
+    const AttrSpec* spec = find_attr_spec(specs, name);
+    if (spec == nullptr) {
+        // Outside both dialects: a typo, or a key an app invented and expects to survive.
+        throw InvalidNodeError("unknown_attr", name,
+                               "attr '" + name + "' is not defined for " + kind + " type '" +
+                                   std::string(owner_type) + "'",
+                               format_path(path));
+    }
+    // Unset rather than wrongly typed: this is what the editor submits for an attr nobody filled in,
+    // so refusing it would refuse ordinary editor output.
+    // A Refused attr still fails the value rule below —
+    // Tiptap gives those a non-null default and never emits a null for one,
+    // so a null there is a caller bug worth reporting even though the conversion survives it.
+    if (spec->null == NullAttr::Unset && is_none) {
+        return nullptr;
+    }
+    // Refused before the value is looked at: under Exact the name alone settles it,
+    // and a caller who will not lose a width does not need to hear that this one is malformed too.
+    if (spec->form == MarkdownForm::Dropped && mode == StrictMode::Exact) {
+        throw InvalidNodeError("unrepresentable", name,
+                               "attr '" + name + "' cannot be expressed in markdown: " + spec->why,
+                               format_path(path));
+    }
+    return spec;
+}
 
 bool attr_reads_string(const AttrSpec& spec) {
     return spec.rule == AttrRule::InfoStr || spec.rule == AttrRule::Align ||
            (spec.rule == AttrRule::Str && spec.choices);
+}
+
+bool attr_reads_int_list(const AttrSpec& spec) {
+    return spec.rule == AttrRule::ColWidth;
 }
 
 void check_attr_value(const AttrInput& value, const AttrSpec& spec, const PathStack& path) {
@@ -127,6 +269,48 @@ void check_attr_value(const AttrInput& value, const AttrSpec& spec, const PathSt
     }
 }
 
+// Reads the built AttrList rather than the input dict,
+// so "no such key" and "the key is None" arrive here as one case — attrs_from_py has already dropped the None.
+// A node carrying no attrs dict at all is the third spelling,
+// which is why the caller runs this outside its `attrs` block.
+void check_required_attrs(const AttrList& attrs, const std::vector<AttrSpec>& specs,
+                          std::string_view owner_type, const char* kind, const PathStack& path) {
+    for (const AttrSpec& spec : specs) {
+        if (spec.presence != Presence::Required || find_attr(attrs, spec.name) != nullptr) {
+            continue;
+        }
+        throw_missing_attr(spec, owner_type, kind, path);
+    }
+}
+
+void store_attr(AttrList& attrs, std::string&& name, AttrValue&& value, const std::vector<AttrSpec>& specs) {
+    const AttrSpec* spec = find_attr_spec(specs, name);
+    if (value.kind == AttrValue::Kind::String && (spec == nullptr || spec->uri == UriKind::None)) {
+        value.string_value = normalize_content_string(std::move(value.string_value));
+    }
+    if (spec != nullptr && spec->fallback && value == *spec->fallback) {
+        return;
+    }
+    set_attr(attrs, std::move(name), std::move(value));
+}
+
+void check_content_field(const NodeSpec& spec, const PathStack& path) {
+    if (spec.allow == ContentModel::None) {
+        throw InvalidNodeError("invalid_content", "content", "node type '" + spec.name + "' must not carry content",
+                               format_path(path));
+    }
+}
+
+void check_child_content(const Schema& schema, const NodeSpec& parent, const NodeSpec& child,
+                         const Node& child_node, const PathStack& path) {
+    if (!schema.content_model_allows(parent.allow, child)) {
+        throw_invalid_child_content(parent, child, path);
+    }
+    if (parent.name == "codeBlock" && !child_node.marks.empty()) {
+        throw_code_block_marks(path);
+    }
+}
+
 void check_mark_set(const std::vector<Mark>& existing, const Mark& mark, const Schema& schema,
                     const PathStack& path) {
     if (existing.empty()) {
@@ -145,6 +329,20 @@ void check_mark_set(const std::vector<Mark>& existing, const Mark& mark, const S
             throw InvalidNodeError("invalid_mark_set", "marks", std::move(message), format_path(path));
         }
     }
+}
+
+StrictMode strict_mode_from_string(std::string_view level, const char* arg_name) {
+    if (level == "off") {
+        return StrictMode::Off;
+    }
+    if (level == "content") {
+        return StrictMode::Content;
+    }
+    if (level == "exact") {
+        return StrictMode::Exact;
+    }
+    throw std::invalid_argument(std::string(arg_name) + " must be 'off', 'content' or 'exact', not '" +
+                                std::string(level) + "'");
 }
 
 }  // namespace marktip

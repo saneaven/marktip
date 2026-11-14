@@ -13,9 +13,10 @@ Pinned tag: `release-0.5.3`
 
 ## Non-public API in use
 
-`src/ast.cpp` calls `entity_lookup()` from `entity.h` directly,
+`src/policy.cpp` calls `entity_lookup()` from `entity.h` directly,
 to resolve entity references inside a link `href` / image `src` before the URI policy inspects them.
 MD4C leaves `MD_TEXT_ENTITY` substrings verbatim in `MD_ATTRIBUTE`, so `&#106;avascript:` reaches the AST intact.
+`src/parser.cpp` also calls `entity_lookup()` to decode `MD_TEXT_ENTITY` text into the document.
 `entity.h` is an internal header — it is not covered by MD4C's API stability and carries no `extern "C"` guard.
 An upstream bump therefore has to re-check that `const ENTITY* entity_lookup(const char*, size_t)` and the `&name;` key format still hold.
 

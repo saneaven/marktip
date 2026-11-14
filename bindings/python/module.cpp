@@ -5,7 +5,7 @@
 #include <string>
 
 #include "ast.h"
-#include "parser.h"
+#include "bindings.h"
 #include "schema_builder.h"
 #include "serializer.h"
 
@@ -209,7 +209,7 @@ PYBIND11_MODULE(_core, module) {
         }), py::kw_only(), py::arg("marks") = py::tuple());
 
     py::class_<marktip::Document>(module, "Document")
-        .def("to_dict", &marktip::Document::to_dict, "Convert the document AST to a Tiptap-style JSON dict.")
+        .def("to_dict", &marktip::to_dict_py, "Convert the document AST to a Tiptap-style JSON dict.")
         .def("to_markdown",
              [](const marktip::Document& document) {
                  return marktip::to_markdown(document);

@@ -36,6 +36,8 @@ test = ["pytest>=8"]
 cmake.build-type = "Release"
 wheel.packages = ["python/marktip"]
 sdist.include = [
+  "src/**",
+  "bindings/python/**",
   "third_party/md4c/src/md4c.c",
   "third_party/md4c/src/md4c.h",
   "third_party/md4c/src/cjk.h",
