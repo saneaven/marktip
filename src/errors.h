@@ -50,7 +50,7 @@ private:
 
 // Raised when the input violates the node grammar itself: a missing 'type', a non-dict attrs,
 // a non-list content, a root that is not a doc.
-// Also raised when an attr value is refused outright, as the URI policy does for a link href / image src.
+// Also raised when an attr value is refused outright, as the URI policy does for core and declared URI attrs.
 class InvalidNodeError : public MarktipError {
 public:
     InvalidNodeError(std::string code, std::string field, std::string message, std::string path)
@@ -62,7 +62,7 @@ private:
     // "type" | "attrs" | "marks" | "content" | "text", a strict top-level field,
     // or the offending attr's own name.
     // "marks" also names a strict mark-set conflict located at the offending mark.
-    // ("href" | "src" for the URI policy, any attr/field key under strict).
+    // ("href", "src", or a declared URI attr for the URI policy; any attr/field key under strict).
     std::string field_;
 };
 

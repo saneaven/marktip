@@ -1,0 +1,139 @@
+#include "value.h"
+
+namespace marktip {
+
+// CommonMark replaces an insecure NUL with U+FFFD before parsing. from_dict
+// has to make the same normalization or a dict write can serialize bytes that
+// change the next time its Markdown is parsed. URI fields are deliberately
+// excluded by their caller: raw controls there are an unconditional rejection.
+std::string normalize_content_string(std::string value) {
+    std::size_t nul = value.find('\0');
+    if (nul == std::string::npos) {
+        return value;
+    }
+
+    std::string normalized;
+    normalized.reserve(value.size() + 2);
+    std::size_t start = 0;
+    while (nul != std::string::npos) {
+        normalized.append(value, start, nul - start);
+        normalized.append("\xEF\xBF\xBD");
+        start = nul + 1;
+        nul = value.find('\0', start);
+    }
+    normalized.append(value, start, std::string::npos);
+    return normalized;
+}
+
+AttrValue AttrValue::string(std::string value) {
+    AttrValue attr;
+    attr.kind = Kind::String;
+    attr.string_value = std::move(value);
+    return attr;
+}
+
+AttrValue AttrValue::integer(long long value) {
+    AttrValue attr;
+    attr.kind = Kind::Int;
+    attr.int_value = value;
+    return attr;
+}
+
+AttrValue AttrValue::boolean(bool value) {
+    AttrValue attr;
+    attr.kind = Kind::Bool;
+    attr.bool_value = value;
+    return attr;
+}
+
+bool AttrValue::operator==(const AttrValue& other) const {
+    if (kind != other.kind) {
+        return false;
+    }
+    switch (kind) {
+        case Kind::String:
+            return string_value == other.string_value;
+        case Kind::Int:
+            return int_value == other.int_value;
+        case Kind::Bool:
+            return bool_value == other.bool_value;
+    }
+    return false;
+}
+
+bool Mark::operator==(const Mark& other) const {
+    return type == other.type && attrs == other.attrs;
+}
+
+void set_attr(AttrList& attrs, std::string key, AttrValue value) {
+    for (auto& attr : attrs) {
+        if (attr.first == key) {
+            attr.second = std::move(value);
+            return;
+        }
+    }
+    attrs.emplace_back(std::move(key), std::move(value));
+}
+
+const AttrValue* find_attr(const AttrList& attrs, std::string_view key) {
+    for (const auto& attr : attrs) {
+        if (attr.first == key) {
+            return &attr.second;
+        }
+    }
+    return nullptr;
+}
+
+std::string attr_string(const AttrList& attrs, std::string_view key, std::string fallback) {
+    const AttrValue* attr = find_attr(attrs, key);
+    if (attr == nullptr) {
+        return fallback;
+    }
+    if (attr->kind == AttrValue::Kind::String) {
+        return attr->string_value;
+    }
+    if (attr->kind == AttrValue::Kind::Int) {
+        return std::to_string(attr->int_value);
+    }
+    return attr->bool_value ? "true" : "false";
+}
+
+long long attr_int(const AttrList& attrs, std::string_view key, long long fallback) {
+    const AttrValue* attr = find_attr(attrs, key);
+    if (attr == nullptr) {
+        return fallback;
+    }
+    if (attr->kind == AttrValue::Kind::Int) {
+        return attr->int_value;
+    }
+    if (attr->kind == AttrValue::Kind::Bool) {
+        return attr->bool_value ? 1 : 0;
+    }
+    try {
+        return std::stoll(attr->string_value);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+bool attr_bool(const AttrList& attrs, std::string_view key, bool fallback) {
+    const AttrValue* attr = find_attr(attrs, key);
+    if (attr == nullptr) {
+        return fallback;
+    }
+    if (attr->kind == AttrValue::Kind::Bool) {
+        return attr->bool_value;
+    }
+    if (attr->kind == AttrValue::Kind::Int) {
+        return attr->int_value != 0;
+    }
+    if (attr->string_value == "true" || attr->string_value == "1") {
+        return true;
+    }
+    if (attr->string_value == "false" || attr->string_value == "0") {
+        return false;
+    }
+    return fallback;
+}
+
+}  // namespace marktip

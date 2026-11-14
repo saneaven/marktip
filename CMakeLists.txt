@@ -26,6 +26,10 @@ pybind11_add_module(_core
   src/marktip.cpp
   src/parser.cpp
   src/schema.cpp
+  src/schema_builder.cpp
+  src/tags.cpp
+  src/validate.cpp
+  src/value.cpp
   src/serializer.cpp
 )
 target_link_libraries(_core PRIVATE md4c)

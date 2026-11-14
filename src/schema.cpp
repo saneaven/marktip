@@ -31,14 +31,16 @@ Schema::Schema() {
     const std::vector<AttrSpec> image_attrs = {
         {"alt", AttrRule::Str, NullAttr::Unset},
         {"height", AttrRule::Size, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional, no_image_size},
-        {"src", AttrRule::Str, NullAttr::Unset, MarkdownForm::Carried, Presence::Required},
+        {"src", AttrRule::Str, NullAttr::Unset, MarkdownForm::Carried, Presence::Required, {},
+         std::nullopt, std::nullopt, UriKind::Image},
         {"title", AttrRule::Str, NullAttr::Unset},
         {"width", AttrRule::Size, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional, no_image_size},
     };
     const std::vector<AttrSpec> html_attrs = {{"html", AttrRule::Str}};
     const std::vector<AttrSpec> link_attrs = {
         {"class", AttrRule::Str, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional, no_link_presentation},
-        {"href", AttrRule::Str, NullAttr::Unset, MarkdownForm::Carried, Presence::Required},
+        {"href", AttrRule::Str, NullAttr::Unset, MarkdownForm::Carried, Presence::Required, {},
+         std::nullopt, std::nullopt, UriKind::Link},
         {"rel", AttrRule::Str, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional, no_link_presentation},
         {"target", AttrRule::Str, NullAttr::Unset, MarkdownForm::Dropped, Presence::Optional, no_link_presentation},
         {"title", AttrRule::Str, NullAttr::Unset},
@@ -78,6 +80,9 @@ Schema::Schema() {
         {"link", link_attrs},
         {"strike", {}},
     };
+    for (MarkSpec& mark : marks_) {
+        mark.excludes.names.push_back(mark.name);
+    }
 }
 
 const std::shared_ptr<const Schema>& Schema::gfm() {
@@ -101,6 +106,10 @@ const MarkSpec* Schema::mark(std::string_view type) const {
         return nullptr;
     }
     return &*found;
+}
+
+bool Schema::has_declared_marks() const {
+    return marks_.size() != gfm()->marks_.size();
 }
 
 bool Schema::content_model_allows(ContentModel model, const NodeSpec& child) const {

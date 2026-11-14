@@ -1,9 +1,12 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "value.h"
 
 namespace marktip {
 
@@ -25,6 +28,7 @@ enum class AttrRule {
     Str,        // any str
     InfoStr,    // str, single line: a code fence info string cannot wrap
     Bool,
+    Int,
     Level,      // int 1..6
     ListStart,  // int 0..kMaxListStart
     Count,      // int >= 0
@@ -76,6 +80,8 @@ enum class Presence {
     Required,
 };
 
+enum class UriKind { None, Link, Image };
+
 struct AttrSpec {
     std::string name;
     AttrRule rule;
@@ -83,6 +89,9 @@ struct AttrSpec {
     MarkdownForm form = MarkdownForm::Carried;
     Presence presence = Presence::Optional;
     std::string why = {};  // Dropped only: the reason Exact reports
+    std::optional<std::vector<AttrValue>> choices = std::nullopt;
+    std::optional<AttrValue> fallback = std::nullopt;
+    UriKind uri = UriKind::None;
 };
 
 struct NodeSpec {
@@ -97,9 +106,18 @@ struct NodeSpec {
     bool is_inline;
 };
 
+struct ExcludeSet {
+    bool all = false;
+    std::vector<std::string> names = {};
+};
+
 struct MarkSpec {
     std::string name;
     std::vector<AttrSpec> attrs;
+    bool core = true;
+    std::string tag = {};
+    ExcludeSet excludes = {};
+    std::size_t order = 0;
 };
 
 class Schema {
@@ -108,10 +126,12 @@ public:
 
     const NodeSpec* node(std::string_view type) const;
     const MarkSpec* mark(std::string_view type) const;
+    bool has_declared_marks() const;
 
     bool content_model_allows(ContentModel model, const NodeSpec& child) const;
 
 private:
+    friend class SchemaBuilder;
     Schema();
 
     std::vector<NodeSpec> nodes_;

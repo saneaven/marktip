@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "errors.h"
+#include "schema.h"
+#include "tags.h"
 
 namespace marktip {
 namespace {
@@ -189,7 +191,8 @@ bool has_mark(const std::vector<Mark>& marks, std::string_view type) {
     });
 }
 
-std::string apply_marks(std::string rendered, const std::vector<Mark>& marks, bool skip_code = false) {
+std::string apply_marks(std::string rendered, const std::vector<Mark>& marks, const Schema& schema,
+                        bool skip_code = false) {
     for (auto it = marks.rbegin(); it != marks.rend(); ++it) {
         if (skip_code && it->type == "code") {
             continue;
@@ -207,6 +210,8 @@ std::string apply_marks(std::string rendered, const std::vector<Mark>& marks, bo
             std::string title = mark_attr_string(*it, "title");
             rendered = "[" + rendered + "](" + escape_link_destination(href) +
                        (title.empty() ? "" : " \"" + escape_title(title) + "\"") + ")";
+        } else {
+            rendered = open_tag(schema, *it) + rendered + close_tag(schema, *it);
         }
     }
     return rendered;
@@ -261,7 +266,7 @@ std::size_t first_emphasis_at_or_after(const std::vector<Mark>& marks, std::size
     return marks.size();
 }
 
-std::string open_delimiter(const Mark& mark) {
+std::string open_delimiter(const Mark& mark, const Schema& schema) {
     if (mark.type == "bold") {
         return "**";
     }
@@ -274,10 +279,10 @@ std::string open_delimiter(const Mark& mark) {
     if (mark.type == "link") {
         return "[";
     }
-    return "";
+    return open_tag(schema, mark);
 }
 
-std::string close_delimiter(const Mark& mark) {
+std::string close_delimiter(const Mark& mark, const Schema& schema) {
     if (mark.type == "bold") {
         return "**";
     }
@@ -293,7 +298,7 @@ std::string close_delimiter(const Mark& mark) {
         return "](" + escape_link_destination(href) +
                (title.empty() ? "" : " \"" + escape_title(title) + "\"") + ")";
     }
-    return "";
+    return close_tag(schema, mark);
 }
 
 // Whitespace adjacent to an emphasis delimiter prevents the delimiter from
@@ -354,23 +359,23 @@ void expel_boundary_whitespace(std::vector<InlineRun>& runs) {
 
 // Emit runs keeping shared marks open across run boundaries, so e.g.
 // [a: bold][b: bold+italic] becomes "**a*b***" rather than "**a*****b***".
-std::string emit_runs(const std::vector<InlineRun>& runs) {
+std::string emit_runs(const std::vector<InlineRun>& runs, const Schema& schema) {
     std::string out;
     std::vector<Mark> open;
     for (const InlineRun& run : runs) {
         std::size_t keep = common_prefix(open, run.marks);
         while (open.size() > keep) {
-            out += close_delimiter(open.back());
+            out += close_delimiter(open.back(), schema);
             open.pop_back();
         }
         for (std::size_t j = keep; j < run.marks.size(); ++j) {
-            out += open_delimiter(run.marks[j]);
+            out += open_delimiter(run.marks[j], schema);
             open.push_back(run.marks[j]);
         }
         out += run.content;
     }
     while (!open.empty()) {
-        out += close_delimiter(open.back());
+        out += close_delimiter(open.back(), schema);
         open.pop_back();
     }
     return out;
@@ -378,7 +383,8 @@ std::string emit_runs(const std::vector<InlineRun>& runs) {
 
 class MarkdownWriter {
 public:
-    explicit MarkdownWriter(const Document& document) : document_(document) {}
+    explicit MarkdownWriter(const Document& document)
+        : document_(document), schema_(document.schema()), extended_(schema_.has_declared_marks()) {}
 
     std::string render() {
         if (document_.root().type != "doc") {
@@ -389,6 +395,8 @@ public:
 
 private:
     const Document& document_;
+    const Schema& schema_;
+    bool extended_;
 
     std::string render_doc(const Node& node) {
         return render_blocks(node, 0);
@@ -717,7 +725,7 @@ private:
 
         std::vector<InlineRun> runs = build_runs(node, ctx);
         expel_boundary_whitespace(runs);
-        return emit_runs(runs);
+        return emit_runs(runs, schema_);
     }
 
     std::vector<InlineRun> build_runs(const Node& node, InlineContext ctx) {
@@ -744,6 +752,11 @@ private:
                     run.marks.push_back(mark);
                 }
             }
+            if (extended_) {
+                // Tag marks must enclose delimiters before whitespace is expelled,
+                // so the whitespace keeps its tag marks and emphasis can still flank text.
+                order_tag_marks(run.marks, schema_);
+            }
             run.content = in_code ? code_span(group) : std::move(group);
             runs.push_back(std::move(run));
             i = j;
@@ -754,10 +767,14 @@ private:
     std::string render_inline(const Node& node, InlineContext ctx = InlineContext::Default) {
         bool in_code = has_mark(node.marks, "code");
         std::string rendered = render_inline_content(node, ctx, in_code);
-        if (in_code) {
-            return apply_marks(code_span(rendered), node.marks, true);
+        std::vector<Mark> ordered;
+        const std::vector<Mark>* marks = &node.marks;
+        if (extended_) {
+            ordered = node.marks;
+            order_tag_marks(ordered, schema_);
+            marks = &ordered;
         }
-        return apply_marks(std::move(rendered), node.marks);
+        return apply_marks(in_code ? code_span(rendered) : std::move(rendered), *marks, schema_, in_code);
     }
 
     std::string plain_text(const Node& node) {

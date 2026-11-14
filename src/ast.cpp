@@ -1,5 +1,7 @@
 #include "ast.h"
 #include "schema.h"
+#include "path.h"
+#include "validate.h"
 
 // md4c's named-entity table,
 // used to resolve references inside a link href / image src before the URI policy inspects it.
@@ -16,30 +18,6 @@ namespace py = pybind11;
 
 namespace marktip {
 namespace {
-
-// Breadcrumb into the input dict, e.g. content[0].content[2].marks[1].
-// Segments are static strings so pushing a frame never allocates; the path
-// string is only rendered when an error is actually thrown.
-struct PathFrame {
-    const char* segment;  // "content" | "marks"
-    std::size_t index;
-};
-
-using PathStack = std::vector<PathFrame>;
-
-std::string format_path(const PathStack& path) {
-    std::string out;
-    for (std::size_t i = 0; i < path.size(); ++i) {
-        if (i != 0) {
-            out.push_back('.');
-        }
-        out += path[i].segment;
-        out.push_back('[');
-        out += std::to_string(path[i].index);
-        out.push_back(']');
-    }
-    return out;
-}
 
 bool dict_contains(py::dict dict, const char* key) {
     return PyMapping_HasKeyString(dict.ptr(), key) == 1;
@@ -71,29 +49,6 @@ std::string py_to_string(py::handle value) {
         return "";
     }
     return py::cast<std::string>(py::str(value));
-}
-
-// CommonMark replaces an insecure NUL with U+FFFD before parsing. from_dict
-// has to make the same normalization or a dict write can serialize bytes that
-// change the next time its Markdown is parsed. URI fields are deliberately
-// excluded by their caller: raw controls there are an unconditional rejection.
-std::string normalize_content_string(std::string value) {
-    std::size_t nul = value.find('\0');
-    if (nul == std::string::npos) {
-        return value;
-    }
-
-    std::string normalized;
-    normalized.reserve(value.size() + 2);
-    std::size_t start = 0;
-    while (nul != std::string::npos) {
-        normalized.append(value, start, nul - start);
-        normalized.append("\xEF\xBF\xBD");
-        start = nul + 1;
-        nul = value.find('\0', start);
-    }
-    normalized.append(value, start, std::string::npos);
-    return normalized;
 }
 
 std::string required_type(py::dict value, std::string_view context, const PathStack& path) {
@@ -146,24 +101,27 @@ const AttrSpec* find_attr_spec(const std::vector<AttrSpec>& specs, std::string_v
 // Dropping says the same thing without the invention,
 // and it is what collapses "None" and "no such key" into one shape for everything downstream:
 // strict, the serializer, the URI policy.
-AttrList attrs_from_py(py::dict attrs, std::string_view owner_type, bool owner_is_mark) {
+AttrList attrs_from_py(py::dict attrs, const std::vector<AttrSpec>& specs) {
     AttrList out;
     for (auto item : attrs) {
         std::string name = py_to_string(item.first);
         py::handle value = item.second;
-        if (py::isinstance<py::bool_>(value)) {
-            set_attr(out, std::move(name), AttrValue::boolean(py::cast<bool>(value)));
-        } else if (py::isinstance<py::int_>(value)) {
-            set_attr(out, std::move(name), AttrValue::integer(py::cast<long long>(value)));
-        } else if (py::isinstance<py::str>(value)) {
-            bool is_uri = (owner_is_mark && owner_type == "link" && name == "href") ||
-                          (!owner_is_mark && owner_type == "image" && name == "src");
-            std::string string_value = py::cast<std::string>(value);
-            if (!is_uri) {
-                string_value = normalize_content_string(std::move(string_value));
-            }
-            set_attr(out, std::move(name), AttrValue::string(std::move(string_value)));
+        bool is_bool = py::isinstance<py::bool_>(value);
+        bool is_int = !is_bool && py::isinstance<py::int_>(value);
+        if (!is_bool && !is_int && !py::isinstance<py::str>(value)) {
+            continue;
         }
+        AttrValue attr = is_bool ? AttrValue::boolean(py::cast<bool>(value)) :
+                         is_int ? AttrValue::integer(py::cast<long long>(value)) :
+                                  AttrValue::string(py::cast<std::string>(value));
+        const AttrSpec* spec = find_attr_spec(specs, name);
+        if (attr.kind == AttrValue::Kind::String && (spec == nullptr || spec->uri == UriKind::None)) {
+            attr.string_value = normalize_content_string(std::move(attr.string_value));
+        }
+        if (spec != nullptr && spec->fallback && attr == *spec->fallback) {
+            continue;
+        }
+        set_attr(out, std::move(name), std::move(attr));
     }
     return out;
 }
@@ -288,89 +246,39 @@ bool is_plain_int(py::handle value) {
     return py::isinstance<py::int_>(value) && !py::isinstance<py::bool_>(value);
 }
 
-void check_attr_value(py::handle value, AttrRule rule, const std::string& name, const PathStack& path) {
-    auto expected = [&](const char* what) {
-        throw InvalidNodeError("invalid_attr_value", name, "attr '" + name + "' must be " + what,
-                               format_path(path));
-    };
-    auto unrepresentable = [&](const char* why) {
-        throw InvalidNodeError("unrepresentable", name,
-                               "attr '" + name + "' cannot be expressed in markdown: " + why, format_path(path));
-    };
-
-    long long number = 0;
-    switch (rule) {
-        case AttrRule::Str:
-            if (!py::isinstance<py::str>(value)) {
-                expected("a str");
-            }
-            return;
-        case AttrRule::InfoStr:
-            if (!py::isinstance<py::str>(value)) {
-                expected("a str");
-            }
-            if (py::cast<std::string>(value).find_first_of("\r\n") != std::string::npos) {
-                expected("a single line");
-            }
-            return;
-        case AttrRule::Bool:
-            if (!py::isinstance<py::bool_>(value)) {
-                expected("a bool");
-            }
-            return;
-        case AttrRule::Level:
-            if (!is_plain_int(value) || !as_int(value, number) || number < 1 || number > 6) {
-                expected("an int between 1 and 6");
-            }
-            return;
-        case AttrRule::ListStart:
-            if (!is_plain_int(value) || !as_int(value, number) || number < 0 || number > kMaxListStart) {
-                expected("an int between 0 and 999999999");
-            }
-            return;
-        case AttrRule::Count:
-            if (!is_plain_int(value) || !as_int(value, number) || number < 0) {
-                expected("a non-negative int");
-            }
-            return;
-        case AttrRule::Align:
-            if (value.is_none()) {
-                return;
-            }
-            if (!py::isinstance<py::str>(value)) {
-                expected("'left', 'center', 'right' or None");
-            }
-            {
-                std::string align = py::cast<std::string>(value);
-                if (align != "left" && align != "center" && align != "right") {
-                    expected("'left', 'center', 'right' or None");
-                }
-            }
-            return;
-        case AttrRule::Size:
-            if (!py::isinstance<py::str>(value) && !is_plain_int(value)) {
-                expected("a str or an int");
-            }
-            return;
-        case AttrRule::ColWidth:
-            if (!py::isinstance<py::list>(value)) {
-                expected("a list of ints");
-            }
-            for (py::handle item : py::reinterpret_borrow<py::list>(value)) {
-                if (!is_plain_int(item) || !as_int(item, number)) {
-                    expected("a list of ints");
-                }
-            }
-            return;
-        case AttrRule::NoSpan:
-            if (!is_plain_int(value) || !as_int(value, number)) {
-                expected("an int");
-            }
-            if (number != 1) {
-                unrepresentable("GFM tables have no cell spanning");
-            }
-            return;
+AttrInput attr_input_from_py(py::handle value, const AttrSpec& spec) {
+    if (value.is_none()) {
+        return std::monostate{};
     }
+    if (py::isinstance<py::bool_>(value)) {
+        return py::cast<bool>(value);
+    }
+    if (py::isinstance<py::int_>(value)) {
+        long long number = 0;
+        if (as_int(value, number)) {
+            return number;
+        }
+        return OverflowInt{};
+    }
+    if (py::isinstance<py::str>(value)) {
+        // Type-only rules must reject a wrong-type string before UTF-8 encoding can fail on a lone surrogate.
+        if (attr_reads_string(spec)) {
+            return py::cast<std::string>(value);
+        }
+        return std::string{};
+    }
+    if (spec.rule == AttrRule::ColWidth && py::isinstance<py::list>(value)) {
+        std::vector<long long> numbers;
+        for (py::handle item : py::reinterpret_borrow<py::list>(value)) {
+            long long number = 0;
+            if (!is_plain_int(item) || !as_int(item, number)) {
+                return OtherValue{};
+            }
+            numbers.push_back(number);
+        }
+        return numbers;
+    }
+    return OtherValue{};
 }
 
 void check_attrs_strict(py::dict attrs, const std::vector<AttrSpec>& specs, std::string_view owner_type,
@@ -400,7 +308,7 @@ void check_attrs_strict(py::dict attrs, const std::vector<AttrSpec>& specs, std:
                                    "attr '" + name + "' cannot be expressed in markdown: " + spec->why,
                                    format_path(path));
         }
-        check_attr_value(item.second, spec->rule, name, path);
+        check_attr_value(attr_input_from_py(item.second, *spec), *spec, path);
     }
 }
 
@@ -440,7 +348,7 @@ Mark mark_from_py(py::dict mark_dict, const Schema& schema, StrictMode mode, con
         if (mode != StrictMode::Off) {
             check_attrs_strict(attr_dict, specs, mark.type, "mark", mode, path);
         }
-        mark.attrs = attrs_from_py(attr_dict, mark.type, true);
+        mark.attrs = attrs_from_py(attr_dict, specs);
     }
     // Outside the block above on purpose: a link mark with no attrs key at all
     // is a link with no destination just as much as one whose href is None.
@@ -464,17 +372,7 @@ void fill_marks_from_py(Node& node, py::object marks, const Schema& schema, Stri
         path.push_back({"marks", mark_index});
         Mark mark = mark_from_py(expect_dict(mark_handle, "mark", "marks", path), schema, mode, path);
         if (mode != StrictMode::Off) {
-            // Marktip's standard ProseMirror marks are self-exclusive. This is a strict
-            // semantic check: Off intentionally stores the collection exactly as supplied.
-            bool conflicts = std::any_of(node.marks.begin(), node.marks.end(), [&](const Mark& existing) {
-                return existing.type == mark.type;
-            });
-            if (conflicts) {
-                throw InvalidNodeError("invalid_mark_set", "marks",
-                                       "mark type '" + mark.type +
-                                           "' conflicts with an earlier mark of the same type",
-                                       format_path(path));
-            }
+            check_mark_set(node.marks, mark, schema, path);
         }
         node.marks.push_back(std::move(mark));
         path.pop_back();
@@ -513,7 +411,7 @@ const NodeSpec* fill_node_fields_from_py(Document& document, std::size_t index, 
         if (mode != StrictMode::Off) {
             check_attrs_strict(attr_dict, specs, node.type, "node", mode, path);
         }
-        node.attrs = attrs_from_py(attr_dict, node.type, false);
+        node.attrs = attrs_from_py(attr_dict, specs);
     }
     // Outside the block above: an image with no attrs key at all still has no src.
     if (mode != StrictMode::Off) {
@@ -833,22 +731,15 @@ std::string decode_entities(std::string_view value) {
     return out;
 }
 
-void check_uri(std::string_view raw, const UriRule& rule, const char* what, const char* field,
-               const PathStack& path) {
-    // Decoding is skipped entirely when there is no '&', which is the common case.
-    std::string decoded;
-    std::string_view value = raw;
-    if (raw.find('&') != std::string_view::npos) {
-        decoded = decode_entities(raw);
-        value = decoded;
-    }
-
+template <typename Describe>
+void check_uri_value(std::string_view value, const UriRule& rule, const Describe& describe, const char* field,
+                     const PathStack& path) {
     // Unconditional, policy or not:
     // a control character is never valid in a URI unencoded,
     // and leaving one in would bypass the allowlist itself,
     // since browsers drop tab/LF/CR before reading the scheme ("java\tscript:").
     if (has_control_char(value)) {
-        throw InvalidNodeError("invalid_uri_char", field, std::string(what) + " contains an ASCII control character",
+        throw InvalidNodeError("invalid_uri_char", field, describe() + " contains an ASCII control character",
                                format_path(path));
     }
 
@@ -856,11 +747,11 @@ void check_uri(std::string_view raw, const UriRule& rule, const char* what, cons
     if (!scheme.has_value()) {
         if (rule.relative == RelativePolicy::Reject) {
             throw InvalidNodeError("disallowed_relative_url", field,
-                                   std::string(what) + " must not be a relative reference", format_path(path));
+                                   describe() + " must not be a relative reference", format_path(path));
         }
         if (rule.relative == RelativePolicy::PathOnly && is_protocol_relative(value)) {
             throw InvalidNodeError("disallowed_relative_url", field,
-                                   std::string(what) + " must not be a protocol-relative reference",
+                                   describe() + " must not be a protocol-relative reference",
                                    format_path(path));
         }
         return;
@@ -868,40 +759,81 @@ void check_uri(std::string_view raw, const UriRule& rule, const char* what, cons
 
     if (rule.restrict_schemes && !std::binary_search(rule.schemes.begin(), rule.schemes.end(), *scheme)) {
         throw InvalidNodeError("disallowed_scheme", field,
-                               std::string(what) + " scheme '" + *scheme + "' is not allowed", format_path(path));
+                               describe() + " scheme '" + *scheme + "' is not allowed", format_path(path));
     }
 }
 
-void check_uri_attr(const AttrList& attrs, const char* key, const UriRule& rule, const char* what,
-                    const PathStack& path) {
+template <typename Describe>
+void check_uri(std::string_view raw, const UriRule& rule, const Describe& describe, const char* field,
+               const PathStack& path, bool check_written) {
+    // Decoding is skipped entirely when there is no '&', which is the common case.
+    std::string decoded;
+    std::string_view value = raw;
+    if (raw.find('&') != std::string_view::npos) {
+        // Tag attrs escape '&', so the stored spelling must pass as well as the decoded form.
+        if (check_written) {
+            check_uri_value(raw, rule, describe, field, path);
+        }
+        decoded = decode_entities(raw);
+        value = decoded;
+    }
+    check_uri_value(value, rule, describe, field, path);
+}
+
+template <typename Describe>
+PYBIND11_NOINLINE void check_uri_attr(const AttrList& attrs, const char* key, const UriRule& rule,
+                                    const Describe& describe, const PathStack& path, bool check_written = false) {
     const AttrValue* attr = find_attr(attrs, key);
     if (attr == nullptr) {
-        return;  // a missing href/src stays accepted; the serializer substitutes a default
+        return;  // a missing URI attr stays accepted; strict mode handles required attrs
     }
     if (attr->kind == AttrValue::Kind::String) {
-        check_uri(attr->string_value, rule, what, key, path);
+        check_uri(attr->string_value, rule, describe, key, path, check_written);
         return;
     }
-    // An int/bool href is odd but reachable: from_dict coerces attr values.
-    check_uri(attr_string(attrs, key), rule, what, key, path);
+    // An int/bool URI is odd but reachable: from_dict coerces attr values.
+    check_uri(attr_string(attrs, key), rule, describe, key, path, check_written);
+}
+
+void enforce_mark_uri(const Mark& mark, const Schema& schema, const UriPolicy& policy, const PathStack& path) {
+    const MarkSpec& spec = *schema.mark(mark.type);
+    for (const AttrSpec& attr : spec.attrs) {
+        if (attr.uri == UriKind::None) {
+            continue;
+        }
+        const UriRule& rule = attr.uri == UriKind::Link ? policy.link : policy.image;
+        auto describe = [&]() { return "mark type '" + mark.type + "' attr '" + attr.name + "'"; };
+        check_uri_attr(mark.attrs, attr.name.c_str(), rule, describe, path, true);
+    }
+}
+
+// Keep mark URI checking out of enforce_node's recursive frame for the smaller Windows worker stack.
+PYBIND11_NOINLINE void enforce_marks_uri(const Node& node, const Schema& schema, const UriPolicy& policy,
+                                       PathStack& path) {
+    bool extended = schema.has_declared_marks();
+    // Frame order mirrors fill_node_from_py — marks, then content —
+    // so the same violation reports the same .path whichever entry point built the tree.
+    for (std::size_t i = 0; i < node.marks.size(); ++i) {
+        if (node.marks[i].type == "link") {
+            path.push_back({"marks", i});
+            check_uri_attr(node.marks[i].attrs, "href", policy.link, [] { return std::string("link href"); }, path);
+            path.pop_back();
+        } else if (extended) {
+            path.push_back({"marks", i});
+            enforce_mark_uri(node.marks[i], schema, policy, path);
+            path.pop_back();
+        }
+    }
 }
 
 void enforce_node(const Document& document, std::size_t index, const UriPolicy& policy, PathStack& path) {
     const Node& node = document.node(index);
 
     if (node.type == "image") {
-        check_uri_attr(node.attrs, "src", policy.image, "image src", path);
+        check_uri_attr(node.attrs, "src", policy.image, [] { return std::string("image src"); }, path);
     }
-
-    // Frame order mirrors fill_node_from_py — marks, then content —
-    // so the same violation reports the same .path whichever entry point built the tree.
-    for (std::size_t i = 0; i < node.marks.size(); ++i) {
-        if (node.marks[i].type != "link") {
-            continue;
-        }
-        path.push_back({"marks", i});
-        check_uri_attr(node.marks[i].attrs, "href", policy.link, "link href", path);
-        path.pop_back();
+    if (!node.marks.empty()) {
+        enforce_marks_uri(node, document.schema(), policy, path);
     }
 
     for (std::size_t i = 0; i < node.content.size(); ++i) {
@@ -1013,120 +945,11 @@ void rejected_node_types_from_py(py::handle value, const char* arg_name, const S
 
 }  // namespace
 
-AttrValue AttrValue::string(std::string value) {
-    AttrValue attr;
-    attr.kind = Kind::String;
-    attr.string_value = std::move(value);
-    return attr;
-}
-
-AttrValue AttrValue::integer(long long value) {
-    AttrValue attr;
-    attr.kind = Kind::Int;
-    attr.int_value = value;
-    return attr;
-}
-
-AttrValue AttrValue::boolean(bool value) {
-    AttrValue attr;
-    attr.kind = Kind::Bool;
-    attr.bool_value = value;
-    return attr;
-}
-
-bool AttrValue::operator==(const AttrValue& other) const {
-    if (kind != other.kind) {
-        return false;
-    }
-    switch (kind) {
-        case Kind::String:
-            return string_value == other.string_value;
-        case Kind::Int:
-            return int_value == other.int_value;
-        case Kind::Bool:
-            return bool_value == other.bool_value;
-    }
-    return false;
-}
-
-bool Mark::operator==(const Mark& other) const {
-    return type == other.type && attrs == other.attrs;
-}
-
-void set_attr(AttrList& attrs, std::string key, AttrValue value) {
-    for (auto& attr : attrs) {
-        if (attr.first == key) {
-            attr.second = std::move(value);
-            return;
-        }
-    }
-    attrs.emplace_back(std::move(key), std::move(value));
-}
-
-const AttrValue* find_attr(const AttrList& attrs, std::string_view key) {
-    for (const auto& attr : attrs) {
-        if (attr.first == key) {
-            return &attr.second;
-        }
-    }
-    return nullptr;
-}
-
-std::string attr_string(const AttrList& attrs, std::string_view key, std::string fallback) {
-    const AttrValue* attr = find_attr(attrs, key);
-    if (attr == nullptr) {
-        return fallback;
-    }
-    if (attr->kind == AttrValue::Kind::String) {
-        return attr->string_value;
-    }
-    if (attr->kind == AttrValue::Kind::Int) {
-        return std::to_string(attr->int_value);
-    }
-    return attr->bool_value ? "true" : "false";
-}
-
-long long attr_int(const AttrList& attrs, std::string_view key, long long fallback) {
-    const AttrValue* attr = find_attr(attrs, key);
-    if (attr == nullptr) {
-        return fallback;
-    }
-    if (attr->kind == AttrValue::Kind::Int) {
-        return attr->int_value;
-    }
-    if (attr->kind == AttrValue::Kind::Bool) {
-        return attr->bool_value ? 1 : 0;
-    }
-    try {
-        return std::stoll(attr->string_value);
-    } catch (...) {
-        return fallback;
-    }
-}
-
-bool attr_bool(const AttrList& attrs, std::string_view key, bool fallback) {
-    const AttrValue* attr = find_attr(attrs, key);
-    if (attr == nullptr) {
-        return fallback;
-    }
-    if (attr->kind == AttrValue::Kind::Bool) {
-        return attr->bool_value;
-    }
-    if (attr->kind == AttrValue::Kind::Int) {
-        return attr->int_value != 0;
-    }
-    if (attr->string_value == "true" || attr->string_value == "1") {
-        return true;
-    }
-    if (attr->string_value == "false" || attr->string_value == "0") {
-        return false;
-    }
-    return fallback;
-}
-
 Document::Document() : Document(32) {}
 
-Document::Document(std::size_t reserve_size) : schema_(Schema::gfm()) {
+Document::Document(std::size_t reserve_size) : Document(Schema::gfm(), reserve_size) {}
+
+Document::Document(std::shared_ptr<const Schema> schema, std::size_t reserve_size) : schema_(std::move(schema)) {
     nodes_.reserve(reserve_size == 0 ? 1 : reserve_size);
     Node root_node;
     root_node.type = "doc";
@@ -1162,6 +985,19 @@ std::size_t Document::append_child(std::size_t parent, Node node) {
     std::size_t index = append_node(std::move(node));
     nodes_[parent].content.push_back(index);
     return index;
+}
+
+void Document::order_marks() {
+    for (Node& node : nodes_) {
+        std::stable_sort(node.marks.begin(), node.marks.end(), [&](const Mark& a, const Mark& b) {
+            const MarkSpec& left = *schema_->mark(a.type);
+            const MarkSpec& right = *schema_->mark(b.type);
+            if (left.core != right.core) {
+                return left.core;
+            }
+            return !left.core && left.order < right.order;
+        });
+    }
 }
 
 py::dict Document::to_dict() const {
@@ -1200,13 +1036,21 @@ NodeTypePolicy node_type_policy_from_py(py::object reject_node_types) {
 }
 
 Document from_dict_py(py::dict root, py::object link_schemes, py::object image_schemes, py::object link_relative,
-                      py::object image_relative, py::object reject_node_types, py::object strict) {
+                      py::object image_relative, py::object reject_node_types, py::object strict, py::object schema) {
     // Options are validated before the tree is walked:
     // a bad option value is a caller bug,
     // and should surface whatever the document happens to contain.
     UriPolicy policy = uri_policy_from_py(std::move(link_schemes), std::move(image_schemes), std::move(link_relative),
                                           std::move(image_relative));
-    NodeTypePolicy node_policy = node_type_policy_from_py(std::move(reject_node_types));
+    std::shared_ptr<const Schema> selected_schema = Schema::gfm();
+    if (!schema.is_none()) {
+        if (!py::isinstance<Schema>(schema)) {
+            throw py::type_error("schema must be a Schema or None");
+        }
+        selected_schema = py::cast<std::shared_ptr<const Schema>>(schema);
+    }
+    NodeTypePolicy node_policy;
+    rejected_node_types_from_py(reject_node_types, "reject_node_types", *selected_schema, node_policy);
     StrictMode mode = strict_from_py(strict, "strict");
 
     PathStack path;
@@ -1217,10 +1061,14 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
         throw InvalidNodeError("invalid_root", "type", "root node must have type 'doc'", format_path(path));
     }
 
-    Document document;
+    Document document(std::move(selected_schema));
     fill_node_from_py(document, 0, root, "root node", 0, mode, path);
     enforce_node_type_policy(document, node_policy);
     enforce_uri_policy(document, policy);
+    // URI errors must retain the input mark indices, so marks are ordered after policy checks.
+    if (document.schema().has_declared_marks()) {
+        document.order_marks();
+    }
     return document;
 }
 

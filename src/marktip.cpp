@@ -6,6 +6,7 @@
 
 #include "ast.h"
 #include "parser.h"
+#include "schema_builder.h"
 #include "serializer.h"
 
 namespace py = pybind11;
@@ -24,6 +25,115 @@ py::object make_marktip_error(const py::object& exc_type, const marktip::Marktip
     exc.attr("path") = e.path();
     exc.attr("detail") = std::string(e.what());
     return exc;
+}
+
+std::string declaration_string(py::handle value, const char* field) {
+    if (!py::isinstance<py::str>(value)) {
+        throw py::type_error(std::string(field) + " must be a str");
+    }
+    return py::cast<std::string>(value);
+}
+
+std::optional<std::string> declaration_optional_string(py::handle value, const char* field) {
+    if (value.is_none()) {
+        return std::nullopt;
+    }
+    return declaration_string(value, field);
+}
+
+marktip::AttrValue declaration_value(py::handle value) {
+    if (py::isinstance<py::bool_>(value)) {
+        return marktip::AttrValue::boolean(py::cast<bool>(value));
+    }
+    if (py::isinstance<py::int_>(value)) {
+        int overflow = 0;
+        long long number = PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
+        if (overflow != 0) {
+            PyErr_Clear();
+            throw py::value_error("declaration integer must fit in long long");
+        }
+        return marktip::AttrValue::integer(number);
+    }
+    if (py::isinstance<py::str>(value)) {
+        return marktip::AttrValue::string(declaration_string(value, "declaration value"));
+    }
+    throw py::value_error("declaration values must be str, int or bool");
+}
+
+marktip::AttrRule declaration_rule(py::handle value) {
+    if (value.ptr() == reinterpret_cast<PyObject*>(&PyUnicode_Type)) {
+        return marktip::AttrRule::Str;
+    }
+    if (value.ptr() == reinterpret_cast<PyObject*>(&PyLong_Type)) {
+        return marktip::AttrRule::Int;
+    }
+    if (value.ptr() == reinterpret_cast<PyObject*>(&PyBool_Type)) {
+        return marktip::AttrRule::Bool;
+    }
+    throw py::type_error("Attr.type must be str, int or bool");
+}
+
+std::vector<std::string> declaration_names(py::handle value, const char* field) {
+    std::vector<std::string> names;
+    for (py::handle item : py::reinterpret_borrow<py::object>(value)) {
+        names.push_back(declaration_string(item, field));
+    }
+    return names;
+}
+
+marktip::AttrDeclaration attr_declaration_from_py(const std::string& name, py::handle value) {
+    marktip::AttrDeclaration result;
+    result.name = name;
+    result.rule = declaration_rule(value.attr("type"));
+    py::object required = value.attr("required");
+    if (!py::isinstance<py::bool_>(required)) {
+        throw py::type_error("required must be a bool");
+    }
+    result.required = py::cast<bool>(required);
+    py::object choices = value.attr("choices");
+    if (!choices.is_none()) {
+        if (!py::isinstance<py::tuple>(choices) && !py::isinstance<py::list>(choices)) {
+            throw py::type_error("choices must be a tuple or list");
+        }
+        result.choices.emplace();
+        for (py::handle choice : choices) {
+            result.choices->push_back(declaration_value(choice));
+        }
+    }
+    py::object fallback = value.attr("default");
+    if (!fallback.is_none()) {
+        result.fallback = declaration_value(fallback);
+    }
+    result.uri = declaration_optional_string(value.attr("uri"), "uri");
+    return result;
+}
+
+std::vector<marktip::MarkDeclaration> mark_declarations_from_py(py::handle values) {
+    std::vector<marktip::MarkDeclaration> result;
+    for (py::handle value : py::reinterpret_borrow<py::object>(values)) {
+        marktip::MarkDeclaration mark;
+        mark.name = declaration_string(value.attr("name"), "mark name");
+        mark.tag = declaration_optional_string(value.attr("tag"), "tag");
+        py::object attrs = value.attr("attrs");
+        if (!py::isinstance<py::dict>(attrs)) {
+            throw py::type_error("attrs must be a dict");
+        }
+        for (auto attr : py::reinterpret_borrow<py::dict>(attrs)) {
+            std::string name = declaration_string(attr.first, "attr name");
+            mark.attrs.push_back(attr_declaration_from_py(name, attr.second));
+        }
+        py::object excludes = value.attr("excludes");
+        if (py::isinstance<py::str>(excludes)) {
+            mark.excludes = declaration_string(excludes, "excludes");
+        } else if (!excludes.is_none()) {
+            if (!py::isinstance<py::tuple>(excludes)) {
+                throw py::type_error("excludes must be None, '_' or a tuple of mark names");
+            }
+            mark.excludes = declaration_names(excludes, "excludes entries");
+        }
+        result.push_back(std::move(mark));
+    }
+    return result;
 }
 
 }  // namespace
@@ -93,6 +203,11 @@ PYBIND11_MODULE(_core, module) {
         }
     });
 
+    py::class_<marktip::Schema, std::shared_ptr<marktip::Schema>>(module, "Schema")
+        .def(py::init([](py::object marks) {
+            return marktip::SchemaBuilder::build(mark_declarations_from_py(marks));
+        }), py::kw_only(), py::arg("marks") = py::tuple());
+
     py::class_<marktip::Document>(module, "Document")
         .def("to_dict", &marktip::Document::to_dict, "Convert the document AST to a Tiptap-style JSON dict.")
         .def("to_markdown",
@@ -133,7 +248,9 @@ PYBIND11_MODULE(_core, module) {
     // strict has no from_markdown counterpart on purpose: the parser only ever emits
     // declared fields, valid content relationships and attrs it understands.
     const std::string from_dict_doc =
-        "Build a Document from a Tiptap-style JSON dict." + uri_policy_doc + node_policy_doc +
+        "Build a Document from a Tiptap-style JSON dict."
+        " Pass schema=Schema(...) to include declared marks; None (the default) uses the built-in GFM schema." +
+        uri_policy_doc + node_policy_doc +
         " strict names what the conversion may not lose, rather than converting around everything:"
         " 'off' (the default) checks no attrs at all,"
         " 'content' keeps content and structure and drops presentation only,"
@@ -145,8 +262,8 @@ PYBIND11_MODULE(_core, module) {
         " 'unknown_attr' (a name outside both dialects), 'invalid_attr_value' (wrong type or out of range),"
         " 'unrepresentable' (well-formed, but GFM cannot carry it, e.g. colspan=2)"
         " or 'missing_attr' (a link with no href, an image with no src, which would serialize as '[a]()')."
-        " With strict enabled, a duplicate same-type mark raises InvalidNodeError"
-        " with .field 'marks' and .code 'invalid_mark_set'."
+        " Strict rejects excluded mark combinations and duplicate marks of the same type and attrs."
+        " These raise InvalidNodeError with .field 'marks' and .code 'invalid_mark_set'."
         " Strict also closes node/mark top-level fields and each node's content model;"
         " violations use .code 'unknown_field' or 'invalid_content'."
         " table 'colCount' and a non-header row's 'align' are accepted at every level,"
@@ -163,5 +280,5 @@ PYBIND11_MODULE(_core, module) {
                py::arg("link_schemes") = py::none(), py::arg("image_schemes") = py::none(),
                py::arg("link_relative") = "allow",
                py::arg("image_relative") = "allow", py::arg("reject_node_types") = py::none(),
-               py::arg("strict") = "off", from_dict_doc.c_str());
+               py::arg("strict") = "off", py::arg("schema") = py::none(), from_dict_doc.c_str());
 }

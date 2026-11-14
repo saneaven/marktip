@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "errors.h"
+#include "value.h"
 
 namespace marktip {
 
@@ -19,34 +20,6 @@ class Schema;
 // at build time so those traversals cannot overflow the C stack.
 inline constexpr std::size_t kMaxNodeDepth = 2048;
 
-// CommonMark ordered-list markers are at most 9 digits and cannot be negative.
-// The serializer clamps to this range; strict mode refuses instead.
-inline constexpr long long kMaxListStart = 999999999;
-
-struct AttrValue {
-    enum class Kind { String, Int, Bool };
-
-    Kind kind = Kind::String;
-    std::string string_value;
-    long long int_value = 0;
-    bool bool_value = false;
-
-    static AttrValue string(std::string value);
-    static AttrValue integer(long long value);
-    static AttrValue boolean(bool value);
-
-    bool operator==(const AttrValue& other) const;
-};
-
-using AttrList = std::vector<std::pair<std::string, AttrValue>>;
-
-struct Mark {
-    std::string type;
-    AttrList attrs;
-
-    bool operator==(const Mark& other) const;
-};
-
 struct Node {
     std::string type;
     std::string text;
@@ -55,16 +28,11 @@ struct Node {
     std::vector<std::size_t> content;
 };
 
-void set_attr(AttrList& attrs, std::string key, AttrValue value);
-const AttrValue* find_attr(const AttrList& attrs, std::string_view key);
-std::string attr_string(const AttrList& attrs, std::string_view key, std::string fallback = {});
-long long attr_int(const AttrList& attrs, std::string_view key, long long fallback = 0);
-bool attr_bool(const AttrList& attrs, std::string_view key, bool fallback = false);
-
 class Document {
 public:
     Document();
     explicit Document(std::size_t reserve_size);
+    explicit Document(std::shared_ptr<const Schema> schema, std::size_t reserve_size = 32);
 
     const Node& root() const;
     Node& root();
@@ -75,6 +43,7 @@ public:
     std::size_t append_node(Node node);
     std::size_t append_child(std::size_t parent, Node node);
 
+    void order_marks();
     pybind11::dict to_dict() const;
 
 private:
@@ -107,7 +76,7 @@ struct NodeTypePolicy {
     std::vector<std::string> rejected;
 };
 
-// Rejects ASCII control characters in href/src unconditionally,
+// Rejects ASCII control characters in link href, image src, and declared URI attrs unconditionally,
 // then enforces `policy` on top.
 // Reads nothing but Node/Mark, which hold no pybind11 objects,
 // so this is safe to call with the GIL released (from_markdown does).
@@ -144,6 +113,6 @@ enum class StrictMode {
 // from_markdown to catch.
 Document from_dict_py(pybind11::dict root, pybind11::object link_schemes, pybind11::object image_schemes,
                       pybind11::object link_relative, pybind11::object image_relative,
-                      pybind11::object reject_node_types, pybind11::object strict);
+                      pybind11::object reject_node_types, pybind11::object strict, pybind11::object schema);
 
 }  // namespace marktip
