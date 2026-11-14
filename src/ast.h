@@ -3,6 +3,7 @@
 #include <pybind11/pybind11.h>
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,6 +12,8 @@
 #include "errors.h"
 
 namespace marktip {
+
+class Schema;
 
 // Deep documents are traversed recursively (to_dict, to_markdown); cap nesting
 // at build time so those traversals cannot overflow the C stack.
@@ -67,6 +70,7 @@ public:
     Node& root();
     const Node& node(std::size_t index) const;
     Node& node(std::size_t index);
+    const Schema& schema() const;
 
     std::size_t append_node(Node node);
     std::size_t append_child(std::size_t parent, Node node);
@@ -74,6 +78,7 @@ public:
     pybind11::dict to_dict() const;
 
 private:
+    std::shared_ptr<const Schema> schema_;
     std::vector<Node> nodes_;
 };
 

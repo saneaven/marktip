@@ -25,6 +25,7 @@ pybind11_add_module(_core
   src/ast.cpp
   src/marktip.cpp
   src/parser.cpp
+  src/schema.cpp
   src/serializer.cpp
 )
 target_link_libraries(_core PRIVATE md4c)
