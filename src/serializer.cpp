@@ -386,7 +386,8 @@ std::string emit_runs(const std::vector<InlineRun>& runs, const Schema& schema) 
 class MarkdownWriter {
 public:
     explicit MarkdownWriter(const Document& document)
-        : document_(document), schema_(document.schema()), extended_(schema_.has_declared_marks()) {}
+        : document_(document), schema_(document.schema()), extended_(schema_.has_declared_marks()),
+          declared_nodes_(schema_.has_declared_nodes()), inline_containers_(schema_.has_inline_containers()) {}
 
     std::string render() {
         if (document_.root().type != "doc") {
@@ -399,6 +400,8 @@ private:
     const Document& document_;
     const Schema& schema_;
     bool extended_;
+    bool declared_nodes_;
+    bool inline_containers_;
 
     std::string render_doc(const Node& node) {
         return render_blocks(node, 0);
@@ -468,6 +471,9 @@ private:
             return render_inlines(node);
         }
         if (type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline") {
+            return add_indent(render_inline(node), indent);
+        }
+        if (declared_nodes_ && declared_inline_spec(node) != nullptr) {
             return add_indent(render_inline(node), indent);
         }
         return add_indent(render_blocks(node, indent), 0);
@@ -674,6 +680,8 @@ private:
                 blocks.push_back(render_inlines(child, InlineContext::TableCell));
             } else if (type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline") {
                 blocks.push_back(render_inline(child, InlineContext::TableCell));
+            } else if (declared_nodes_ && declared_inline_spec(child) != nullptr) {
+                blocks.push_back(render_inline(child, InlineContext::TableCell));
             } else {
                 blocks.push_back(render_block(child, 0));
             }
@@ -717,7 +725,27 @@ private:
         if (type == "htmlInline") {
             return attr_string(node.attrs, "html", plain_text(node));
         }
+        if (declared_nodes_) {
+            const NodeSpec& spec = *schema_.node(type);
+            if (!spec.core) {
+                return open_node_tag(spec, node.attrs);
+            }
+        }
         return render_inlines(node, ctx);
+    }
+
+    const NodeSpec* declared_inline_spec(const Node& node) const {
+        const std::string& type = node.type;
+        if (type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline") {
+            return nullptr;
+        }
+        const NodeSpec& spec = *schema_.node(type);
+        return spec.core ? nullptr : &spec;
+    }
+
+    bool declared_inline_atom(const Node& node) const {
+        const NodeSpec* spec = declared_inline_spec(node);
+        return spec != nullptr && spec->shape == Shape::InlineAtom;
     }
 
     std::string render_inlines(const Node& node, InlineContext ctx = InlineContext::Default) {
@@ -725,23 +753,55 @@ private:
             return render_inline(node, ctx);
         }
 
-        std::vector<InlineRun> runs = build_runs(node, ctx);
+        if (inline_containers_) {
+            return render_inline_segments(node.content, ctx);
+        }
+        return render_inline_segment(node.content, 0, node.content.size(), ctx);
+    }
+
+    std::string render_inline_segment(const std::vector<std::size_t>& content, std::size_t begin, std::size_t end,
+                                      InlineContext ctx) {
+        std::vector<InlineRun> runs = build_runs(content, begin, end, ctx);
         expel_boundary_whitespace(runs);
         return emit_runs(runs, schema_);
     }
 
-    std::vector<InlineRun> build_runs(const Node& node, InlineContext ctx) {
+    std::string render_inline_segments(const std::vector<std::size_t>& content, InlineContext ctx) {
+        std::string out;
+        std::size_t begin = 0;
+        for (std::size_t i = 0; i < content.size(); ++i) {
+            const Node& child = document_.node(content[i]);
+            const NodeSpec* spec = declared_inline_spec(child);
+            if (spec == nullptr || spec->shape != Shape::InlineContainer) {
+                continue;
+            }
+            // Container tags close the surrounding marks before the inner inline sequence starts.
+            out += render_inline_segment(content, begin, i, ctx);
+            out += open_node_tag(*spec, child.attrs) + render_inlines(child, ctx) + close_node_tag(*spec);
+            begin = i + 1;
+        }
+        out += render_inline_segment(content, begin, content.size(), ctx);
+        return out;
+    }
+
+    std::vector<InlineRun> build_runs(const std::vector<std::size_t>& content, std::size_t begin, std::size_t end,
+                                      InlineContext ctx) {
         std::vector<InlineRun> runs;
-        const std::vector<std::size_t>& content = node.content;
-        std::size_t i = 0;
-        while (i < content.size()) {
+        std::size_t i = begin;
+        while (i < end) {
             const Node& first = document_.node(content[i]);
             bool in_code = has_mark(first.marks, "code");
+            bool code_atom = in_code && declared_nodes_ && declared_inline_atom(first);
+            in_code = in_code && !code_atom;
+            std::size_t group_end = code_atom ? i + 1 : end;
             std::string group;
             std::size_t j = i;
-            while (j < content.size()) {
+            while (j < group_end) {
                 const Node& child = document_.node(content[j]);
                 if (!(child.marks == first.marks)) {
+                    break;
+                }
+                if (in_code && declared_nodes_ && declared_inline_atom(child)) {
                     break;
                 }
                 group += render_inline_content(child, ctx, in_code);
@@ -767,7 +827,15 @@ private:
     }
 
     std::string render_inline(const Node& node, InlineContext ctx = InlineContext::Default) {
+        const NodeSpec* spec = declared_nodes_ ? declared_inline_spec(node) : nullptr;
+        if (spec != nullptr && spec->shape == Shape::InlineContainer) {
+            return open_node_tag(*spec, node.attrs) + render_inlines(node, ctx) + close_node_tag(*spec);
+        }
         bool in_code = has_mark(node.marks, "code");
+        bool skip_code = in_code;
+        if (spec != nullptr) {
+            in_code = false;
+        }
         std::string rendered = render_inline_content(node, ctx, in_code);
         std::vector<Mark> ordered;
         const std::vector<Mark>* marks = &node.marks;
@@ -776,7 +844,7 @@ private:
             order_tag_marks(ordered, schema_);
             marks = &ordered;
         }
-        return apply_marks(in_code ? code_span(rendered) : std::move(rendered), *marks, schema_, in_code);
+        return apply_marks(in_code ? code_span(rendered) : std::move(rendered), *marks, schema_, skip_code);
     }
 
     std::string plain_text(const Node& node) {

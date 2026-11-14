@@ -37,7 +37,7 @@ except ImportError:  # pragma: no cover - development-only CMake build fallback
     from_dict = _module.from_dict
     from_markdown = _module.from_markdown
 
-from .schema import Attr, MarkSpec, Schema
+from .schema import Attr, MarkSpec, NodeSpec, Schema
 
 
 __all__ = [
@@ -45,6 +45,7 @@ __all__ = [
     "Document",
     "Attr",
     "MarkSpec",
+    "NodeSpec",
     "Schema",
     "MarktipError",
     "UnknownTypeError",

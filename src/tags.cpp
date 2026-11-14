@@ -167,6 +167,35 @@ void append_escaped_attr(std::string& out, std::string_view value) {
     }
 }
 
+std::string open_tag(const std::vector<AttrSpec>& specs, const std::string& tag, const AttrList& attrs,
+                     bool self_closing) {
+    std::string out = "<" + tag;
+    for (const AttrSpec& attr : specs) {
+        const AttrValue* value = find_attr(attrs, attr.name);
+        if (value == nullptr) {
+            continue;
+        }
+        out += " " + attr.name + "=\"";
+        switch (value->kind) {
+            case AttrValue::Kind::String:
+                append_escaped_attr(out, value->string_value);
+                break;
+            case AttrValue::Kind::Int:
+                out += std::to_string(value->int_value);
+                break;
+            case AttrValue::Kind::Bool:
+                out += value->bool_value ? "true" : "false";
+                break;
+        }
+        out.push_back('"');
+    }
+    if (self_closing) {
+        out.push_back('/');
+    }
+    out.push_back('>');
+    return out;
+}
+
 }  // namespace
 
 std::vector<HtmlConstruct> tokenize_html(std::string_view html) {
@@ -242,32 +271,19 @@ bool starts_declared_tag(std::string_view html, const Schema& schema) {
 
 std::string open_tag(const Schema& schema, const Mark& mark) {
     const MarkSpec& spec = *schema.mark(mark.type);
-    std::string out = "<" + spec.tag;
-    for (const AttrSpec& attr : spec.attrs) {
-        const AttrValue* value = find_attr(mark.attrs, attr.name);
-        if (value == nullptr) {
-            continue;
-        }
-        out += " " + attr.name + "=\"";
-        switch (value->kind) {
-            case AttrValue::Kind::String:
-                append_escaped_attr(out, value->string_value);
-                break;
-            case AttrValue::Kind::Int:
-                out += std::to_string(value->int_value);
-                break;
-            case AttrValue::Kind::Bool:
-                out += value->bool_value ? "true" : "false";
-                break;
-        }
-        out.push_back('"');
-    }
-    out.push_back('>');
-    return out;
+    return open_tag(spec.attrs, spec.tag, mark.attrs, false);
 }
 
 std::string close_tag(const Schema& schema, const Mark& mark) {
     return "</" + schema.mark(mark.type)->tag + ">";
+}
+
+std::string open_node_tag(const NodeSpec& spec, const AttrList& attrs) {
+    return open_tag(spec.attrs, spec.tag, attrs, spec.shape == Shape::InlineAtom);
+}
+
+std::string close_node_tag(const NodeSpec& spec) {
+    return "</" + spec.tag + ">";
 }
 
 void order_tag_marks(std::vector<Mark>& marks, const Schema& schema) {

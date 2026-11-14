@@ -99,6 +99,10 @@ const NodeSpec* Schema::node(std::string_view type) const {
     return &*found;
 }
 
+const NodeSpec& Schema::node(std::size_t index) const {
+    return nodes_[index];
+}
+
 const MarkSpec* Schema::mark(std::string_view type) const {
     auto found = std::lower_bound(marks_.begin(), marks_.end(), type,
                                   [](const MarkSpec& spec, std::string_view name) { return spec.name < name; });
@@ -112,8 +116,20 @@ bool Schema::has_declared_marks() const {
     return marks_.size() != gfm()->marks_.size();
 }
 
+bool Schema::has_declared_nodes() const {
+    return declared_nodes_;
+}
+
+bool Schema::has_inline_containers() const {
+    return inline_containers_;
+}
+
 const MarkSpec& Schema::mark(std::size_t index) const {
     return marks_[index];
+}
+
+const ContentDFA& Schema::content(int index) const {
+    return content_[index];
 }
 
 const TagEntry* Schema::tag(std::string_view name) const {

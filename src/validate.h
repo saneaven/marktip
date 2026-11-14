@@ -13,6 +13,7 @@
 namespace marktip {
 
 struct Node;
+class Document;
 
 // What `strict` promises to preserve, rather than what it happens to accept.
 //
@@ -41,6 +42,7 @@ void check_root_type(std::string_view type, const PathStack& path);
 void check_node_depth(std::size_t depth, const PathStack& path);
 void check_top_level_field(const std::string& name, std::string_view owner_type, const char* kind,
                            bool inline_type, const PathStack& path);
+bool node_allows_marks(const NodeSpec& spec);
 void check_text_payload(bool present, bool is_string, std::string_view value, const PathStack& path);
 void check_raw_html(const Node& node, const Schema& schema, const PathStack& path);
 // A nullptr result means the attr is unset; callers skip value conversion and checking.
@@ -56,6 +58,8 @@ void store_attr(AttrList& attrs, std::string&& name, AttrValue&& value, const st
 void check_content_field(const NodeSpec& spec, const PathStack& path);
 void check_child_content(const Schema& schema, const NodeSpec& parent, const NodeSpec& child,
                          const Node& child_node, const PathStack& path);
+void check_node_marks(const Node& node, const NodeSpec& spec, const PathStack& path);
+void check_node_content(const Document& document, std::size_t index, const NodeSpec& spec, const PathStack& path);
 bool excludes(const ExcludeSet& set, std::string_view type);
 void check_mark_set(const std::vector<Mark>& existing, const Mark& mark, const Schema& schema,
                     const PathStack& path);

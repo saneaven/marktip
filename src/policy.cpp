@@ -173,21 +173,41 @@ MARKTIP_NOINLINE void check_uri_attr(const AttrList& attrs, const char* key, con
     check_uri(attr_string(attrs, key), rule, describe, key, path, check_written);
 }
 
-void enforce_mark_uri(const Mark& mark, const Schema& schema, const UriPolicy& policy, const PathStack& path) {
-    const MarkSpec& spec = *schema.mark(mark.type);
-    for (const AttrSpec& attr : spec.attrs) {
+template <typename DescribeOwner>
+void enforce_declared_uri(const std::vector<AttrSpec>& specs, const AttrList& attrs,
+                          const DescribeOwner& describe_owner, const UriPolicy& policy, const PathStack& path) {
+    for (const AttrSpec& attr : specs) {
         if (attr.uri == UriKind::None) {
             continue;
         }
         const UriRule& rule = attr.uri == UriKind::Link ? policy.link : policy.image;
-        auto describe = [&]() { return "mark type '" + mark.type + "' attr '" + attr.name + "'"; };
-        check_uri_attr(mark.attrs, attr.name.c_str(), rule, describe, path, true);
+        auto describe = [&]() { return describe_owner() + " attr '" + attr.name + "'"; };
+        check_uri_attr(attrs, attr.name.c_str(), rule, describe, path, true);
     }
 }
 
-// Keep mark URI checking out of enforce_node's recursive frame for the smaller Windows worker stack.
-MARKTIP_NOINLINE void enforce_marks_uri(const Node& node, const Schema& schema, const UriPolicy& policy,
-                                       PathStack& path) {
+void enforce_mark_uri(const Mark& mark, const Schema& schema, const UriPolicy& policy, const PathStack& path) {
+    const MarkSpec& spec = *schema.mark(mark.type);
+    auto describe_owner = [&]() { return "mark type '" + mark.type + "'"; };
+    enforce_declared_uri(spec.attrs, mark.attrs, describe_owner, policy, path);
+}
+
+void enforce_declared_node_uri(const Node& node, const Schema& schema, const UriPolicy& policy,
+                               const PathStack& path) {
+    const NodeSpec& spec = *schema.node(node.type);
+    if (spec.core) {
+        return;
+    }
+    auto describe_owner = [&]() { return "node type '" + node.type + "'"; };
+    enforce_declared_uri(spec.attrs, node.attrs, describe_owner, policy, path);
+}
+
+// Keep node/mark URI checking out of enforce_node's recursive frame for the smaller Windows worker stack.
+MARKTIP_NOINLINE void enforce_fields_uri(const Node& node, const Schema& schema, const UriPolicy& policy,
+                                        PathStack& path) {
+    if (schema.has_declared_nodes()) {
+        enforce_declared_node_uri(node, schema, policy, path);
+    }
     bool extended = schema.has_declared_marks();
     // Frame order mirrors fill_node_from_py — marks, then content —
     // so the same violation reports the same .path whichever entry point built the tree.
@@ -210,8 +230,8 @@ void enforce_node(const Document& document, std::size_t index, const UriPolicy& 
     if (node.type == "image") {
         check_uri_attr(node.attrs, "src", policy.image, [] { return std::string("image src"); }, path);
     }
-    if (!node.marks.empty()) {
-        enforce_marks_uri(node, document.schema(), policy, path);
+    if (!node.marks.empty() || document.schema().has_declared_nodes()) {
+        enforce_fields_uri(node, document.schema(), policy, path);
     }
 
     for (std::size_t i = 0; i < node.content.size(); ++i) {

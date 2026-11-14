@@ -65,6 +65,16 @@ const AttrSpec* find_attr_spec(const std::vector<AttrSpec>& specs, std::string_v
                            format_path(path));
 }
 
+[[noreturn]] void throw_atom_code_marks(const NodeSpec& spec, const PathStack& path) {
+    throw InvalidNodeError("invalid_mark_set", "marks",
+                           "node type '" + spec.name + "' must not carry a code mark", format_path(path));
+}
+
+[[noreturn]] void throw_declared_content(const NodeSpec& spec, const PathStack& path) {
+    throw InvalidNodeError("invalid_content", "content",
+                           "node type '" + spec.name + "' does not match its content expression", format_path(path));
+}
+
 }  // namespace
 
 void check_type_present(bool present, std::string_view context, const PathStack& path) {
@@ -118,6 +128,10 @@ void check_top_level_field(const std::string& name, std::string_view owner_type,
     if (!allowed) {
         throw_unknown_field(name, owner_type, "node", path);
     }
+}
+
+bool node_allows_marks(const NodeSpec& spec) {
+    return spec.core ? spec.is_inline : spec.shape == Shape::InlineAtom;
 }
 
 void check_text_payload(bool present, bool is_string, std::string_view value, const PathStack& path) {
@@ -311,7 +325,7 @@ void store_attr(AttrList& attrs, std::string&& name, AttrValue&& value, const st
 }
 
 void check_content_field(const NodeSpec& spec, const PathStack& path) {
-    if (spec.allow == ContentModel::None) {
+    if (spec.allow == ContentModel::None && spec.dfa < 0) {
         throw InvalidNodeError("invalid_content", "content", "node type '" + spec.name + "' must not carry content",
                                format_path(path));
     }
@@ -319,11 +333,37 @@ void check_content_field(const NodeSpec& spec, const PathStack& path) {
 
 void check_child_content(const Schema& schema, const NodeSpec& parent, const NodeSpec& child,
                          const Node& child_node, const PathStack& path) {
+    if (parent.dfa >= 0) {
+        return;
+    }
     if (!schema.content_model_allows(parent.allow, child)) {
         throw_invalid_child_content(parent, child, path);
     }
-    if (parent.name == "codeBlock" && !child_node.marks.empty()) {
+    if (parent.allow == ContentModel::Text && !child_node.marks.empty()) {
         throw_code_block_marks(path);
+    }
+}
+
+void check_node_marks(const Node& node, const NodeSpec& spec, const PathStack& path) {
+    if (!spec.core && spec.shape == Shape::InlineAtom &&
+        std::any_of(node.marks.begin(), node.marks.end(), [](const Mark& mark) { return mark.type == "code"; })) {
+        throw_atom_code_marks(spec, path);
+    }
+}
+
+// Keep the complete child sequence out of the recursive dict and lift frames.
+void check_node_content(const Document& document, std::size_t index, const NodeSpec& spec, const PathStack& path) {
+    if (spec.dfa < 0) {
+        return;
+    }
+    const Node& node = document.node(index);
+    std::vector<std::string_view> children;
+    children.reserve(node.content.size());
+    for (std::size_t child : node.content) {
+        children.push_back(document.node(child).type);
+    }
+    if (!document.schema().content(spec.dfa).match(children)) {
+        throw_declared_content(spec, path);
     }
 }
 

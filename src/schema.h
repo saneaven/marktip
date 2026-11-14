@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "content.h"
 #include "value.h"
 
 namespace marktip {
@@ -94,6 +95,8 @@ struct AttrSpec {
     UriKind uri = UriKind::None;
 };
 
+enum class Shape { InlineAtom, InlineContainer };
+
 struct NodeSpec {
     std::string name;
     std::vector<AttrSpec> attrs;
@@ -104,6 +107,10 @@ struct NodeSpec {
     // they have children but may only appear under the parent that names them.
     bool is_block;
     bool is_inline;
+    bool core = true;
+    std::string tag = {};
+    Shape shape = Shape::InlineAtom;
+    int dfa = -1;
 };
 
 struct ExcludeSet {
@@ -122,6 +129,7 @@ struct MarkSpec {
 
 struct TagEntry {
     std::string tag;
+    bool is_mark;
     std::size_t spec;
 };
 
@@ -130,12 +138,16 @@ public:
     static const std::shared_ptr<const Schema>& gfm();
 
     const NodeSpec* node(std::string_view type) const;
+    const NodeSpec& node(std::size_t index) const;
     const MarkSpec* mark(std::string_view type) const;
     const MarkSpec& mark(std::size_t index) const;
+    const ContentDFA& content(int index) const;
     const TagEntry* tag(std::string_view name) const;
     const std::vector<TagEntry>& tags() const;
     bool has_tags() const;
     bool has_declared_marks() const;
+    bool has_declared_nodes() const;
+    bool has_inline_containers() const;
 
     bool content_model_allows(ContentModel model, const NodeSpec& child) const;
 
@@ -145,7 +157,10 @@ private:
 
     std::vector<NodeSpec> nodes_;
     std::vector<MarkSpec> marks_;
+    std::vector<ContentDFA> content_;
     std::vector<TagEntry> tags_;
+    bool declared_nodes_ = false;
+    bool inline_containers_ = false;
 };
 
 }  // namespace marktip

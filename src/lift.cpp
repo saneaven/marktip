@@ -51,12 +51,13 @@ AttrInput decode_attr_input(const HtmlAttr& attr, const AttrSpec& spec) {
     return number;
 }
 
-Mark decode_mark_tag(const HtmlConstruct& tag, const MarkSpec& spec, const PathStack& path) {
-    Mark mark {spec.name, {}};
+AttrList decode_tag_attrs(const HtmlConstruct& tag, const std::vector<AttrSpec>& specs,
+                          std::string_view type, const char* kind, const PathStack& path) {
+    AttrList attrs;
     std::vector<std::string_view> seen;
     for (const HtmlAttr& attr : tag.attrs) {
         std::string name(attr.name);
-        const AttrSpec& attr_spec = *check_attr_name(spec.attrs, name, false, spec.name, "mark",
+        const AttrSpec& attr_spec = *check_attr_name(specs, name, false, type, kind,
                                                     StrictMode::Content, path);
         if (std::find(seen.begin(), seen.end(), attr.name) != seen.end()) {
             throw InvalidNodeError("invalid_attr_value", name, "attr '" + name + "' is repeated", format_path(path));
@@ -72,25 +73,38 @@ Mark decode_mark_tag(const HtmlConstruct& tag, const MarkSpec& spec, const PathS
         } else {
             value = AttrValue::boolean(std::get<bool>(input));
         }
-        store_attr(mark.attrs, std::move(name), std::move(value), spec.attrs);
+        store_attr(attrs, std::move(name), std::move(value), specs);
     }
-    check_required_attrs(mark.attrs, spec.attrs, spec.name, "mark", path);
+    check_required_attrs(attrs, specs, type, kind, path);
     AttrList ordered_attrs;
-    for (const AttrSpec& attr_spec : spec.attrs) {
-        auto attr = std::find_if(mark.attrs.begin(), mark.attrs.end(), [&](const auto& entry) {
+    for (const AttrSpec& attr_spec : specs) {
+        auto attr = std::find_if(attrs.begin(), attrs.end(), [&](const auto& entry) {
             return entry.first == attr_spec.name;
         });
-        if (attr != mark.attrs.end()) {
+        if (attr != attrs.end()) {
             ordered_attrs.push_back(std::move(*attr));
         }
     }
-    mark.attrs = std::move(ordered_attrs);
-    return mark;
+    return ordered_attrs;
 }
 
 struct OpenMark {
     const MarkSpec* spec;
     Mark mark;
+};
+
+enum class InlinePieceKind { Node, Atom, OpenContainer, CloseContainer };
+
+struct InlinePiece {
+    InlinePieceKind kind;
+    std::size_t node;
+    const NodeSpec* spec;
+};
+
+struct InlineParent {
+    std::size_t node;
+    const NodeSpec* spec;
+    std::vector<std::size_t> content;
 };
 
 [[noreturn]] void invalid_tag(std::string message, const PathStack& path) {
@@ -126,7 +140,7 @@ void append_inline(Document& document, std::vector<std::size_t>& content, std::s
     content.push_back(index);
 }
 
-void append_raw(Document& document, std::vector<std::size_t>& content, std::string value,
+void append_raw(Document& document, std::vector<InlinePiece>& pieces, std::string value,
                  const std::vector<Mark>& core, const std::vector<Mark>& effective, bool html,
                  const PathStack& path) {
     if (value.empty()) {
@@ -140,20 +154,80 @@ void append_raw(Document& document, std::vector<std::size_t>& content, std::stri
     }
     apply_declared_marks(node.marks, effective, document.schema(), path);
     std::size_t index = document.append_node(std::move(node));
-    append_inline(document, content, index);
+    pieces.push_back({InlinePieceKind::Node, index, nullptr});
+}
+
+void check_lift_depth(std::size_t depth) {
+    if (depth > kMaxNodeDepth) {
+        throw ParseError("markdown_max_depth", "markdown nesting exceeds maximum depth");
+    }
+}
+
+void build_containers(Document& document, std::size_t index, const NodeSpec& parent_spec,
+                       const std::vector<InlinePiece>& pieces, std::vector<std::size_t> content,
+                       PathStack& path) {
+    // Reuse the parsed child storage instead of allocating another list for the inline parent.
+    content.clear();
+    InlineParent current {index, &parent_spec, std::move(content)};
+    std::vector<InlineParent> parents;
+    std::size_t parent_depth = path.size();
+    for (const InlinePiece& piece : pieces) {
+        if (piece.kind == InlinePieceKind::CloseContainer) {
+            if (parents.empty() || current.spec != piece.spec) {
+                path.resize(parent_depth);
+                invalid_tag("closing tag '</" + piece.spec->tag + ">' has no matching opening container", path);
+            }
+            std::size_t node = current.node;
+            document.node(node).content = std::move(current.content);
+            check_node_content(document, node, *piece.spec, path);
+            current = std::move(parents.back());
+            parents.pop_back();
+            check_child_content(document.schema(), *current.spec, *piece.spec, document.node(node), path);
+            append_inline(document, current.content, node);
+            path.pop_back();
+            continue;
+        }
+
+        if (piece.kind == InlinePieceKind::OpenContainer) {
+            path.push_back({"content", current.content.size()});
+            check_lift_depth(path.size());
+            parents.push_back(std::move(current));
+            current = {piece.node, piece.spec, {}};
+            continue;
+        }
+        if (piece.kind == InlinePieceKind::Atom) {
+            path.push_back({"content", current.content.size()});
+            if (!parents.empty()) {
+                check_lift_depth(path.size());
+            }
+            check_child_content(document.schema(), *current.spec, *piece.spec, document.node(piece.node), path);
+            path.pop_back();
+        } else if (!parents.empty()) {
+            check_lift_depth(path.size() + 1);
+        }
+        append_inline(document, current.content, piece.node);
+    }
+    if (!parents.empty()) {
+        const NodeSpec& opening = *(parents.size() == 1 ? current.spec : parents[1].spec);
+        path.resize(parent_depth);
+        invalid_tag("opening tag '<" + opening.tag + ">' has no matching closing container", path);
+    }
+    document.node(index).content = std::move(current.content);
 }
 
 // Clang otherwise inlines this state into lift_node, exhausting small worker stacks on deep documents.
-MARKTIP_NOINLINE void process_inline(Document& document, std::size_t index, bool html, const PathStack& path) {
-    std::vector<std::size_t> original = document.node(index).content;
-    std::vector<std::size_t> content;
+MARKTIP_NOINLINE void process_inline(Document& document, std::size_t index, const NodeSpec& parent_spec,
+                                     bool html, PathStack& path) {
+    std::vector<std::size_t> original = std::move(document.node(index).content);
+    std::vector<InlinePiece> pieces;
+    pieces.reserve(original.size());
     std::vector<OpenMark> open;
     std::vector<Mark> effective;
     const Schema& schema = document.schema();
     for (std::size_t child : original) {
         if (document.node(child).type != "htmlInline") {
             apply_declared_marks(document.node(child).marks, effective, schema, path);
-            append_inline(document, content, child);
+            pieces.push_back({InlinePieceKind::Node, child, nullptr});
             continue;
         }
 
@@ -166,8 +240,31 @@ MARKTIP_NOINLINE void process_inline(Document& document, std::size_t index, bool
                 raw.append(token.raw.data(), token.raw.size());
                 continue;
             }
-            append_raw(document, content, std::move(raw), core, effective, html, path);
+            append_raw(document, pieces, std::move(raw), core, effective, html, path);
             raw.clear();
+
+            if (!tag->is_mark) {
+                const NodeSpec& spec = schema.node(tag->spec);
+                if (spec.shape == Shape::InlineContainer && token.closing && !token.self_closing) {
+                    pieces.push_back({InlinePieceKind::CloseContainer, 0, &spec});
+                    continue;
+                }
+                if (token.closing || (spec.shape == Shape::InlineContainer && token.self_closing)) {
+                    invalid_tag("invalid carrier tag for node type '" + spec.name + "'", path);
+                }
+                Node node;
+                node.type = spec.name;
+                node.attrs = decode_tag_attrs(token, spec.attrs, spec.name, "node", path);
+                InlinePieceKind kind = InlinePieceKind::OpenContainer;
+                if (spec.shape == Shape::InlineAtom) {
+                    node.marks = core;
+                    apply_declared_marks(node.marks, effective, schema, path);
+                    kind = InlinePieceKind::Atom;
+                }
+                std::size_t node_index = document.append_node(std::move(node));
+                pieces.push_back({kind, node_index, &spec});
+                continue;
+            }
 
             const MarkSpec& spec = schema.mark(tag->spec);
             if (token.self_closing) {
@@ -175,7 +272,8 @@ MARKTIP_NOINLINE void process_inline(Document& document, std::size_t index, bool
                                 std::string(token.name) + "/>' must not be self-closing", path);
             }
             if (!token.closing) {
-                Mark mark = decode_mark_tag(token, spec, path);
+                check_lift_depth(open.size() + 1);
+                Mark mark {spec.name, decode_tag_attrs(token, spec.attrs, spec.name, "mark", path)};
                 if (excludes(spec.excludes, spec.name)) {
                     auto previous = std::find_if(effective.begin(), effective.end(), [&](const Mark& current) {
                         return current.type == spec.name;
@@ -214,17 +312,20 @@ MARKTIP_NOINLINE void process_inline(Document& document, std::size_t index, bool
                 }
             }
         }
-        append_raw(document, content, std::move(raw), core, effective, html, path);
+        append_raw(document, pieces, std::move(raw), core, effective, html, path);
     }
     if (!open.empty()) {
         invalid_tag("opening tag '<" + open.front().spec->tag + ">' has no matching closing tag", path);
     }
-    document.node(index).content = std::move(content);
+    // Mark pairs are resolved over the flat sequence before containers add structure.
+    // Heap-backed parent frames also let excessive tag nesting fail before recursive traversal.
+    build_containers(document, index, parent_spec, pieces, std::move(original), path);
 }
 
 void lift_node(Document& document, std::size_t index, bool html, PathStack& path) {
-    if (document.schema().node(document.node(index).type)->allow == ContentModel::Inlines) {
-        process_inline(document, index, html, path);
+    const NodeSpec& spec = *document.schema().node(document.node(index).type);
+    if (spec.allow == ContentModel::Inlines) {
+        process_inline(document, index, spec, html, path);
         return;
     }
     for (std::size_t i = 0; i < document.node(index).content.size(); ++i) {

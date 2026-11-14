@@ -28,9 +28,18 @@ struct MarkDeclaration {
     ExcludeDeclaration excludes = {};
 };
 
+struct NodeDeclaration {
+    std::string name;
+    std::string kind;
+    std::optional<std::string> content = std::nullopt;
+    std::optional<std::string> group = std::nullopt;
+    std::optional<std::string> tag = std::nullopt;
+    std::vector<AttrDeclaration> attrs = {};
+};
+
 class SchemaBuilder {
 public:
-    static std::shared_ptr<Schema> build(std::vector<MarkDeclaration> marks);
+    static std::shared_ptr<Schema> build(std::vector<MarkDeclaration> marks, std::vector<NodeDeclaration> nodes);
 };
 
 }  // namespace marktip

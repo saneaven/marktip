@@ -604,6 +604,21 @@ def test_two_thousand_nonexclusive_nested_marks_parse_in_under_one_second():
     assert elapsed < 1.0, f"2000 nested nonexclusive marks took {elapsed:.3f}s"
 
 
+def test_nonexclusive_mark_nesting_uses_the_existing_depth_limit():
+    depth = 2048
+    schema = tm.Schema(marks=[tm.MarkSpec("comment", attrs={"id": tm.Attr(int)}, excludes=())])
+    opening = "".join(f'<comment id="{index}">' for index in range(depth))
+    closing = "</comment>" * depth
+    parsed = tm.from_markdown(opening + "x" + closing, schema=schema)
+    marks = parsed.to_dict()["content"][0]["content"][0]["marks"]
+    assert len(marks) == depth
+
+    with pytest.raises(tm.ParseError) as excinfo:
+        tm.from_markdown(opening + f'<comment id="{depth}">x</comment>' + closing, schema=schema)
+    assert excinfo.value.code == "markdown_max_depth"
+    assert excinfo.value.path == ""
+
+
 def assert_tag_boundary_whitespace_normalizes_once(emphasis, delimiter, html):
     schema = underline_schema()
     first = tm.from_markdown(f"{delimiter}a <u>b</u>{delimiter}", schema=schema, html=html)

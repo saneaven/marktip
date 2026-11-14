@@ -108,20 +108,25 @@ marktip::AttrDeclaration attr_declaration_from_py(const std::string& name, py::h
     return result;
 }
 
+std::vector<marktip::AttrDeclaration> attr_declarations_from_py(py::handle values) {
+    if (!py::isinstance<py::dict>(values)) {
+        throw py::type_error("attrs must be a dict");
+    }
+    std::vector<marktip::AttrDeclaration> attrs;
+    for (auto attr : py::reinterpret_borrow<py::dict>(values)) {
+        std::string name = declaration_string(attr.first, "attr name");
+        attrs.push_back(attr_declaration_from_py(name, attr.second));
+    }
+    return attrs;
+}
+
 std::vector<marktip::MarkDeclaration> mark_declarations_from_py(py::handle values) {
     std::vector<marktip::MarkDeclaration> result;
     for (py::handle value : py::reinterpret_borrow<py::object>(values)) {
         marktip::MarkDeclaration mark;
         mark.name = declaration_string(value.attr("name"), "mark name");
         mark.tag = declaration_optional_string(value.attr("tag"), "tag");
-        py::object attrs = value.attr("attrs");
-        if (!py::isinstance<py::dict>(attrs)) {
-            throw py::type_error("attrs must be a dict");
-        }
-        for (auto attr : py::reinterpret_borrow<py::dict>(attrs)) {
-            std::string name = declaration_string(attr.first, "attr name");
-            mark.attrs.push_back(attr_declaration_from_py(name, attr.second));
-        }
+        mark.attrs = attr_declarations_from_py(value.attr("attrs"));
         py::object excludes = value.attr("excludes");
         if (py::isinstance<py::str>(excludes)) {
             mark.excludes = declaration_string(excludes, "excludes");
@@ -132,6 +137,21 @@ std::vector<marktip::MarkDeclaration> mark_declarations_from_py(py::handle value
             mark.excludes = declaration_names(excludes, "excludes entries");
         }
         result.push_back(std::move(mark));
+    }
+    return result;
+}
+
+std::vector<marktip::NodeDeclaration> node_declarations_from_py(py::handle values) {
+    std::vector<marktip::NodeDeclaration> result;
+    for (py::handle value : py::reinterpret_borrow<py::object>(values)) {
+        marktip::NodeDeclaration node;
+        node.name = declaration_string(value.attr("name"), "node name");
+        node.kind = declaration_string(value.attr("kind"), "kind");
+        node.content = declaration_optional_string(value.attr("content"), "content");
+        node.group = declaration_optional_string(value.attr("group"), "group");
+        node.tag = declaration_optional_string(value.attr("tag"), "tag");
+        node.attrs = attr_declarations_from_py(value.attr("attrs"));
+        result.push_back(std::move(node));
     }
     return result;
 }
@@ -204,9 +224,9 @@ PYBIND11_MODULE(_core, module) {
     });
 
     py::class_<marktip::Schema, std::shared_ptr<marktip::Schema>>(module, "Schema")
-        .def(py::init([](py::object marks) {
-            return marktip::SchemaBuilder::build(mark_declarations_from_py(marks));
-        }), py::kw_only(), py::arg("marks") = py::tuple());
+        .def(py::init([](py::object marks, py::object nodes) {
+            return marktip::SchemaBuilder::build(mark_declarations_from_py(marks), node_declarations_from_py(nodes));
+        }), py::kw_only(), py::arg("marks") = py::tuple(), py::arg("nodes") = py::tuple());
 
     py::class_<marktip::Document>(module, "Document")
         .def("to_dict", &marktip::to_dict_py, "Convert the document AST to a Tiptap-style JSON dict.")
@@ -240,20 +260,22 @@ PYBIND11_MODULE(_core, module) {
     // pybind11 takes the doc as a bare const char* and only copies it while def() runs.
     const std::string from_markdown_doc =
         "Parse Markdown into a Document."
-        " Pass schema=Schema(...) to recognize declared tag marks; None (the default) uses the built-in GFM schema."
-        " Declared tag attrs and mark sets are validated while reading."
+        " Pass schema=Schema(...) to recognize declared tag marks and inline nodes;"
+        " None (the default) uses the built-in GFM schema."
+        " Declared tag attrs, mark sets and content expressions are validated while reading."
         " Malformed declared tags raise InvalidNodeError with .code 'invalid_tag' and a document path."
         " Set cjk_friendly=True to use CJK-friendly emphasis and strikethrough rules"
         " (non-standard extension; the default follows GFM/CommonMark exactly)."
         " Set html=False to parse raw HTML as literal text instead of htmlBlock/htmlInline nodes;"
         " <br> inside table cells still maps to hardBreak."
-        " Declared tag marks are recognized even when html=False." +
+        " Declared tags are recognized even when html=False." +
         uri_policy_doc + node_policy_doc;
     // strict has no from_markdown counterpart on purpose: the parser only ever emits
     // declared fields, valid content relationships and attrs it understands.
     const std::string from_dict_doc =
         "Build a Document from a Tiptap-style JSON dict."
-        " Pass schema=Schema(...) to include declared marks; None (the default) uses the built-in GFM schema." +
+        " Pass schema=Schema(...) to include declared marks and inline nodes;"
+        " None (the default) uses the built-in GFM schema." +
         uri_policy_doc + node_policy_doc +
         " strict names what the conversion may not lose, rather than converting around everything:"
         " 'off' (the default) checks no attrs at all,"
@@ -268,6 +290,8 @@ PYBIND11_MODULE(_core, module) {
         " or 'missing_attr' (a link with no href, an image with no src, which would serialize as '[a]()')."
         " Strict rejects excluded mark combinations and duplicate marks of the same type and attrs."
         " These raise InvalidNodeError with .field 'marks' and .code 'invalid_mark_set'."
+        " A declared inline atom also refuses the code mark with .code 'invalid_mark_set'."
+        " A declared inline container refuses a marks field with .code 'unknown_field'."
         " Strict rejects htmlInline containing a declared tag and htmlBlock beginning with one."
         " These use .code 'unrepresentable', .field 'html' and .path locating the raw HTML node."
         " Strict also closes node/mark top-level fields and each node's content model;"

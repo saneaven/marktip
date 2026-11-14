@@ -291,7 +291,7 @@ const NodeSpec* fill_node_fields_from_py(Document& document, std::size_t index, 
     const NodeSpec* spec = require_node_spec(schema, node.type, path);
 
     if (mode != StrictMode::Off) {
-        check_top_level_fields(node_dict, node.type, "node", spec->is_inline, path);
+        check_top_level_fields(node_dict, node.type, "node", node_allows_marks(*spec), path);
         if (node.type == "text") {
             check_text_payload_py(node_dict, path);
         }
@@ -321,6 +321,9 @@ const NodeSpec* fill_node_fields_from_py(Document& document, std::size_t index, 
         expect_list(marks, "node marks", "marks", path);
     }
     fill_marks_from_py(node, marks, schema, mode, path);
+    if (mode != StrictMode::Off && !spec->core) {
+        check_node_marks(node, *spec, path);
+    }
 
     document.node(index) = std::move(node);
     return spec;
@@ -335,6 +338,9 @@ const NodeSpec* fill_node_from_py(Document& document, std::size_t index, py::dic
     bool has_content = dict_contains(node_dict, "content");
     py::object content = dict_get(node_dict, "content");
     if (!has_content || (content.is_none() && mode == StrictMode::Off)) {
+        if (mode != StrictMode::Off && !spec->core) {
+            check_node_content(document, index, *spec, path);
+        }
         return spec;
     }
 
@@ -353,6 +359,9 @@ const NodeSpec* fill_node_from_py(Document& document, std::size_t index, py::dic
         }
         path.pop_back();
         ++child_pos;
+    }
+    if (mode != StrictMode::Off && !spec->core) {
+        check_node_content(document, index, *spec, path);
     }
     return spec;
 }
