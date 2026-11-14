@@ -95,7 +95,7 @@ struct AttrSpec {
     UriKind uri = UriKind::None;
 };
 
-enum class Shape { InlineAtom, InlineContainer };
+enum class Shape { InlineAtom, InlineContainer, BlockAtom, BlockContainer, TextBlock };
 
 struct NodeSpec {
     std::string name;
@@ -108,6 +108,7 @@ struct NodeSpec {
     bool is_block;
     bool is_inline;
     bool core = true;
+    bool implicit = false;
     std::string tag = {};
     Shape shape = Shape::InlineAtom;
     int dfa = -1;
@@ -130,6 +131,7 @@ struct MarkSpec {
 struct TagEntry {
     std::string tag;
     bool is_mark;
+    bool block_line = false;
     std::size_t spec;
 };
 
@@ -142,6 +144,8 @@ public:
     const MarkSpec* mark(std::string_view type) const;
     const MarkSpec& mark(std::size_t index) const;
     const ContentDFA& content(int index) const;
+    const std::vector<std::string>& creatable_types() const;
+    const std::vector<std::string>* minimum_content(const NodeSpec& spec) const;
     const TagEntry* tag(std::string_view name) const;
     const std::vector<TagEntry>& tags() const;
     bool has_tags() const;
@@ -158,6 +162,8 @@ private:
     std::vector<NodeSpec> nodes_;
     std::vector<MarkSpec> marks_;
     std::vector<ContentDFA> content_;
+    std::vector<std::optional<std::vector<std::string>>> minimum_;
+    std::vector<std::string> creatable_;
     std::vector<TagEntry> tags_;
     bool declared_nodes_ = false;
     bool inline_containers_ = false;

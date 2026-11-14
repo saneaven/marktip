@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 
 namespace marktip {
@@ -249,6 +251,7 @@ private:
 struct NFAEdge {
     const std::vector<std::size_t>* types;
     std::size_t next;
+    std::size_t priority;
 };
 
 struct NFAState {
@@ -284,7 +287,7 @@ std::vector<NFAState> compile_nfa(const std::vector<Expr>& expressions, std::opt
         tasks.pop_back();
         const Expr& expr = expressions[task.expression];
         if (expr.kind == ExprKind::Name) {
-            states[task.from].edges.push_back({&expr.types, task.to});
+            states[task.from].edges.push_back({&expr.types, task.to, task.expression});
         } else if (expr.kind == ExprKind::Sequence) {
             std::size_t middle = state();
             tasks.push_back({expr.right, middle, task.to});
@@ -343,6 +346,47 @@ std::vector<std::size_t> closure(const std::vector<NFAState>& nfa, std::vector<s
     return result;
 }
 
+std::vector<std::string> required_once_types(const std::vector<Expr>& expressions,
+                                             std::optional<std::size_t> root,
+                                             const std::vector<ContentType>& types) {
+    struct Task {
+        std::size_t expression;
+        bool required;
+    };
+    std::vector<Task> tasks;
+    if (root) {
+        tasks.push_back({*root, true});
+    }
+    std::vector<std::size_t> occurrences(types.size());
+    std::vector<bool> required(types.size());
+    while (!tasks.empty()) {
+        Task task = tasks.back();
+        tasks.pop_back();
+        const Expr& expr = expressions[task.expression];
+        if (expr.kind == ExprKind::Name) {
+            for (std::size_t type : expr.types) {
+                ++occurrences[type];
+                required[type] = task.required && expr.types.size() == 1;
+            }
+        } else if (expr.kind == ExprKind::Sequence) {
+            tasks.push_back({expr.right, task.required});
+            tasks.push_back({expr.left, task.required});
+        } else if (expr.kind == ExprKind::Choice) {
+            tasks.push_back({expr.right, false});
+            tasks.push_back({expr.left, false});
+        } else {
+            tasks.push_back({expr.left, false});
+        }
+    }
+    std::vector<std::string> names;
+    for (std::size_t i = 0; i < types.size(); ++i) {
+        if (occurrences[i] == 1 && required[i]) {
+            names.push_back(types[i].name);
+        }
+    }
+    return names;
+}
+
 }  // namespace
 
 ContentDFA compile_content(std::string_view expression, const std::vector<ContentType>& types) {
@@ -352,6 +396,19 @@ ContentDFA compile_content(std::string_view expression, const std::vector<Conten
     std::vector<NFAState> nfa = compile_nfa(parser.expressions(), root, budget);
     ContentDFA result;
     result.inline_content = parser.inline_content();
+    std::vector<bool> referenced(types.size());
+    for (const Expr& expr : parser.expressions()) {
+        if (expr.kind != ExprKind::Name) {
+            continue;
+        }
+        for (std::size_t type : expr.types) {
+            if (!referenced[type]) {
+                result.referenced_types.push_back(types[type].name);
+                referenced[type] = true;
+            }
+        }
+    }
+    result.required_once_types = required_once_types(parser.expressions(), root, types);
     std::vector<std::vector<std::size_t>> subsets;
     std::map<std::vector<std::size_t>, std::size_t> known;
     auto state = [&](std::vector<std::size_t> subset) {
@@ -371,16 +428,24 @@ ContentDFA compile_content(std::string_view expression, const std::vector<Conten
     for (std::size_t i = 0; i < subsets.size(); ++i) {
         std::vector<std::vector<std::size_t>> targets(types.size());
         std::vector<std::size_t> outgoing;
+        std::vector<std::pair<std::size_t, std::size_t>> priorities(
+            types.size(), {parser.expressions().size(), types.size()});
         for (std::size_t source : subsets[i]) {
             for (const NFAEdge& edge : nfa[source].edges) {
-                for (std::size_t type : *edge.types) {
+                for (std::size_t j = 0; j < edge.types->size(); ++j) {
+                    std::size_t type = (*edge.types)[j];
                     if (targets[type].empty()) {
                         outgoing.push_back(type);
                     }
+                    priorities[type] = std::min(priorities[type], std::make_pair(edge.priority, j));
                     targets[type].push_back(edge.next);
                 }
             }
         }
+        // DFA subsets discard syntax order, which must still decide between possible fills.
+        std::sort(outgoing.begin(), outgoing.end(), [&](std::size_t left, std::size_t right) {
+            return priorities[left] < priorities[right];
+        });
         std::vector<ContentDFA::Transition> transitions;
         for (std::size_t type : outgoing) {
             std::size_t next = state(closure(nfa, std::move(targets[type])));
@@ -422,6 +487,75 @@ bool ContentDFA::idempotent(std::string_view type) const {
         }
     }
     return true;
+}
+
+bool ContentDFA::accepts_type(std::string_view type) const {
+    return std::any_of(states.begin(), states.end(), [&](const State& state) {
+        return std::any_of(state.transitions.begin(), state.transitions.end(), [&](const Transition& transition) {
+            return transition.type == type;
+        });
+    });
+}
+
+bool ContentDFA::required_once(std::string_view type) const {
+    return std::find(required_once_types.begin(), required_once_types.end(), type) != required_once_types.end();
+}
+
+std::optional<std::vector<ContentFill>> ContentDFA::fill(const std::vector<std::string_view>& children,
+                                                         const std::vector<std::string>& creatable) const {
+    struct Frame {
+        std::size_t state;
+        std::size_t position;
+        std::size_t next = 0;
+        bool original_tried = false;
+    };
+    std::unordered_set<std::string_view> allowed(creatable.begin(), creatable.end());
+    // A creatable repetition must not keep inserting forever when the next original child cannot fit.
+    std::set<std::pair<std::size_t, std::size_t>> seen;
+    seen.insert({0, 0});
+    std::vector<Frame> frames {{0, 0}};
+    std::vector<ContentFill> filled;
+    while (!frames.empty()) {
+        Frame& frame = frames.back();
+        const State& state = states[frame.state];
+        if (frame.position == children.size() && state.accepting) {
+            return filled;
+        }
+        if (!frame.original_tried) {
+            frame.original_tried = true;
+            if (frame.position < children.size()) {
+                std::string_view type = children[frame.position];
+                auto transition = std::find_if(state.transitions.begin(), state.transitions.end(),
+                                                [&](const Transition& candidate) { return candidate.type == type; });
+                if (transition != state.transitions.end() &&
+                    seen.insert({transition->next, frame.position + 1}).second) {
+                    filled.push_back({std::string(type), frame.position});
+                    frames.push_back({transition->next, frame.position + 1});
+                    continue;
+                }
+            }
+        }
+        bool descended = false;
+        while (frame.next < state.transitions.size()) {
+            const Transition& transition = state.transitions[frame.next++];
+            if (allowed.find(transition.type) == allowed.end() ||
+                !seen.insert({transition.next, frame.position}).second) {
+                continue;
+            }
+            filled.push_back({transition.type, std::nullopt});
+            frames.push_back({transition.next, frame.position});
+            descended = true;
+            break;
+        }
+        if (descended) {
+            continue;
+        }
+        frames.pop_back();
+        if (!frames.empty()) {
+            filled.pop_back();
+        }
+    }
+    return std::nullopt;
 }
 
 }  // namespace marktip

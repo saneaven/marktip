@@ -135,8 +135,8 @@ def test_extend_adds_marks_and_nodes_without_changing_the_base():
         base.extend(marks=[tm.MarkSpec("mention", tag="other")])
 
 
-@pytest.mark.parametrize("kind", ["block", "other", "", "INLINE"])
-def test_only_inline_node_kinds_are_available_in_this_checkpoint(kind):
+@pytest.mark.parametrize("kind", ["other", "", "INLINE"])
+def test_unsupported_node_kinds_are_rejected(kind):
     with pytest.raises(ValueError):
         tm.Schema(nodes=[tm.NodeSpec("custom", kind=kind)])
 

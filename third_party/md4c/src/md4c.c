@@ -5537,11 +5537,11 @@ static const TAG xx[] = { Xend };
 #undef X
 #undef Xend
 
-/* MARKTIP LOCAL PATCH: A declared tag must not start a raw HTML block,
- * which would prevent Markdown inside it from being parsed.
+/* MARKTIP LOCAL PATCH: Declared tags bypass ordinary raw HTML blocks,
+ * which would prevent Markdown inside them from being parsed.
  */
-static int
-md_is_typed_tag(MD_CTX* ctx, OFF beg)
+static const MD_TYPED_TAG*
+md_find_typed_tag(MD_CTX* ctx, OFF beg)
 {
     OFF off = beg + 1;
     OFF name_beg;
@@ -5552,19 +5552,19 @@ md_is_typed_tag(MD_CTX* ctx, OFF beg)
     if(off < ctx->size  &&  CH(off) == _T('/'))
         off++;
     if(off >= ctx->size  ||  !ISALPHA(off))
-        return FALSE;
+        return NULL;
 
     name_beg = off++;
     while(off < ctx->size  &&  (ISALNUM(off) || CH(off) == _T('-')))
         off++;
     if(off < ctx->size  &&  !ISWHITESPACE(off)  &&  !ISNEWLINE(off)
         &&  CH(off) != _T('/')  &&  CH(off) != _T('>'))
-        return FALSE;
+        return NULL;
     name_len = off - name_beg;
 
     while(first < last) {
         unsigned mid = first + (last - first) / 2;
-        const CHAR* name = ctx->parser.typed_tags[mid];
+        const CHAR* name = ctx->parser.typed_tags[mid].name;
         OFF i = 0;
         int cmp;
 
@@ -5572,7 +5572,7 @@ md_is_typed_tag(MD_CTX* ctx, OFF beg)
             i++;
         if(i == name_len) {
             if(name[i] == _T('\0'))
-                return TRUE;
+                return &ctx->parser.typed_tags[mid];
             cmp = -1;
         } else {
             cmp = (name[i] == _T('\0') || CH(name_beg + i) > name[i]) ? 1 : -1;
@@ -5583,7 +5583,7 @@ md_is_typed_tag(MD_CTX* ctx, OFF beg)
         else
             first = mid + 1;
     }
-    return FALSE;
+    return NULL;
 }
 
 /* Returns type of the raw HTML block, or FALSE if it is not HTML block.
@@ -6286,27 +6286,45 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
         }
 
         /* Check for start of raw HTML block. */
-        if(off < ctx->size  &&  CH(off) == _T('<')
-            /* MARKTIP LOCAL PATCH: Keep every declared tag out of all HTML block start conditions. */
-            &&  (ctx->parser.n_typed_tags == 0 || !md_is_typed_tag(ctx, off))
-            &&  !(ctx->parser.flags & MD_FLAG_NOHTMLBLOCKS))
-        {
-            ctx->html_block_type = md_is_html_block_start_condition(ctx, off);
+        if(off < ctx->size  &&  CH(off) == _T('<')) {
+            /* MARKTIP LOCAL PATCH: Dedicated block-tag lines must interrupt paragraphs,
+             * while other declared tags stay out of all HTML block start conditions.
+             */
+            const MD_TYPED_TAG* typed_tag = (ctx->parser.n_typed_tags > 0 ? md_find_typed_tag(ctx, off) : NULL);
+            if(typed_tag != NULL) {
+                if(typed_tag->block_line  &&  line->indent < 4) {
+                    OFF end;
 
-            /* HTML block type 7 cannot interrupt paragraph. */
-            if(ctx->html_block_type == 7  &&  pivot_line->type == MD_LINE_TEXT)
-                ctx->html_block_type = 0;
-
-            if(ctx->html_block_type > 0) {
-                /* The line itself also may immediately close the block. */
-                if(md_is_html_block_end_condition(ctx, off, &off) == ctx->html_block_type) {
-                    /* Make sure this is the last line of the block. */
-                    ctx->html_block_type = 0;
+                    if(md_is_html_tag(ctx, NULL, 0, off, ctx->size, &end)) {
+                        while(end < ctx->size  &&  ISWHITESPACE(end))
+                            end++;
+                        if(end >= ctx->size  ||  ISNEWLINE(end)) {
+                            off = end;
+                            ctx->html_block_type = 0;
+                            line->enforce_new_block = TRUE;
+                            line->type = MD_LINE_HTML;
+                            break;
+                        }
+                    }
                 }
+            } else if(!(ctx->parser.flags & MD_FLAG_NOHTMLBLOCKS)) {
+                ctx->html_block_type = md_is_html_block_start_condition(ctx, off);
 
-                line->enforce_new_block = TRUE;
-                line->type = MD_LINE_HTML;
-                break;
+                /* HTML block type 7 cannot interrupt paragraph. */
+                if(ctx->html_block_type == 7  &&  pivot_line->type == MD_LINE_TEXT)
+                    ctx->html_block_type = 0;
+
+                if(ctx->html_block_type > 0) {
+                    /* The line itself also may immediately close the block. */
+                    if(md_is_html_block_end_condition(ctx, off, &off) == ctx->html_block_type) {
+                        /* Make sure this is the last line of the block. */
+                        ctx->html_block_type = 0;
+                    }
+
+                    line->enforce_new_block = TRUE;
+                    line->type = MD_LINE_HTML;
+                    break;
+                }
             }
         }
 

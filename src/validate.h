@@ -57,7 +57,7 @@ void check_required_attrs(const AttrList& attrs, const std::vector<AttrSpec>& sp
 void store_attr(AttrList& attrs, std::string&& name, AttrValue&& value, const std::vector<AttrSpec>& specs);
 void check_content_field(const NodeSpec& spec, const PathStack& path);
 void check_child_content(const Schema& schema, const NodeSpec& parent, const NodeSpec& child,
-                         const Node& child_node, const PathStack& path);
+                         const Node& child_node, std::size_t siblings, const PathStack& path);
 void check_node_marks(const Node& node, const NodeSpec& spec, const PathStack& path);
 void check_node_content(const Document& document, std::size_t index, const NodeSpec& spec, const PathStack& path);
 bool excludes(const ExcludeSet& set, std::string_view type);

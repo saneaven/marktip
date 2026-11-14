@@ -355,7 +355,8 @@ const NodeSpec* fill_node_from_py(Document& document, std::size_t index, py::dic
         std::size_t child_index = document.append_child(index, Node{});
         const NodeSpec* child = fill_node_from_py(document, child_index, child_dict, "node", depth + 1, mode, path);
         if (mode != StrictMode::Off) {
-            check_child_content(document.schema(), *spec, *child, document.node(child_index), path);
+            check_child_content(document.schema(), *spec, *child, document.node(child_index),
+                                content_list.size(), path);
         }
         path.pop_back();
         ++child_pos;

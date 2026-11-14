@@ -742,10 +742,10 @@ int text_callback(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* use
 Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
                            std::shared_ptr<const Schema> schema) {
     replace_nul(markdown);
-    std::vector<const MD_CHAR*> typed_tags;
+    std::vector<MD_TYPED_TAG> typed_tags;
     if (schema->has_tags()) {
         for (const TagEntry& entry : schema->tags()) {
-            typed_tags.push_back(entry.tag.c_str());
+            typed_tags.push_back({entry.tag.c_str(), entry.block_line});
         }
     }
     AstBuilder builder(markdown.size(), html, std::move(schema));

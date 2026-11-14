@@ -104,7 +104,8 @@ std::vector<AttrSpec> compile_attrs(const std::vector<AttrDeclaration>& declarat
 }
 
 std::vector<std::string> groups_from_declaration(const NodeDeclaration& declaration) {
-    std::string_view group = declaration.group ? std::string_view(*declaration.group) : std::string_view("inline");
+    std::string_view group = declaration.group ? std::string_view(*declaration.group)
+                                               : std::string_view(declaration.kind);
     std::vector<std::string> groups;
     std::size_t off = 0;
     while (off < group.size()) {
@@ -133,9 +134,16 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
         "pre", "script", "style", "textarea", "br", "p", "h1", "h2", "h3", "h4", "h5", "h6",
         "blockquote", "ul", "ol", "li", "table", "tr", "th", "td", "img", "a",
     };
-    auto check_type_and_tag = [&](const std::string& name, const std::optional<std::string>& declared_tag) {
+    auto check_type_and_tag = [&](const std::string& name, const std::optional<std::string>& declared_tag,
+                                   bool implicit) {
         if (schema->node(name) != nullptr || schema->mark(name) != nullptr || !names.insert(name).second) {
             throw std::invalid_argument("duplicate type name '" + name + "'");
+        }
+        if (implicit) {
+            if (declared_tag) {
+                throw std::invalid_argument("implicit node '" + name + "' must not declare a tag");
+            }
+            return;
         }
         const std::string& tag = declared_tag ? *declared_tag : name;
         if (!tag_name(tag)) {
@@ -150,11 +158,11 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
         }
     };
     for (const MarkDeclaration& declaration : marks) {
-        check_type_and_tag(declaration.name, declaration.tag);
+        check_type_and_tag(declaration.name, declaration.tag, false);
         mark_names.insert(declaration.name);
     }
     for (const NodeDeclaration& declaration : nodes) {
-        check_type_and_tag(declaration.name, declaration.tag);
+        check_type_and_tag(declaration.name, declaration.tag, declaration.implicit);
     }
     std::size_t order = 0;
     for (const MarkDeclaration& declaration : marks) {
@@ -194,22 +202,36 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
     }
     std::size_t core_nodes = schema->nodes_.size();
     for (const NodeDeclaration& declaration : nodes) {
-        if (declaration.kind != "inline") {
+        if (declaration.kind != "inline" && declaration.kind != "block") {
             throw std::invalid_argument("unsupported node kind '" + declaration.kind + "'");
         }
         std::vector<std::string> groups = groups_from_declaration(declaration);
+        if (declaration.implicit && !declaration.attrs.empty()) {
+            throw std::invalid_argument("implicit node '" + declaration.name + "' must not declare attrs");
+        }
+        if (declaration.implicit && !groups.empty()) {
+            throw std::invalid_argument("implicit node '" + declaration.name + "' must not declare groups");
+        }
         bool is_block = std::find(groups.begin(), groups.end(), "block") != groups.end();
         bool is_inline = std::find(groups.begin(), groups.end(), "inline") != groups.end();
         // Core block models read this membership directly,
         // so an inline shape here would be written as a block and read back inside a paragraph.
-        if (is_block) {
+        if (declaration.kind == "inline" && is_block) {
             throw std::invalid_argument("inline node '" + declaration.name + "' cannot join block group");
         }
-        Shape shape = declaration.content && !declaration.content->empty() ? Shape::InlineContainer : Shape::InlineAtom;
+        if (declaration.kind == "block" && is_inline) {
+            throw std::invalid_argument("block node '" + declaration.name + "' cannot join inline group");
+        }
+        Shape shape = declaration.kind == "inline" ? Shape::InlineAtom : Shape::BlockAtom;
+        if (declaration.content && !declaration.content->empty()) {
+            shape = declaration.kind == "inline" ? Shape::InlineContainer : Shape::BlockContainer;
+        }
         schema->nodes_.push_back({declaration.name, compile_attrs(declaration.attrs), ContentModel::None,
-                                  is_block, is_inline, false, declaration.tag ? *declaration.tag : declaration.name,
+                                  is_block, is_inline, false, declaration.implicit,
+                                  declaration.implicit ? std::string {} :
+                                      declaration.tag ? *declaration.tag : declaration.name,
                                   shape});
-        content_types.push_back({declaration.name, true, std::move(groups)});
+        content_types.push_back({declaration.name, declaration.kind == "inline", std::move(groups)});
         if (shape == Shape::InlineContainer) {
             schema->inline_containers_ = true;
         }
@@ -219,7 +241,7 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
             continue;
         }
         ContentDFA content = compile_content(*nodes[i].content, content_types);
-        if (content.inline_content == false) {
+        if (nodes[i].kind == "inline" && content.inline_content == false) {
             throw std::invalid_argument("inline node '" + nodes[i].name + "' cannot contain block content");
         }
         // Markdown does not carry the boundaries between adjacent text or raw HTML nodes.
@@ -228,24 +250,159 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
                 "content expression must not depend on how many adjacent text nodes there are; "
                 "use text* or text+ (and htmlInline* or htmlInline+)");
         }
+        if (nodes[i].kind == "block" && content.inline_content == true) {
+            schema->nodes_[core_nodes + i].shape = Shape::TextBlock;
+        }
         schema->nodes_[core_nodes + i].dfa = static_cast<int>(schema->content_.size());
         schema->content_.push_back(std::move(content));
     }
     schema->declared_nodes_ = !nodes.empty();
     std::sort(schema->nodes_.begin(), schema->nodes_.end(),
               [](const NodeSpec& left, const NodeSpec& right) { return left.name < right.name; });
+    for (const NodeSpec& node : schema->nodes_) {
+        if (node.implicit && (node.dfa < 0 || schema->content_[node.dfa].inline_content != false)) {
+            throw std::invalid_argument("implicit node '" + node.name + "' must have block content");
+        }
+    }
+    for (const NodeSpec& node : schema->nodes_) {
+        if (node.dfa < 0) {
+            continue;
+        }
+        ContentDFA& parent = schema->content_[node.dfa];
+        for (const std::string& type : parent.referenced_types) {
+            const NodeSpec& child = *schema->node(type);
+            if (!child.implicit) {
+                continue;
+            }
+            if (!parent.required_once(type)) {
+                throw std::invalid_argument("implicit node '" + type + "' must occur exactly once without "
+                                            "repetition or optionality in content of node '" + node.name + "'");
+            }
+            const ContentDFA& wrapped = schema->content_[child.dfa];
+            for (const ContentDFA::State& state : wrapped.states) {
+                for (const ContentDFA::Transition& transition : state.transitions) {
+                    if (parent.accepts_type(transition.type)) {
+                        throw std::invalid_argument("implicit node '" + type + "' and parent node '" + node.name +
+                                                    "' accept the same child type '" + transition.type + "'");
+                    }
+                    for (const std::string& earlier : parent.implicit_types) {
+                        const ContentDFA& other = schema->content_[schema->node(earlier)->dfa];
+                        if (other.accepts_type(transition.type)) {
+                            throw std::invalid_argument("implicit nodes '" + earlier + "' and '" + type +
+                                                        "' accept the same child type '" + transition.type + "'");
+                        }
+                    }
+                }
+            }
+            parent.implicit_types.push_back(type);
+        }
+    }
+    schema->minimum_.clear();
+    schema->minimum_.resize(schema->nodes_.size());
+    schema->creatable_.clear();
+    const Schema& core = *Schema::gfm();
+    for (std::size_t i = 0; i < schema->nodes_.size(); ++i) {
+        const NodeSpec& node = schema->nodes_[i];
+        if (node.core) {
+            const auto* minimum = core.minimum_content(*core.node(node.name));
+            if (minimum != nullptr) {
+                schema->minimum_[i] = *minimum;
+                schema->creatable_.push_back(node.name);
+            }
+        } else if (std::none_of(node.attrs.begin(), node.attrs.end(), [](const AttrSpec& attr) {
+                       return attr.presence == Presence::Required;
+                   }) && (node.dfa < 0 || schema->content_[node.dfa].states[0].accepting)) {
+            schema->minimum_[i].emplace();
+            schema->creatable_.push_back(node.name);
+        }
+    }
+    while (true) {
+        std::vector<std::pair<std::size_t, std::vector<std::string>>> ready;
+        for (std::size_t i = 0; i < schema->nodes_.size(); ++i) {
+            const NodeSpec& node = schema->nodes_[i];
+            if (node.core || schema->minimum_[i] ||
+                std::any_of(node.attrs.begin(), node.attrs.end(), [](const AttrSpec& attr) {
+                    return attr.presence == Presence::Required;
+                })) {
+                continue;
+            }
+            auto filled = schema->content_[node.dfa].fill({}, schema->creatable_);
+            if (!filled) {
+                continue;
+            }
+            std::vector<std::string> minimum;
+            for (ContentFill& child : *filled) {
+                minimum.push_back(std::move(child.type));
+            }
+            ready.emplace_back(i, std::move(minimum));
+        }
+        if (ready.empty()) {
+            break;
+        }
+        for (auto& node : ready) {
+            schema->minimum_[node.first] = std::move(node.second);
+            schema->creatable_.push_back(schema->nodes_[node.first].name);
+        }
+    }
+    // A preferred alternative can become creatable after the first witness for its parent.
+    // Select against the completed set before checking whether those choices create a cycle.
+    for (const std::string& type : schema->creatable_) {
+        std::size_t index = schema->node(type) - schema->nodes_.data();
+        const NodeSpec& node = schema->nodes_[index];
+        if (node.dfa < 0) {
+            continue;
+        }
+        auto filled = schema->content_[node.dfa].fill({}, schema->creatable_);
+        std::vector<std::string> minimum;
+        for (ContentFill& child : *filled) {
+            minimum.push_back(std::move(child.type));
+        }
+        schema->minimum_[index] = std::move(minimum);
+    }
+    struct CreationFrame {
+        std::size_t node;
+        std::size_t next = 0;
+    };
+    std::vector<unsigned char> visited(schema->nodes_.size());
+    for (const std::string& type : schema->creatable_) {
+        std::size_t index = schema->node(type) - schema->nodes_.data();
+        if (visited[index] != 0) {
+            continue;
+        }
+        std::vector<CreationFrame> frames {{index}};
+        visited[index] = 1;
+        while (!frames.empty()) {
+            CreationFrame& frame = frames.back();
+            const auto& minimum = *schema->minimum_[frame.node];
+            if (frame.next == minimum.size()) {
+                visited[frame.node] = 2;
+                frames.pop_back();
+                continue;
+            }
+            const NodeSpec* child = schema->node(minimum[frame.next++]);
+            std::size_t child_index = child - schema->nodes_.data();
+            if (visited[child_index] == 1) {
+                throw std::invalid_argument("content fill for node '" + child->name + "' would create itself");
+            }
+            if (visited[child_index] == 0) {
+                visited[child_index] = 1;
+                frames.push_back({child_index});
+            }
+        }
+    }
     std::sort(schema->marks_.begin(), schema->marks_.end(),
               [](const MarkSpec& left, const MarkSpec& right) { return left.name < right.name; });
     for (std::size_t i = 0; i < schema->marks_.size(); ++i) {
         const MarkSpec& mark = schema->marks_[i];
         if (!mark.core) {
-            schema->tags_.push_back({mark.tag, true, i});
+            schema->tags_.push_back({mark.tag, true, false, i});
         }
     }
     for (std::size_t i = 0; i < schema->nodes_.size(); ++i) {
         const NodeSpec& node = schema->nodes_[i];
-        if (!node.core) {
-            schema->tags_.push_back({node.tag, false, i});
+        if (!node.core && !node.implicit) {
+            schema->tags_.push_back({node.tag, false,
+                                      node.shape == Shape::BlockAtom || node.shape == Shape::BlockContainer, i});
         }
     }
     std::sort(schema->tags_.begin(), schema->tags_.end(),

@@ -22,10 +22,14 @@ An upstream bump therefore has to re-check that `const ENTITY* entity_lookup(con
 
 ## Local patches (deviations from upstream)
 
-- Declared tag names (md4c.h, md4c.c): `MD_PARSER::typed_tags` and `n_typed_tags` supply NUL-terminated ASCII names in lexicographic order.
+- Declared tags (md4c.h, md4c.c): `MD_PARSER::typed_tags` and `n_typed_tags` supply `MD_TYPED_TAG` entries in lexicographic name order.
+  Names are NUL-terminated ASCII, and each entry carries a `block_line` boolean for block atoms and containers.
   Opening and closing names match case-sensitively.
   A declared tag at the start of a line skips every raw HTML block start condition,
   so Markdown inside the tag is parsed even when the tag occupies its own line.
+  A complete `block_line` tag alone on a line with relative indentation below four spaces instead becomes a one-line HTML block,
+  which interrupts paragraphs and ends before the newline without swallowing the following content.
+  This uses the same tag grammar as inline HTML, including opening, closing and self-closing tags with attrs.
   The check precedes `MD_FLAG_NOHTMLBLOCKS`. Patched hunks use `MARKTIP LOCAL PATCH` comments.
 - `MD_FLAG_CJKFRIENDLYEMPHASIS` (md4c.h, md4c.c, cjk.h): opt-in flag implementing the
   [CommonMark CJK-friendly Amendments Specification](https://github.com/tats-u/markdown-cjk-friendly/blob/main/specification.md)

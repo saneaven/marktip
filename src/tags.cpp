@@ -279,7 +279,8 @@ std::string close_tag(const Schema& schema, const Mark& mark) {
 }
 
 std::string open_node_tag(const NodeSpec& spec, const AttrList& attrs) {
-    return open_tag(spec.attrs, spec.tag, attrs, spec.shape == Shape::InlineAtom);
+    return open_tag(spec.attrs, spec.tag, attrs,
+                    spec.shape == Shape::InlineAtom || spec.shape == Shape::BlockAtom);
 }
 
 std::string close_node_tag(const NodeSpec& spec) {

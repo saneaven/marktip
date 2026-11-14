@@ -101,10 +101,16 @@ struct InlinePiece {
     const NodeSpec* spec;
 };
 
+struct PlacedChild {
+    const NodeSpec* spec;
+    std::size_t position;
+};
+
 struct InlineParent {
     std::size_t node;
     const NodeSpec* spec;
     std::vector<std::size_t> content;
+    std::vector<PlacedChild> placed = {};
 };
 
 [[noreturn]] void invalid_tag(std::string message, const PathStack& path) {
@@ -163,6 +169,154 @@ void check_lift_depth(std::size_t depth) {
     }
 }
 
+void complete_content(Document& document, std::size_t index, const NodeSpec& spec, PathStack& path);
+
+void build_containers(Document& document, std::size_t index, const NodeSpec& parent_spec,
+                       const std::vector<InlinePiece>& pieces, std::vector<std::size_t> content,
+                       PathStack& path);
+
+bool html_whitespace(std::string_view value) {
+    return std::all_of(value.begin(), value.end(), [](char ch) {
+        return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\v' || ch == '\f';
+    });
+}
+
+bool single_tag(std::string_view payload, HtmlConstruct& tag) {
+    bool found = false;
+    for (const HtmlConstruct& token : tokenize_html(payload)) {
+        if (token.name.empty() && html_whitespace(token.raw)) {
+            continue;
+        }
+        if (found || token.name.empty()) {
+            return false;
+        }
+        tag = token;
+        found = true;
+    }
+    return found;
+}
+
+bool block_token(const Document& document, std::size_t index, std::string& payload, HtmlConstruct& token) {
+    const Node& node = document.node(index);
+    if (node.type == "htmlBlock") {
+        payload = attr_string(node.attrs, "html");
+    } else if (node.type == "paragraph") {
+        for (std::size_t child : node.content) {
+            const Node& part = document.node(child);
+            if (part.type == "htmlInline") {
+                payload += attr_string(part.attrs, "html");
+            } else if (part.type == "text" && html_whitespace(part.text)) {
+                payload += part.text;
+            } else {
+                return false;
+            }
+        }
+    } else {
+        return false;
+    }
+    return single_tag(payload, token);
+}
+
+// Block carriers are siblings before they are containers, so pair them before descending into their children.
+MARKTIP_NOINLINE void process_blocks(Document& document, std::size_t index, const NodeSpec& parent_spec,
+                                     PathStack& path) {
+    std::vector<std::size_t> original = std::move(document.node(index).content);
+    std::vector<InlinePiece> pieces;
+    pieces.reserve(original.size());
+    for (std::size_t child : original) {
+        std::string payload;
+        HtmlConstruct token;
+        const TagEntry* tag = nullptr;
+        if (block_token(document, child, payload, token)) {
+            tag = document.schema().tag(token.name);
+        }
+        if (tag == nullptr || tag->is_mark || !tag->block_line) {
+            pieces.push_back({InlinePieceKind::Node, child, nullptr});
+            continue;
+        }
+
+        const NodeSpec& spec = document.schema().node(tag->spec);
+        if (token.closing) {
+            if (token.self_closing || spec.shape == Shape::BlockAtom) {
+                invalid_tag("closing tag '</" + spec.tag + ">' has no matching opening container", path);
+            }
+            pieces.push_back({InlinePieceKind::CloseContainer, 0, &spec});
+            continue;
+        }
+        if (spec.shape == Shape::BlockContainer && token.self_closing) {
+            invalid_tag("container tag '<" + spec.tag + "/>' must not be self-closing", path);
+        }
+
+        Node node;
+        node.type = spec.name;
+        node.attrs = decode_tag_attrs(token, spec.attrs, spec.name, "node", path);
+        std::size_t node_index = document.append_node(std::move(node));
+        InlinePieceKind kind = spec.shape == Shape::BlockAtom ? InlinePieceKind::Atom
+                                                              : InlinePieceKind::OpenContainer;
+        pieces.push_back({kind, node_index, &spec});
+    }
+    build_containers(document, index, parent_spec, pieces, std::move(original), path);
+}
+
+const NodeSpec& peel_textblock(Document& document, std::size_t index, const NodeSpec& parent_spec,
+                               const PathStack& path) {
+    const std::vector<std::size_t>& content = document.node(index).content;
+    if (parent_spec.name != "paragraph" || content.empty() ||
+        document.node(content.front()).type != "htmlInline" ||
+        document.node(content.back()).type != "htmlInline") {
+        return parent_spec;
+    }
+    std::size_t first = content.front();
+    std::size_t last = content.back();
+    std::string first_payload = attr_string(document.node(first).attrs, "html");
+    std::string last_payload = first == last ? first_payload : attr_string(document.node(last).attrs, "html");
+    std::vector<HtmlConstruct> first_tokens = tokenize_html(first_payload);
+    std::vector<HtmlConstruct> last_tokens = tokenize_html(last_payload);
+    if (first_tokens.empty() || last_tokens.empty()) {
+        return parent_spec;
+    }
+    const HtmlConstruct& opening = first_tokens.front();
+    const HtmlConstruct& closing = last_tokens.back();
+    const TagEntry* tag = document.schema().tag(opening.name);
+    if (tag == nullptr || tag->is_mark || document.schema().node(tag->spec).shape != Shape::TextBlock ||
+        opening.closing || opening.self_closing || !closing.closing || closing.self_closing ||
+        closing.name != opening.name || opening.raw.data() != first_payload.data() ||
+        closing.raw.data() + closing.raw.size() != last_payload.data() + last_payload.size()) {
+        return parent_spec;
+    }
+    const NodeSpec& spec = document.schema().node(tag->spec);
+    AttrList attrs = decode_tag_attrs(opening, spec.attrs, spec.name, "node", path);
+    document.node(index).type = spec.name;
+    document.node(index).attrs = std::move(attrs);
+    if (first == last) {
+        std::size_t length = first_payload.size() - opening.raw.size() - closing.raw.size();
+        set_attr(document.node(first).attrs, "html",
+                 AttrValue::string(first_payload.substr(opening.raw.size(), length)));
+    } else {
+        set_attr(document.node(first).attrs, "html", AttrValue::string(first_payload.substr(opening.raw.size())));
+        set_attr(document.node(last).attrs, "html",
+                 AttrValue::string(last_payload.substr(0, last_payload.size() - closing.raw.size())));
+    }
+    return spec;
+}
+
+void finish_parent(Document& document, InlineParent& parent, PathStack& path) {
+    document.node(parent.node).content = std::move(parent.content);
+    if (!parent.spec->core && parent.spec->shape == Shape::InlineContainer) {
+        complete_content(document, parent.node, *parent.spec, path);
+    }
+    std::size_t siblings = document.node(parent.node).content.size();
+    if (siblings != 0) {
+        check_lift_depth(path.size() + 1);
+    }
+    for (const PlacedChild& child : parent.placed) {
+        path.push_back({"content", child.position});
+        std::size_t index = document.node(parent.node).content[child.position];
+        check_child_content(document.schema(), *parent.spec, *child.spec, document.node(index), siblings, path);
+        path.pop_back();
+    }
+}
+
 void build_containers(Document& document, std::size_t index, const NodeSpec& parent_spec,
                        const std::vector<InlinePiece>& pieces, std::vector<std::size_t> content,
                        PathStack& path) {
@@ -178,11 +332,12 @@ void build_containers(Document& document, std::size_t index, const NodeSpec& par
                 invalid_tag("closing tag '</" + piece.spec->tag + ">' has no matching opening container", path);
             }
             std::size_t node = current.node;
-            document.node(node).content = std::move(current.content);
-            check_node_content(document, node, *piece.spec, path);
+            finish_parent(document, current, path);
             current = std::move(parents.back());
             parents.pop_back();
-            check_child_content(document.schema(), *current.spec, *piece.spec, document.node(node), path);
+            if (current.spec->dfa < 0) {
+                current.placed.push_back({piece.spec, current.content.size()});
+            }
             append_inline(document, current.content, node);
             path.pop_back();
             continue;
@@ -196,12 +351,12 @@ void build_containers(Document& document, std::size_t index, const NodeSpec& par
             continue;
         }
         if (piece.kind == InlinePieceKind::Atom) {
-            path.push_back({"content", current.content.size()});
             if (!parents.empty()) {
-                check_lift_depth(path.size());
+                check_lift_depth(path.size() + 1);
             }
-            check_child_content(document.schema(), *current.spec, *piece.spec, document.node(piece.node), path);
-            path.pop_back();
+            if (current.spec->dfa < 0) {
+                current.placed.push_back({piece.spec, current.content.size()});
+            }
         } else if (!parents.empty()) {
             check_lift_depth(path.size() + 1);
         }
@@ -212,12 +367,15 @@ void build_containers(Document& document, std::size_t index, const NodeSpec& par
         path.resize(parent_depth);
         invalid_tag("opening tag '<" + opening.tag + ">' has no matching closing container", path);
     }
-    document.node(index).content = std::move(current.content);
+    finish_parent(document, current, path);
 }
 
 // Clang otherwise inlines this state into lift_node, exhausting small worker stacks on deep documents.
-MARKTIP_NOINLINE void process_inline(Document& document, std::size_t index, const NodeSpec& parent_spec,
-                                     bool html, PathStack& path) {
+MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t index, const NodeSpec& parent_spec,
+                                               bool html, PathStack& path) {
+    const NodeSpec& content_spec = document.schema().has_declared_nodes()
+                                       ? peel_textblock(document, index, parent_spec, path)
+                                       : parent_spec;
     std::vector<std::size_t> original = std::move(document.node(index).content);
     std::vector<InlinePiece> pieces;
     pieces.reserve(original.size());
@@ -245,6 +403,9 @@ MARKTIP_NOINLINE void process_inline(Document& document, std::size_t index, cons
 
             if (!tag->is_mark) {
                 const NodeSpec& spec = schema.node(tag->spec);
+                if (spec.shape != Shape::InlineAtom && spec.shape != Shape::InlineContainer) {
+                    invalid_tag("tag '<" + spec.tag + ">' must occupy its declared block form", path);
+                }
                 if (spec.shape == Shape::InlineContainer && token.closing && !token.self_closing) {
                     pieces.push_back({InlinePieceKind::CloseContainer, 0, &spec});
                     continue;
@@ -319,19 +480,190 @@ MARKTIP_NOINLINE void process_inline(Document& document, std::size_t index, cons
     }
     // Mark pairs are resolved over the flat sequence before containers add structure.
     // Heap-backed parent frames also let excessive tag nesting fail before recursive traversal.
-    build_containers(document, index, parent_spec, pieces, std::move(original), path);
+    build_containers(document, index, content_spec, pieces, std::move(original), path);
+    return content_spec;
 }
 
-void lift_node(Document& document, std::size_t index, bool html, PathStack& path) {
+const NodeSpec& lift_node(Document& document, std::size_t index, bool html, bool block_forms, PathStack& path) {
+    if (block_forms) {
+        check_lift_depth(path.size());
+    }
     const NodeSpec& spec = *document.schema().node(document.node(index).type);
     if (spec.allow == ContentModel::Inlines) {
-        process_inline(document, index, spec, html, path);
-        return;
+        return process_inline(document, index, spec, html, path);
+    }
+    if (block_forms && spec.core && spec.allow == ContentModel::Blocks) {
+        process_blocks(document, index, spec, path);
     }
     for (std::size_t i = 0; i < document.node(index).content.size(); ++i) {
         path.push_back({"content", i});
-        lift_node(document, document.node(index).content[i], html, path);
+        std::size_t child = document.node(index).content[i];
+        const NodeSpec& child_spec = lift_node(document, child, html, block_forms, path);
+        if (child_spec.shape == Shape::TextBlock) {
+            check_child_content(document.schema(), spec, child_spec, document.node(child),
+                                document.node(index).content.size(), path);
+            complete_content(document, child, child_spec, path);
+        }
         path.pop_back();
+    }
+    if (!spec.core) {
+        complete_content(document, index, spec, path);
+    }
+    return spec;
+}
+
+struct CreationFrame {
+    std::size_t node;
+    const std::vector<std::string>* children;
+    std::size_t next;
+    std::size_t depth;
+};
+
+std::size_t create_minimal_node(Document& document, const NodeSpec& spec, std::size_t depth) {
+    check_lift_depth(depth);
+    const Schema& schema = document.schema();
+    std::size_t root = document.append_node(Node {spec.name, {}, {}, {}, {}});
+    std::vector<CreationFrame> frames;
+    frames.push_back({root, schema.minimum_content(spec), 0, depth});
+    while (!frames.empty()) {
+        CreationFrame& frame = frames.back();
+        if (frame.next == frame.children->size()) {
+            frames.pop_back();
+            continue;
+        }
+        const NodeSpec& child_spec = *schema.node((*frame.children)[frame.next++]);
+        std::size_t child_depth = frame.depth + 1;
+        check_lift_depth(child_depth);
+        std::size_t child = document.append_child(frame.node, Node {child_spec.name, {}, {}, {}, {}});
+        frames.push_back({child, schema.minimum_content(child_spec), 0, child_depth});
+    }
+    return root;
+}
+
+struct DepthFrame {
+    std::size_t node;
+    std::size_t depth;
+};
+
+void check_wrapped_depth(const Document& document, const std::vector<std::size_t>& children,
+                          std::size_t begin, std::size_t end, std::size_t depth) {
+    std::vector<DepthFrame> pending;
+    for (std::size_t i = begin; i < end; ++i) {
+        pending.push_back({children[i], depth});
+    }
+    while (!pending.empty()) {
+        DepthFrame frame = pending.back();
+        pending.pop_back();
+        check_lift_depth(frame.depth);
+        for (std::size_t child : document.node(frame.node).content) {
+            pending.push_back({child, frame.depth + 1});
+        }
+    }
+}
+
+void wrap_implicit_children(Document& document, std::size_t index, const ContentDFA& content,
+                              const PathStack& path, std::vector<std::size_t>& created) {
+    for (const std::string& type : content.implicit_types) {
+        const NodeSpec& spec = *document.schema().node(type);
+        const ContentDFA& wrapper = document.schema().content(spec.dfa);
+        std::vector<std::size_t> original = std::move(document.node(index).content);
+        std::vector<std::size_t> children;
+        children.reserve(original.size());
+        bool wrapped = false;
+        for (std::size_t i = 0; i < original.size();) {
+            if (wrapped || !wrapper.accepts_type(document.node(original[i]).type)) {
+                children.push_back(original[i++]);
+                continue;
+            }
+            std::size_t end = i + 1;
+            while (end < original.size() && wrapper.accepts_type(document.node(original[end]).type)) {
+                ++end;
+            }
+            check_lift_depth(path.size() + 1);
+            check_wrapped_depth(document, original, i, end, path.size() + 2);
+            Node node;
+            node.type = spec.name;
+            node.content.assign(original.begin() + i, original.begin() + end);
+            std::size_t wrapper_index = document.append_node(std::move(node));
+            children.push_back(wrapper_index);
+            created.push_back(wrapper_index);
+            wrapped = true;
+            i = end;
+        }
+        document.node(index).content = std::move(children);
+    }
+}
+
+void complete_one_content(Document& document, std::size_t index, const NodeSpec& spec, const PathStack& path,
+                           std::vector<std::size_t>& created) {
+    const Schema& schema = document.schema();
+    const ContentDFA& content = schema.content(spec.dfa);
+    wrap_implicit_children(document, index, content, path, created);
+    std::vector<std::string_view> types;
+    types.reserve(document.node(index).content.size());
+    for (std::size_t child : document.node(index).content) {
+        types.push_back(document.node(child).type);
+    }
+    if (content.match(types)) {
+        return;
+    }
+    std::optional<std::vector<ContentFill>> filled = content.fill(types, schema.creatable_types());
+    if (!filled) {
+        check_node_content(document, index, spec, path);
+    } else {
+        std::vector<std::size_t> original = std::move(document.node(index).content);
+        std::vector<std::size_t> children;
+        children.reserve(filled->size());
+        for (const ContentFill& child : *filled) {
+            if (child.original) {
+                children.push_back(original[*child.original]);
+            } else {
+                children.push_back(create_minimal_node(document, *schema.node(child.type), path.size() + 1));
+            }
+        }
+        document.node(index).content = std::move(children);
+    }
+}
+
+struct CompletionFrame {
+    std::size_t node;
+    std::vector<std::size_t> created;
+    std::size_t next;
+};
+
+void complete_content(Document& document, std::size_t index, const NodeSpec& spec, PathStack& path) {
+    if (spec.dfa < 0) {
+        return;
+    }
+    std::vector<std::size_t> created;
+    complete_one_content(document, index, spec, path, created);
+    if (created.empty()) {
+        return;
+    }
+    std::vector<CompletionFrame> pending;
+    pending.push_back({index, std::move(created), 0});
+    while (!pending.empty()) {
+        CompletionFrame& frame = pending.back();
+        if (frame.next == frame.created.size()) {
+            pending.pop_back();
+            if (!pending.empty()) {
+                path.pop_back();
+            }
+            continue;
+        }
+        std::size_t child = frame.created[frame.next++];
+        const std::vector<std::size_t>& children = document.node(frame.node).content;
+        std::size_t position = static_cast<std::size_t>(std::find(children.begin(), children.end(), child) -
+                                                        children.begin());
+        path.push_back({"content", position});
+        const NodeSpec& child_spec = *document.schema().node(document.node(child).type);
+        std::vector<std::size_t> nested;
+        complete_one_content(document, child, child_spec, path, nested);
+        if (nested.empty()) {
+            path.pop_back();
+        } else {
+            pending.push_back({child, std::move(nested), 0});
+        }
     }
 }
 
@@ -340,7 +672,9 @@ void lift_node(Document& document, std::size_t index, bool html, PathStack& path
 void lift(Document& document, bool html) {
     PathStack path;
     path.reserve(32);
-    lift_node(document, 0, html, path);
+    bool block_forms = std::any_of(document.schema().tags().begin(), document.schema().tags().end(),
+                                    [](const TagEntry& tag) { return tag.block_line; });
+    lift_node(document, 0, html, block_forms, path);
 }
 
 }  // namespace marktip

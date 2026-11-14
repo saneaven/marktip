@@ -75,6 +75,18 @@ const AttrSpec* find_attr_spec(const std::vector<AttrSpec>& specs, std::string_v
                            "node type '" + spec.name + "' does not match its content expression", format_path(path));
 }
 
+[[noreturn]] void throw_table_container(const NodeSpec& spec, const PathStack& path) {
+    throw InvalidNodeError("unrepresentable", "content",
+                           "node type '" + spec.name + "' cannot be expressed in markdown inside a table cell",
+                           format_path(path));
+}
+
+[[noreturn]] void throw_table_siblings(const NodeSpec& spec, const PathStack& path) {
+    throw InvalidNodeError("unrepresentable", "content",
+                           "node type '" + spec.name + "' must be the only child of a table cell",
+                           format_path(path));
+}
+
 }  // namespace
 
 void check_type_present(bool present, std::string_view context, const PathStack& path) {
@@ -332,12 +344,20 @@ void check_content_field(const NodeSpec& spec, const PathStack& path) {
 }
 
 void check_child_content(const Schema& schema, const NodeSpec& parent, const NodeSpec& child,
-                         const Node& child_node, const PathStack& path) {
+                         const Node& child_node, std::size_t siblings, const PathStack& path) {
     if (parent.dfa >= 0) {
         return;
     }
     if (!schema.content_model_allows(parent.allow, child)) {
         throw_invalid_child_content(parent, child, path);
+    }
+    if (!child.core && (parent.name == "tableCell" || parent.name == "tableHeader")) {
+        if (child.shape == Shape::BlockContainer) {
+            throw_table_container(child, path);
+        }
+        if (siblings != 1) {
+            throw_table_siblings(child, path);
+        }
     }
     if (parent.allow == ContentModel::Text && !child_node.marks.empty()) {
         throw_code_block_marks(path);

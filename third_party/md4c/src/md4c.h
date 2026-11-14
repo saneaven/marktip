@@ -339,6 +339,13 @@ typedef struct MD_SPAN_WIKILINK {
 #define MD_DIALECT_COMMONMARK               0
 #define MD_DIALECT_GITHUB                   (MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES | MD_FLAG_STRIKETHROUGH | MD_FLAG_TASKLISTS)
 
+/* MARKTIP LOCAL PATCH: Only block atoms and containers may occupy a dedicated tag line.
+ */
+typedef struct MD_TYPED_TAG {
+    const MD_CHAR* name;
+    int block_line;
+} MD_TYPED_TAG;
+
 /* Parser structure.
  */
 typedef struct MD_PARSER {
@@ -350,11 +357,12 @@ typedef struct MD_PARSER {
      */
     unsigned flags;
 
-    /* MARKTIP LOCAL PATCH: Declared tags stay inline so their contents can contain Markdown.
+    /* MARKTIP LOCAL PATCH: Declared tags bypass normal HTML block starts so their contents can contain Markdown.
      * Names are NUL-terminated ASCII, sorted lexicographically and case-sensitive.
+     * block_line makes a complete tag alone on a line a one-line HTML block.
      * Set n_typed_tags to zero when there are no declared tags.
      */
-    const MD_CHAR* const* typed_tags;
+    const MD_TYPED_TAG* typed_tags;
     unsigned n_typed_tags;
 
     /* Caller-provided rendering callbacks.

@@ -72,6 +72,10 @@ Schema::Schema() {
         {"taskList", tight_attrs, ContentModel::TaskItems, true, false},
         {"text", {}, ContentModel::None, false, true},
     };
+    minimum_.resize(nodes_.size());
+    const NodeSpec* paragraph = node("paragraph");
+    minimum_[paragraph - nodes_.data()].emplace();
+    creatable_.push_back(paragraph->name);
 
     marks_ = {
         {"bold", {}},
@@ -130,6 +134,15 @@ const MarkSpec& Schema::mark(std::size_t index) const {
 
 const ContentDFA& Schema::content(int index) const {
     return content_[index];
+}
+
+const std::vector<std::string>& Schema::creatable_types() const {
+    return creatable_;
+}
+
+const std::vector<std::string>* Schema::minimum_content(const NodeSpec& spec) const {
+    const auto& minimum = minimum_[&spec - nodes_.data()];
+    return minimum ? &*minimum : nullptr;
 }
 
 const TagEntry* Schema::tag(std::string_view name) const {

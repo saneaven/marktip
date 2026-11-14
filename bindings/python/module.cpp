@@ -151,6 +151,11 @@ std::vector<marktip::NodeDeclaration> node_declarations_from_py(py::handle value
         node.group = declaration_optional_string(value.attr("group"), "group");
         node.tag = declaration_optional_string(value.attr("tag"), "tag");
         node.attrs = attr_declarations_from_py(value.attr("attrs"));
+        py::object implicit = value.attr("implicit");
+        if (!py::isinstance<py::bool_>(implicit)) {
+            throw py::type_error("implicit must be a bool");
+        }
+        node.implicit = py::cast<bool>(implicit);
         result.push_back(std::move(node));
     }
     return result;
