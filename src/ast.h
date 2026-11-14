@@ -26,6 +26,8 @@ struct Node {
     std::vector<std::size_t> content;
 };
 
+void order_marks(std::vector<Mark>& marks, const Schema& schema);
+
 class Document {
 public:
     Document();

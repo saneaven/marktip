@@ -259,8 +259,6 @@ def test_schema_option_is_keyword_only_and_dict_only():
         tm.from_dict({"type": "doc"}, tm.Schema())
     with pytest.raises(TypeError):
         tm.from_dict({"type": "doc"}, schema={})
-    with pytest.raises(TypeError):
-        tm.from_markdown("x", schema=tm.Schema())
 
 
 

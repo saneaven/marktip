@@ -112,6 +112,27 @@ bool Schema::has_declared_marks() const {
     return marks_.size() != gfm()->marks_.size();
 }
 
+const MarkSpec& Schema::mark(std::size_t index) const {
+    return marks_[index];
+}
+
+const TagEntry* Schema::tag(std::string_view name) const {
+    auto found = std::lower_bound(tags_.begin(), tags_.end(), name,
+                                  [](const TagEntry& entry, std::string_view value) { return entry.tag < value; });
+    if (found == tags_.end() || found->tag != name) {
+        return nullptr;
+    }
+    return &*found;
+}
+
+const std::vector<TagEntry>& Schema::tags() const {
+    return tags_;
+}
+
+bool Schema::has_tags() const {
+    return !tags_.empty();
+}
+
 bool Schema::content_model_allows(ContentModel model, const NodeSpec& child) const {
     switch (model) {
         case ContentModel::None:

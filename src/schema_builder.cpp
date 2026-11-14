@@ -151,6 +151,14 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> declar
     }
     std::sort(schema->marks_.begin(), schema->marks_.end(),
               [](const MarkSpec& left, const MarkSpec& right) { return left.name < right.name; });
+    for (std::size_t i = 0; i < schema->marks_.size(); ++i) {
+        const MarkSpec& mark = schema->marks_[i];
+        if (!mark.core) {
+            schema->tags_.push_back({mark.tag, i});
+        }
+    }
+    std::sort(schema->tags_.begin(), schema->tags_.end(),
+              [](const TagEntry& left, const TagEntry& right) { return left.tag < right.tag; });
     return schema;
 }
 

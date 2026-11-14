@@ -120,12 +120,21 @@ struct MarkSpec {
     std::size_t order = 0;
 };
 
+struct TagEntry {
+    std::string tag;
+    std::size_t spec;
+};
+
 class Schema {
 public:
     static const std::shared_ptr<const Schema>& gfm();
 
     const NodeSpec* node(std::string_view type) const;
     const MarkSpec* mark(std::string_view type) const;
+    const MarkSpec& mark(std::size_t index) const;
+    const TagEntry* tag(std::string_view name) const;
+    const std::vector<TagEntry>& tags() const;
+    bool has_tags() const;
     bool has_declared_marks() const;
 
     bool content_model_allows(ContentModel model, const NodeSpec& child) const;
@@ -136,6 +145,7 @@ private:
 
     std::vector<NodeSpec> nodes_;
     std::vector<MarkSpec> marks_;
+    std::vector<TagEntry> tags_;
 };
 
 }  // namespace marktip

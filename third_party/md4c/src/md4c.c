@@ -5537,6 +5537,55 @@ static const TAG xx[] = { Xend };
 #undef X
 #undef Xend
 
+/* MARKTIP LOCAL PATCH: A declared tag must not start a raw HTML block,
+ * which would prevent Markdown inside it from being parsed.
+ */
+static int
+md_is_typed_tag(MD_CTX* ctx, OFF beg)
+{
+    OFF off = beg + 1;
+    OFF name_beg;
+    OFF name_len;
+    unsigned first = 0;
+    unsigned last = ctx->parser.n_typed_tags;
+
+    if(off < ctx->size  &&  CH(off) == _T('/'))
+        off++;
+    if(off >= ctx->size  ||  !ISALPHA(off))
+        return FALSE;
+
+    name_beg = off++;
+    while(off < ctx->size  &&  (ISALNUM(off) || CH(off) == _T('-')))
+        off++;
+    if(off < ctx->size  &&  !ISWHITESPACE(off)  &&  !ISNEWLINE(off)
+        &&  CH(off) != _T('/')  &&  CH(off) != _T('>'))
+        return FALSE;
+    name_len = off - name_beg;
+
+    while(first < last) {
+        unsigned mid = first + (last - first) / 2;
+        const CHAR* name = ctx->parser.typed_tags[mid];
+        OFF i = 0;
+        int cmp;
+
+        while(i < name_len  &&  name[i] != _T('\0')  &&  CH(name_beg + i) == name[i])
+            i++;
+        if(i == name_len) {
+            if(name[i] == _T('\0'))
+                return TRUE;
+            cmp = -1;
+        } else {
+            cmp = (name[i] == _T('\0') || CH(name_beg + i) > name[i]) ? 1 : -1;
+        }
+
+        if(cmp < 0)
+            last = mid;
+        else
+            first = mid + 1;
+    }
+    return FALSE;
+}
+
 /* Returns type of the raw HTML block, or FALSE if it is not HTML block.
  * (Refer to CommonMark specification for details about the types.)
  */
@@ -6238,6 +6287,8 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
 
         /* Check for start of raw HTML block. */
         if(off < ctx->size  &&  CH(off) == _T('<')
+            /* MARKTIP LOCAL PATCH: Keep every declared tag out of all HTML block start conditions. */
+            &&  (ctx->parser.n_typed_tags == 0 || !md_is_typed_tag(ctx, off))
             &&  !(ctx->parser.flags & MD_FLAG_NOHTMLBLOCKS))
         {
             ctx->html_block_type = md_is_html_block_start_condition(ctx, off);

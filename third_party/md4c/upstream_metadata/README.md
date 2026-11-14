@@ -13,8 +13,8 @@ Pinned tag: `release-0.5.3`
 
 ## Non-public API in use
 
-`src/policy.cpp` calls `entity_lookup()` from `entity.h` directly,
-to resolve entity references inside a link `href` / image `src` before the URI policy inspects them.
+`src/entities.cpp` calls `entity_lookup()` from `entity.h` directly,
+to decode declared tag attrs and resolve references inside a link `href` / image `src` before the URI policy inspects them.
 MD4C leaves `MD_TEXT_ENTITY` substrings verbatim in `MD_ATTRIBUTE`, so `&#106;avascript:` reaches the AST intact.
 `src/parser.cpp` also calls `entity_lookup()` to decode `MD_TEXT_ENTITY` text into the document.
 `entity.h` is an internal header — it is not covered by MD4C's API stability and carries no `extern "C"` guard.
@@ -22,6 +22,11 @@ An upstream bump therefore has to re-check that `const ENTITY* entity_lookup(con
 
 ## Local patches (deviations from upstream)
 
+- Declared tag names (md4c.h, md4c.c): `MD_PARSER::typed_tags` and `n_typed_tags` supply NUL-terminated ASCII names in lexicographic order.
+  Opening and closing names match case-sensitively.
+  A declared tag at the start of a line skips every raw HTML block start condition,
+  so Markdown inside the tag is parsed even when the tag occupies its own line.
+  The check precedes `MD_FLAG_NOHTMLBLOCKS`. Patched hunks use `MARKTIP LOCAL PATCH` comments.
 - `MD_FLAG_CJKFRIENDLYEMPHASIS` (md4c.h, md4c.c, cjk.h): opt-in flag implementing the
   [CommonMark CJK-friendly Amendments Specification](https://github.com/tats-u/markdown-cjk-friendly/blob/main/specification.md)
   for emphasis (`*`, `_`) and strikethrough (`~`). CJK characters include East

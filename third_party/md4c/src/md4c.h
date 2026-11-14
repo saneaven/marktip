@@ -350,6 +350,13 @@ typedef struct MD_PARSER {
      */
     unsigned flags;
 
+    /* MARKTIP LOCAL PATCH: Declared tags stay inline so their contents can contain Markdown.
+     * Names are NUL-terminated ASCII, sorted lexicographically and case-sensitive.
+     * Set n_typed_tags to zero when there are no declared tags.
+     */
+    const MD_CHAR* const* typed_tags;
+    unsigned n_typed_tags;
+
     /* Caller-provided rendering callbacks.
      *
      * For some block/span types, more detailed information is provided in a

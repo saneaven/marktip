@@ -44,6 +44,7 @@ void enforce_uri_policy(const Document& document, const UriPolicy& policy);
 // document. Plain C++ data only, so from_markdown may call it with the GIL
 // released.
 void enforce_node_type_policy(const Document& document, const NodeTypePolicy& policy);
+void finalize_document(Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy);
 
 RelativePolicy relative_policy_from_string(std::string_view value, const char* arg_name);
 void add_uri_scheme(UriRule& rule, std::string scheme, const char* arg_name);

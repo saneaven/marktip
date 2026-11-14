@@ -42,6 +42,7 @@ void check_node_depth(std::size_t depth, const PathStack& path);
 void check_top_level_field(const std::string& name, std::string_view owner_type, const char* kind,
                            bool inline_type, const PathStack& path);
 void check_text_payload(bool present, bool is_string, std::string_view value, const PathStack& path);
+void check_raw_html(const Node& node, const Schema& schema, const PathStack& path);
 // A nullptr result means the attr is unset; callers skip value conversion and checking.
 const AttrSpec* check_attr_name(const std::vector<AttrSpec>& specs, const std::string& name, bool is_none,
                                 std::string_view owner_type, const char* kind, StrictMode mode,
@@ -55,6 +56,7 @@ void store_attr(AttrList& attrs, std::string&& name, AttrValue&& value, const st
 void check_content_field(const NodeSpec& spec, const PathStack& path);
 void check_child_content(const Schema& schema, const NodeSpec& parent, const NodeSpec& child,
                          const Node& child_node, const PathStack& path);
+bool excludes(const ExcludeSet& set, std::string_view type);
 void check_mark_set(const std::vector<Mark>& existing, const Mark& mark, const Schema& schema,
                     const PathStack& path);
 StrictMode strict_mode_from_string(std::string_view level, const char* arg_name);

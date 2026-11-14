@@ -345,7 +345,9 @@ void expel_boundary_whitespace(std::vector<InlineRun>& runs) {
 
         if (!run.content.empty()) {
             InlineRun kept;
-            kept.marks = run.marks;
+            if (!run.marks.empty()) {
+                kept.marks = run.marks;
+            }
             kept.content = std::move(run.content);
             result.push_back(std::move(kept));
         }

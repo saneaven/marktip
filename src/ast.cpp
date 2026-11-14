@@ -47,16 +47,24 @@ std::size_t Document::append_child(std::size_t parent, Node node) {
     return index;
 }
 
+void order_marks(std::vector<Mark>& marks, const Schema& schema) {
+    auto before = [&](const Mark& a, const Mark& b) {
+        const MarkSpec& left = *schema.mark(a.type);
+        const MarkSpec& right = *schema.mark(b.type);
+        if (left.core != right.core) {
+            return left.core;
+        }
+        return !left.core && left.order < right.order;
+    };
+    // The lift maintains this order, so its nodes need only a linear check here.
+    if (!std::is_sorted(marks.begin(), marks.end(), before)) {
+        std::stable_sort(marks.begin(), marks.end(), before);
+    }
+}
+
 void Document::order_marks() {
     for (Node& node : nodes_) {
-        std::stable_sort(node.marks.begin(), node.marks.end(), [&](const Mark& a, const Mark& b) {
-            const MarkSpec& left = *schema_->mark(a.type);
-            const MarkSpec& right = *schema_->mark(b.type);
-            if (left.core != right.core) {
-                return left.core;
-            }
-            return !left.core && left.order < right.order;
-        });
+        marktip::order_marks(node.marks, *schema_);
     }
 }
 

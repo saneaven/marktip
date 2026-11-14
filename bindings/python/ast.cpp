@@ -313,6 +313,7 @@ const NodeSpec* fill_node_fields_from_py(Document& document, std::size_t index, 
     // Outside the block above: an image with no attrs key at all still has no src.
     if (mode != StrictMode::Off) {
         check_required_attrs(node.attrs, specs, node.type, "node", path);
+        check_raw_html(node, schema, path);
     }
 
     py::object marks = dict_get(node_dict, "marks");
@@ -369,13 +370,7 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
     // and should surface whatever the document happens to contain.
     UriPolicy policy = uri_policy_from_py(std::move(link_schemes), std::move(image_schemes), std::move(link_relative),
                                           std::move(image_relative));
-    std::shared_ptr<const Schema> selected_schema = Schema::gfm();
-    if (!schema.is_none()) {
-        if (!py::isinstance<Schema>(schema)) {
-            throw py::type_error("schema must be a Schema or None");
-        }
-        selected_schema = py::cast<std::shared_ptr<const Schema>>(schema);
-    }
+    std::shared_ptr<const Schema> selected_schema = schema_from_py(schema);
     NodeTypePolicy node_policy = node_type_policy_from_py(std::move(reject_node_types), *selected_schema);
     StrictMode mode = strict_from_py(strict, "strict");
 
@@ -387,12 +382,7 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
 
     Document document(std::move(selected_schema));
     fill_node_from_py(document, 0, root, "root node", 0, mode, path);
-    enforce_node_type_policy(document, node_policy);
-    enforce_uri_policy(document, policy);
-    // URI errors must retain the input mark indices, so marks are ordered after policy checks.
-    if (document.schema().has_declared_marks()) {
-        document.order_marks();
-    }
+    finalize_document(document, node_policy, policy);
     return document;
 }
 

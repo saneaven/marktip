@@ -240,10 +240,14 @@ PYBIND11_MODULE(_core, module) {
     // pybind11 takes the doc as a bare const char* and only copies it while def() runs.
     const std::string from_markdown_doc =
         "Parse Markdown into a Document."
+        " Pass schema=Schema(...) to recognize declared tag marks; None (the default) uses the built-in GFM schema."
+        " Declared tag attrs and mark sets are validated while reading."
+        " Malformed declared tags raise InvalidNodeError with .code 'invalid_tag' and a document path."
         " Set cjk_friendly=True to use CJK-friendly emphasis and strikethrough rules"
         " (non-standard extension; the default follows GFM/CommonMark exactly)."
         " Set html=False to parse raw HTML as literal text instead of htmlBlock/htmlInline nodes;"
-        " <br> inside table cells still maps to hardBreak." +
+        " <br> inside table cells still maps to hardBreak."
+        " Declared tag marks are recognized even when html=False." +
         uri_policy_doc + node_policy_doc;
     // strict has no from_markdown counterpart on purpose: the parser only ever emits
     // declared fields, valid content relationships and attrs it understands.
@@ -264,6 +268,8 @@ PYBIND11_MODULE(_core, module) {
         " or 'missing_attr' (a link with no href, an image with no src, which would serialize as '[a]()')."
         " Strict rejects excluded mark combinations and duplicate marks of the same type and attrs."
         " These raise InvalidNodeError with .field 'marks' and .code 'invalid_mark_set'."
+        " Strict rejects htmlInline containing a declared tag and htmlBlock beginning with one."
+        " These use .code 'unrepresentable', .field 'html' and .path locating the raw HTML node."
         " Strict also closes node/mark top-level fields and each node's content model;"
         " violations use .code 'unknown_field' or 'invalid_content'."
         " table 'colCount' and a non-header row's 'align' are accepted at every level,"
@@ -275,6 +281,7 @@ PYBIND11_MODULE(_core, module) {
                py::arg("html") = true, py::kw_only(), py::arg("link_schemes") = py::none(),
                py::arg("image_schemes") = py::none(), py::arg("link_relative") = "allow",
                py::arg("image_relative") = "allow", py::arg("reject_node_types") = py::none(),
+               py::arg("schema") = py::none(),
                from_markdown_doc.c_str());
     module.def("from_dict", &marktip::from_dict_py, py::arg("ast"), py::kw_only(),
                py::arg("link_schemes") = py::none(), py::arg("image_schemes") = py::none(),

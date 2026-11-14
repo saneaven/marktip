@@ -20,6 +20,8 @@ set_target_properties(md4c PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(marktip_core STATIC
   src/ast.cpp
+  src/entities.cpp
+  src/lift.cpp
   src/parser.cpp
   src/policy.cpp
   src/schema.cpp

@@ -14,6 +14,8 @@ extern "C" {
 #include <vector>
 
 #include "errors.h"
+#include "lift.h"
+#include "schema.h"
 
 namespace marktip {
 namespace {
@@ -168,8 +170,8 @@ std::string align_to_string(MD_ALIGN align) {
 
 class AstBuilder {
 public:
-    explicit AstBuilder(std::size_t input_size = 0, bool html = true)
-        : document_(std::max<std::size_t>(32, input_size / 24)), html_(html) {
+    AstBuilder(std::size_t input_size, bool html, std::shared_ptr<const Schema> schema)
+        : document_(std::move(schema), std::max<std::size_t>(32, input_size / 24)), html_(html) {
         stack_.push_back(0);
     }
 
@@ -576,7 +578,7 @@ private:
             return;
         }
 
-        if (!html_) {
+        if (!html_ && !document_.schema().has_tags()) {
             add_text(value);
             return;
         }
@@ -737,15 +739,24 @@ int text_callback(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* use
 
 }  // namespace
 
-Document parse_to_document(std::string markdown, bool cjk_friendly, bool html) {
+Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
+                           std::shared_ptr<const Schema> schema) {
     replace_nul(markdown);
-    AstBuilder builder(markdown.size(), html);
+    std::vector<const MD_CHAR*> typed_tags;
+    if (schema->has_tags()) {
+        for (const TagEntry& entry : schema->tags()) {
+            typed_tags.push_back(entry.tag.c_str());
+        }
+    }
+    AstBuilder builder(markdown.size(), html, std::move(schema));
     MD_PARSER parser {};
     parser.abi_version = 0;
-    // With html=false, block-level raw HTML degrades to paragraph text via
-    // MD_FLAG_NOHTMLBLOCKS. Inline HTML spans stay recognized (no
-    // MD_FLAG_NOHTMLSPANS) so the <br>-in-cell hardBreak mapping keeps
-    // working; AstBuilder turns the remaining spans into literal text.
+    parser.typed_tags = typed_tags.data();
+    parser.n_typed_tags = static_cast<unsigned>(typed_tags.size());
+    // With html=false, block-level raw HTML degrades to paragraph text via MD_FLAG_NOHTMLBLOCKS.
+    // Inline HTML spans stay recognized (no MD_FLAG_NOHTMLSPANS),
+    // so the <br>-in-cell hardBreak mapping keeps working.
+    // AstBuilder handles literal conversion without declared tags; lift handles it otherwise.
     parser.flags = MD_DIALECT_GITHUB | (cjk_friendly ? MD_FLAG_CJKFRIENDLYEMPHASIS : 0) |
                    (html ? 0 : MD_FLAG_NOHTMLBLOCKS);
     parser.enter_block = enter_block_callback;
@@ -763,7 +774,11 @@ Document parse_to_document(std::string markdown, bool cjk_friendly, bool html) {
         }
         throw ParseError("parse_failed", "MD4C failed to parse markdown");
     }
-    return std::move(builder).into_document();
+    Document document = std::move(builder).into_document();
+    if (document.schema().has_tags()) {
+        lift(document, html);
+    }
+    return document;
 }
 
 }  // namespace marktip

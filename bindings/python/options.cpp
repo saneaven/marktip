@@ -4,6 +4,16 @@ namespace py = pybind11;
 
 namespace marktip {
 
+std::shared_ptr<const Schema> schema_from_py(py::handle value) {
+    if (value.is_none()) {
+        return Schema::gfm();
+    }
+    if (!py::isinstance<Schema>(value)) {
+        throw py::type_error("schema must be a Schema or None");
+    }
+    return py::cast<std::shared_ptr<const Schema>>(value);
+}
+
 // Spelled like the relative policy below rather than as a bool,
 // because the interesting question has three answers and only one of them is "do not check".
 StrictMode strict_from_py(py::handle value, const char* arg_name) {

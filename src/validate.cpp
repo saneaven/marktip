@@ -6,6 +6,7 @@
 
 #include "ast.h"
 #include "errors.h"
+#include "tags.h"
 
 namespace marktip {
 namespace {
@@ -16,10 +17,6 @@ bool equal_attrs(const AttrList& left, const AttrList& right) {
             return attr.first == other.first && attr.second == other.second;
         });
     });
-}
-
-bool excludes(const ExcludeSet& set, std::string_view type) {
-    return set.all || std::find(set.names.begin(), set.names.end(), type) != set.names.end();
 }
 
 // The schema is small enough that a linear scan beats anything cleverer,
@@ -59,6 +56,12 @@ const AttrSpec* find_attr_spec(const std::vector<AttrSpec>& specs, std::string_v
 
 [[noreturn]] void throw_code_block_marks(const PathStack& path) {
     throw InvalidNodeError("invalid_content", "marks", "text inside codeBlock must not carry marks",
+                           format_path(path));
+}
+
+[[noreturn]] void throw_declared_html(const PathStack& path) {
+    throw InvalidNodeError("unrepresentable", "html",
+                           "attr 'html' cannot be expressed in markdown: raw HTML is parsed as a declared tag",
                            format_path(path));
 }
 
@@ -128,6 +131,19 @@ void check_text_payload(bool present, bool is_string, std::string_view value, co
     if (value.empty()) {
         throw InvalidNodeError("invalid_content", "text", "text node field 'text' must not be empty",
                                format_path(path));
+    }
+}
+
+void check_raw_html(const Node& node, const Schema& schema, const PathStack& path) {
+    if (!schema.has_tags()) {
+        return;
+    }
+    if (node.type != "htmlInline" && node.type != "htmlBlock") {
+        return;
+    }
+    std::string html = attr_string(node.attrs, "html");
+    if (node.type == "htmlInline" ? contains_declared_tag(html, schema) : starts_declared_tag(html, schema)) {
+        throw_declared_html(path);
     }
 }
 
@@ -309,6 +325,10 @@ void check_child_content(const Schema& schema, const NodeSpec& parent, const Nod
     if (parent.name == "codeBlock" && !child_node.marks.empty()) {
         throw_code_block_marks(path);
     }
+}
+
+bool excludes(const ExcludeSet& set, std::string_view type) {
+    return set.all || std::find(set.names.begin(), set.names.end(), type) != set.names.end();
 }
 
 void check_mark_set(const std::vector<Mark>& existing, const Mark& mark, const Schema& schema,

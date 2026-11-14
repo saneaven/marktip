@@ -17,6 +17,7 @@ UriPolicy uri_policy_from_py(pybind11::object link_schemes, pybind11::object ima
                              pybind11::object link_relative, pybind11::object image_relative);
 NodeTypePolicy node_type_policy_from_py(pybind11::object reject_node_types, const Schema& schema);
 StrictMode strict_from_py(pybind11::handle value, const char* arg_name);
+std::shared_ptr<const Schema> schema_from_py(pybind11::handle value);
 
 // `strict` is from_dict-only: the parser emits only declared fields, valid
 // content relationships and attrs it understands, so there is nothing on
@@ -26,6 +27,7 @@ Document from_dict_py(pybind11::dict root, pybind11::object link_schemes, pybind
                       pybind11::object reject_node_types, pybind11::object strict, pybind11::object schema);
 Document from_markdown_py(pybind11::object markdown, bool cjk_friendly, bool html, pybind11::object link_schemes,
                           pybind11::object image_schemes, pybind11::object link_relative,
-                          pybind11::object image_relative, pybind11::object reject_node_types);
+                          pybind11::object image_relative, pybind11::object reject_node_types,
+                          pybind11::object schema);
 
 }  // namespace marktip
