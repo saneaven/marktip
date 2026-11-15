@@ -85,23 +85,25 @@ def _attrs_to_dict(attrs: dict[str, Attr]) -> dict:
 
 
 class Schema(_CompiledSchema):
-    __slots__ = ("_marks", "_nodes", "_core_attrs", "_key")
+    __slots__ = ("_marks", "_nodes", "_core_attrs", "_block_image", "_key")
 
-    def __init__(self, *, marks=(), nodes=(), core_attrs=None):
+    def __init__(self, *, marks=(), nodes=(), core_attrs=None, block_image=False):
         marks = tuple(marks)
         nodes = tuple(nodes)
         if core_attrs is None:
             core_attrs = {}
-        super().__init__(marks=marks, nodes=nodes, core_attrs=core_attrs)
+        super().__init__(marks=marks, nodes=nodes, core_attrs=core_attrs, block_image=block_image)
         self._marks = marks
         self._nodes = nodes
         self._core_attrs = {name: dict(attrs) for name, attrs in core_attrs.items()}
+        self._block_image = bool(block_image)
         self._key = (
             tuple((mark.name, mark.tag, _attrs_key(mark.attrs), mark.excludes) for mark in marks),
             tuple((node.name, node.kind, node.content, node.group, node.tag, _attrs_key(node.attrs), node.implicit,
                    node.fence, node.math, node.body)
                   for node in nodes),
             tuple((name, _attrs_key(attrs)) for name, attrs in self._core_attrs.items()),
+            self._block_image,
         )
 
     @property
@@ -115,6 +117,10 @@ class Schema(_CompiledSchema):
     @property
     def core_attrs(self) -> dict[str, dict[str, Attr]]:
         return self._core_attrs
+
+    @property
+    def block_image(self) -> bool:
+        return self._block_image
 
     def to_dict(self) -> dict:
         declaration = {"marks": [
@@ -133,6 +139,8 @@ class Schema(_CompiledSchema):
             declaration["core_attrs"] = {
                 name: _attrs_to_dict(attrs) for name, attrs in self._core_attrs.items()
             }
+        if self._block_image:
+            declaration["block_image"] = True
         return declaration
 
     @classmethod
@@ -143,9 +151,9 @@ class Schema(_CompiledSchema):
             name: _attrs_from_dict(attrs)
             for name, attrs in data.get("core_attrs", {}).items()
         }
-        return cls(marks=marks, nodes=nodes, core_attrs=core_attrs)
+        return cls(marks=marks, nodes=nodes, core_attrs=core_attrs, block_image=data.get("block_image", False))
 
-    def extend(self, *, marks=(), nodes=(), core_attrs=None) -> Schema:
+    def extend(self, *, marks=(), nodes=(), core_attrs=None, block_image=None) -> Schema:
         combined = {name: dict(attrs) for name, attrs in self._core_attrs.items()}
         if core_attrs is None:
             core_attrs = {}
@@ -155,7 +163,10 @@ class Schema(_CompiledSchema):
                 if attr_name in target:
                     raise ValueError(f"duplicate core attr '{name}.{attr_name}'")
                 target[attr_name] = attr
-        return type(self)(marks=(*self._marks, *marks), nodes=(*self._nodes, *nodes), core_attrs=combined)
+        if block_image is None:
+            block_image = self._block_image
+        return type(self)(marks=(*self._marks, *marks), nodes=(*self._nodes, *nodes),
+                          core_attrs=combined, block_image=block_image)
 
     def __eq__(self, other):
         if not isinstance(other, Schema):

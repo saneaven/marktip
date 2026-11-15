@@ -276,7 +276,7 @@ enum class InlineContext { Default, TableCell, Heading };
 enum class ListFamily { None, Bullet, Ordered };
 
 enum class BlockKind {
-    Paragraph, TextBlock, Inline, TagLine, Html, Blockquote, Table, Heading, FencedCode,
+    Paragraph, TextBlock, Image, Inline, TagLine, Html, Blockquote, Table, Heading, FencedCode,
     NonInterruptingList, Other
 };
 
@@ -547,7 +547,7 @@ private:
         return !spec.core || uses_tag_form(document_, node, spec) ? &spec : nullptr;
     }
 
-    static BlockKind block_kind(const Node& node, const NodeSpec* spec) {
+    BlockKind block_kind(const Node& node, const NodeSpec* spec) const {
         if (spec != nullptr) {
             if (spec->shape == Shape::TextBlock) {
                 return BlockKind::TextBlock;
@@ -563,7 +563,10 @@ private:
         if (type == "paragraph") {
             return BlockKind::Paragraph;
         }
-        if (type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline") {
+        if (type == "image") {
+            return schema_.block_image() ? BlockKind::Image : BlockKind::Inline;
+        }
+        if (type == "text" || type == "hardBreak" || type == "htmlInline") {
             return BlockKind::Inline;
         }
         if (type == "htmlBlock") {
@@ -808,10 +811,16 @@ private:
         if (prev == BlockKind::TagLine || next == BlockKind::TagLine) {
             return false;
         }
-        if (next == BlockKind::Paragraph || next == BlockKind::Table || next == BlockKind::Html) {
+        if ((prev == BlockKind::Image && (next == BlockKind::Paragraph || next == BlockKind::Image)) ||
+            (prev == BlockKind::Paragraph && next == BlockKind::Image)) {
+            return false;
+        }
+        if (next == BlockKind::Paragraph || next == BlockKind::Image || next == BlockKind::Table ||
+            next == BlockKind::Html) {
             return true;
         }
-        if (prev == BlockKind::Paragraph && next == BlockKind::NonInterruptingList) {
+        if ((prev == BlockKind::Paragraph || prev == BlockKind::Image) &&
+            next == BlockKind::NonInterruptingList) {
             return true;
         }
         return prev == BlockKind::Blockquote && next == BlockKind::Blockquote;
@@ -845,7 +854,7 @@ private:
         std::string continuation = repeat(' ', static_cast<std::size_t>(indent + static_cast<int>(marker.size())));
         if (task) {
             if (first_kind == BlockKind::Paragraph || first_kind == BlockKind::TextBlock ||
-                first_kind == BlockKind::Inline) {
+                first_kind == BlockKind::Image || first_kind == BlockKind::Inline) {
                 out.push_back(' ');
             } else {
                 out.push_back('\n');

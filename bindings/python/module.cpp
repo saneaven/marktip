@@ -264,11 +264,11 @@ PYBIND11_MODULE(_core, module) {
     py::class_<IntList>(module, "IntList");
 
     py::class_<marktip::Schema, std::shared_ptr<marktip::Schema>>(module, "Schema")
-        .def(py::init([](py::object marks, py::object nodes, py::object core_attrs) {
+        .def(py::init([](py::object marks, py::object nodes, py::object core_attrs, bool block_image) {
             return marktip::SchemaBuilder::build(mark_declarations_from_py(marks), node_declarations_from_py(nodes),
-                                                 core_attr_declarations_from_py(core_attrs));
+                                                 core_attr_declarations_from_py(core_attrs), block_image);
         }), py::kw_only(), py::arg("marks") = py::tuple(), py::arg("nodes") = py::tuple(),
-            py::arg("core_attrs") = py::dict());
+            py::arg("core_attrs") = py::dict(), py::arg("block_image") = false);
 
     py::class_<marktip::Document>(module, "Document")
         .def("to_dict", &marktip::to_dict_py, "Convert the document AST to a Tiptap-style JSON dict.")

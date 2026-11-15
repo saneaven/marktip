@@ -156,6 +156,10 @@ bool Schema::has_table_tags() const {
     return table_tags_;
 }
 
+bool Schema::block_image() const {
+    return block_image_;
+}
+
 bool Schema::has_inline_containers() const {
     return inline_containers_;
 }

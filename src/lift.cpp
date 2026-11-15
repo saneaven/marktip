@@ -488,6 +488,7 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
     std::vector<OpenMark> open;
     std::vector<Mark> effective;
     bool math = schema.has_math();
+    bool block_image = schema.block_image();
     const NodeSpec* inline_math = math ? schema.inline_math() : nullptr;
     const NodeSpec* display_math = math ? schema.display_math() : nullptr;
     for (std::size_t child : original) {
@@ -506,6 +507,9 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
                 }
             }
             apply_declared_marks(node.marks, effective, schema, path);
+            if (block_image && node.type == "image") {
+                check_block_marks(node, "a block image cannot carry marks", path);
+            }
             pieces.push_back({carrier != nullptr ? InlinePieceKind::Atom : InlinePieceKind::Node, child, carrier});
             continue;
         }
@@ -524,7 +528,8 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
 
             if (!tag->is_mark) {
                 const NodeSpec& spec = schema.node(tag->spec);
-                if (spec.shape != Shape::InlineAtom && spec.shape != Shape::InlineContainer) {
+                bool image = block_image && spec.name == "image";
+                if (spec.shape != Shape::InlineAtom && spec.shape != Shape::InlineContainer && !image) {
                     invalid_tag("tag '<" + std::string(token.name) + ">' must occupy its declared block form", path);
                 }
                 if (spec.shape == Shape::InlineContainer && token.closing && !token.self_closing) {
@@ -538,10 +543,14 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
                 node.type = spec.name;
                 node.attrs = decode_tag_attrs(token, spec.attrs, spec.name, "node", path);
                 InlinePieceKind kind = InlinePieceKind::OpenContainer;
-                if (spec.shape == Shape::InlineAtom) {
+                if (spec.shape == Shape::InlineAtom || image) {
                     node.marks = core;
                     apply_declared_marks(node.marks, effective, schema, path);
-                    kind = InlinePieceKind::Atom;
+                    // Native and tag images share the temporary paragraph until its parent splits it.
+                    kind = image ? InlinePieceKind::Node : InlinePieceKind::Atom;
+                    if (image) {
+                        check_block_marks(node, "a block image cannot carry marks", path);
+                    }
                 }
                 std::size_t node_index = document.append_node(std::move(node));
                 pieces.push_back({kind, node_index, &spec});
@@ -602,7 +611,111 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
     // Mark pairs are resolved over the flat sequence before containers add structure.
     // Heap-backed parent frames also let excessive tag nesting fail before recursive traversal.
     build_containers(document, index, content_spec, pieces, std::move(original), path);
+    if (block_image && content_spec.name != "paragraph") {
+        for (std::size_t position = 0; position < document.node(index).content.size(); ++position) {
+            const Node& child = document.node(document.node(index).content[position]);
+            if (child.type == "image") {
+                path.push_back({"content", position});
+                check_child_content(document, content_spec, *schema.node("image"), child,
+                                    document.node(index).content.size(), path);
+                path.pop_back();
+            }
+        }
+    }
     return content_spec;
+}
+
+void trim_image_cut(Document& document, std::vector<std::size_t>& content, bool leading) {
+    constexpr const char* whitespace = " \t\r\n\f\v";
+    while (!content.empty()) {
+        Node& node = document.node(leading ? content.front() : content.back());
+        if (node.type == "text") {
+            std::size_t edge = leading ? node.text.find_first_not_of(whitespace)
+                                       : node.text.find_last_not_of(whitespace);
+            if (edge != std::string::npos) {
+                if (leading) {
+                    node.text.erase(0, edge);
+                } else {
+                    node.text.erase(edge + 1);
+                }
+                break;
+            }
+        } else if (node.type != "hardBreak") {
+            break;
+        }
+        if (leading) {
+            content.erase(content.begin());
+        } else {
+            content.pop_back();
+        }
+    }
+}
+
+void append_image_fragment(Document& document, std::vector<std::size_t>& parts, const AttrList& attrs,
+                            const std::vector<std::size_t>& original, std::size_t begin, std::size_t end,
+                            bool leading, bool trailing) {
+    std::vector<std::size_t> content(original.begin() + begin, original.begin() + end);
+    if (leading) {
+        trim_image_cut(document, content, true);
+    }
+    if (trailing) {
+        trim_image_cut(document, content, false);
+    }
+    if (!content.empty()) {
+        Node paragraph;
+        paragraph.type = "paragraph";
+        paragraph.attrs = attrs;
+        paragraph.content = std::move(content);
+        parts.push_back(document.append_node(std::move(paragraph)));
+    }
+}
+
+// The split must precede the parent's expression check, which sees images as blocks in this schema.
+MARKTIP_NOINLINE void split_block_images(Document& document, std::size_t index, const NodeSpec& parent_spec,
+                                        PathStack& path) {
+    std::vector<std::size_t> original = std::move(document.node(index).content);
+    std::vector<std::size_t> children;
+    children.reserve(original.size());
+    for (std::size_t position = 0; position < original.size(); ++position) {
+        std::size_t child = original[position];
+        if (document.node(child).type != "paragraph") {
+            children.push_back(child);
+            continue;
+        }
+        std::vector<std::size_t> inline_children = document.node(child).content;
+        auto first_image = std::find_if(inline_children.begin(), inline_children.end(), [&](std::size_t part) {
+            return document.node(part).type == "image";
+        });
+        if (first_image == inline_children.end()) {
+            children.push_back(child);
+            continue;
+        }
+        AttrList attrs = document.node(child).attrs;
+        std::vector<std::size_t> parts;
+        std::size_t begin = 0;
+        for (std::size_t i = 0; i < inline_children.size(); ++i) {
+            if (document.node(inline_children[i]).type == "image") {
+                append_image_fragment(document, parts, attrs, inline_children, begin, i, begin != 0, true);
+                parts.push_back(inline_children[i]);
+                begin = i + 1;
+            }
+        }
+        append_image_fragment(document, parts, attrs, inline_children, begin, inline_children.size(), true, false);
+        if (((parent_spec.name == "tableCell" || parent_spec.name == "tableHeader") && parts.size() != 1) ||
+            (uses_tag_form(document, document.node(child), *document.schema().node("paragraph")) &&
+             std::none_of(parts.begin(), parts.end(), [&](std::size_t part) {
+                 return document.node(part).type == "paragraph";
+             }))) {
+            path.push_back({"content", position});
+            path.push_back({"content", static_cast<std::size_t>(first_image - inline_children.begin())});
+            check_child_content(document, *document.schema().node("paragraph"), *document.schema().node("image"),
+                                document.node(*first_image), inline_children.size(), path);
+            path.pop_back();
+            path.pop_back();
+        }
+        children.insert(children.end(), parts.begin(), parts.end());
+    }
+    document.node(index).content = std::move(children);
 }
 
 const NodeSpec& lift_node(Document& document, std::size_t index, bool html, bool block_forms, PathStack& path,
@@ -628,6 +741,10 @@ const NodeSpec& lift_node(Document& document, std::size_t index, bool html, bool
             complete_content(document, child, child_spec, path);
         }
         path.pop_back();
+    }
+    if (document.schema().block_image() &&
+        (spec.allow == ContentModel::Blocks || spec.shape == Shape::BlockContainer)) {
+        split_block_images(document, index, spec, path);
     }
     if (!spec.core) {
         complete_content(document, index, spec, path);

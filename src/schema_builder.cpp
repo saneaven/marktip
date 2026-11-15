@@ -162,8 +162,17 @@ std::vector<std::string> groups_from_declaration(const NodeDeclaration& declarat
 }  // namespace
 
 std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks, std::vector<NodeDeclaration> nodes,
-                                             std::vector<CoreAttrDeclaration> core_attrs) {
+                                             std::vector<CoreAttrDeclaration> core_attrs, bool block_image) {
     std::shared_ptr<Schema> schema(new Schema);
+    schema->block_image_ = block_image;
+    if (block_image) {
+        auto image = std::find_if(schema->nodes_.begin(), schema->nodes_.end(), [](const NodeSpec& spec) {
+            return spec.name == "image";
+        });
+        image->shape = Shape::BlockAtom;
+        image->is_block = true;
+        image->is_inline = false;
+    }
     for (const CoreAttrDeclaration& declaration : core_attrs) {
         schema->list_tags_ = schema->list_tags_ || list_owner(declaration.type);
         schema->table_tags_ = schema->table_tags_ || table_owner(declaration.type);

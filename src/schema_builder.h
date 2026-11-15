@@ -49,7 +49,7 @@ struct CoreAttrDeclaration {
 class SchemaBuilder {
 public:
     static std::shared_ptr<Schema> build(std::vector<MarkDeclaration> marks, std::vector<NodeDeclaration> nodes,
-                                         std::vector<CoreAttrDeclaration> core_attrs);
+                                         std::vector<CoreAttrDeclaration> core_attrs, bool block_image = false);
 };
 
 }  // namespace marktip

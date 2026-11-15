@@ -413,8 +413,8 @@ editor_schema = tm.Schema(
 `HIGHLIGHT` declares an optional `color`, so it accepts highlights from editors with or without multicolor enabled.
 `DETAILS` declares `open` with default `False`, accepting both persisted and non-persisted open-state JSON.
 `TEXT_ALIGN` follows Tiptap's documented configuration for `heading` and `paragraph`; use `text_align(types=...)` for other targets.
-`IMAGE_SIZE` serves inline images, matching `Image.configure({inline: true})`.
-It does not change the core child grammar: strict `from_dict` still refuses an `image` directly under `doc`, which is the stock block-image shape.
+`IMAGE_SIZE` adds size attrs to images in either shape.
+The default shape matches `Image.configure({inline: true})`; use `block_image=True` for Tiptap's stock block-image shape.
 The configurable functions mirror options that change Tiptap's JSON:
 
 | Factory | Default declaration |
@@ -450,6 +450,42 @@ Compilation happens once per schema object, so reuse a schema when calls share t
 On an Intel Core Ultra 9 185H Linux machine with Python 3.14.6 and a GCC 16.2.1 Release build,
 `scripts/benchmark.py` measured about 61 microseconds to build a schema with five marks, six nodes and attrs for six core types.
 That is the best of seven batches of 1,000 builds, with declarations prepared outside the timed work.
+
+### Block images
+
+Tiptap's Image extension defaults to block images.
+Choose that shape with `Schema(block_image=True)`:
+
+```python
+image_schema = tm.Schema(block_image=True, core_attrs=tm.IMAGE_SIZE)
+image_json = {"type": "doc", "content": [
+    {"type": "image", "attrs": {"src": "logo.png", "alt": "Logo", "width": 160}},
+]}
+image_doc = tm.from_dict(image_json, schema=image_schema, strict="exact")
+assert tm.from_markdown(image_doc.to_markdown(), schema=image_schema).to_dict() == image_doc.to_dict()
+```
+
+The existing `image` type then belongs to the block group instead of the inline group.
+It can be a document, blockquote, list-item or table-cell child; strict conversion refuses it inside a paragraph or other inline content and refuses a `marks` field on it.
+Without the option, the existing inline-image grammar is unchanged.
+A block image writes ordinary image Markdown on its own line,
+or a standalone `<img .../>` when a declared overlay attr is set.
+It also fits a Markdown table cell's one-line form.
+Inside a list item, a Markdown-form block image needs no blank line next to a paragraph or another image; elsewhere blocks are separated as usual.
+The option changes only the image's shape.
+`<img>` is declared syntax only when `core_attrs` activates the image tag form; otherwise it remains raw HTML or literal text under the `html` option.
+
+On Markdown input a paragraph containing only an image becomes that image.
+A paragraph with a set overlay attr and no surviving paragraph fragment is `invalid_content`, so the overlay is not silently discarded when it holds only images.
+A paragraph with text beside an image splits into paragraphs and block images,
+trimming whitespace and hard breaks at each cut and omitting fragments left empty.
+An image in a heading or beside other content in a Markdown table cell is `invalid_content`.
+An image carrying any mark, including a link, is `invalid_mark_set`; marks are never silently discarded.
+Only paragraphs split, and active inline `<img .../>` tags follow the same rules.
+The URI policy, `reject_node_types` and `IMAGE_SIZE` work in either image shape.
+
+`block_image` is part of schema persistence and identity; `to_dict()` includes the key only when it is true.
+`extend()` inherits the option unless `block_image=True` or `block_image=False` is supplied explicitly.
 
 ## Errors
 
@@ -613,7 +649,7 @@ The tag-boundary whitespace case reaches its stable form after the first write/r
   Missing required children can be filled on Markdown input, but extra empty paragraphs are not recovered.
 - **Task items** — continuation lines use the list marker's indent, without the checkbox width.
   A non-paragraph first block starts after a checkbox-only line; in a loose list that line reads as an empty leading paragraph, while in a tight list it does not.
-- **List-item block separation** — a heading, code fence or block-tag line after a table and a non-1 ordered sublist after a paragraph need a blank line to remain separate blocks.
+- **List-item block separation** — a heading, code fence or block-tag line after a table and a non-1 ordered sublist after a paragraph or Markdown-form block image need a blank line to remain separate blocks.
   These blank lines make a tight list loose; horizontal rules use underscores inside list items so they stay rules without loosening the list.
 - **Task-list tags** — an LI with `checked` is a task item, even when the value is false.
   A UL containing any task item becomes a task list and its unchecked items become unchecked task items; an empty UL becomes a bullet list.
@@ -621,6 +657,10 @@ The tag-boundary whitespace case reaches its stable form after the first write/r
 - **Tag-form images and links** — a missing image `alt` becomes `""`, and an empty image or link `title` is omitted.
 - **Undeclared unit spans** — `colspan: 1` and `rowspan: 1` stay stored on dict input but are not emitted on cell tags unless redeclared.
 - **Math spans** — line breaks inside dollar spans become spaces, and a display span read as a block node has leading and trailing whitespace removed.
+- **Block-image paragraphs** — under `block_image=True`, an image splits its paragraph into block siblings.
+  Whitespace and hard breaks touching the cut are removed, and empty fragments do not become paragraphs.
+  A fragment whose line starts an HTML block, such as `<div class="caption">Caption</div>`, re-reads as `htmlBlock` even when it contains text; that form is stable after the first cycle.
+  A line such as `<span></span>` does not start an HTML block and remains a paragraph.
 
 ## Development
 

@@ -167,6 +167,7 @@ public:
     bool has_textblock_tags() const;
     bool has_list_tags() const;
     bool has_table_tags() const;
+    bool block_image() const;
     bool has_inline_containers() const;
     bool has_fences() const;
     const NodeSpec* fence(std::string_view word) const;
@@ -204,6 +205,7 @@ private:
     bool textblock_tags_ = false;
     bool list_tags_ = false;
     bool table_tags_ = false;
+    bool block_image_ = false;
 };
 
 }  // namespace marktip

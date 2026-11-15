@@ -380,7 +380,8 @@ void check_child_content(const Document& document, const NodeSpec& parent, const
         throw_invalid_child_content(parent, child, path);
     }
     if ((parent.name == "tableCell" || parent.name == "tableHeader") &&
-        !document.schema().has_table_tags() && (!child.core || uses_tag_form(document, child_node, child))) {
+        !document.schema().has_table_tags() &&
+        (!child.core || child.shape == Shape::BlockAtom || uses_tag_form(document, child_node, child))) {
         if (child.shape == Shape::BlockContainer) {
             throw_table_container(child, path);
         }
