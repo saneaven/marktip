@@ -50,6 +50,12 @@ class SchemaBuilder {
 public:
     static std::shared_ptr<Schema> build(std::vector<MarkDeclaration> marks, std::vector<NodeDeclaration> nodes,
                                          std::vector<CoreAttrDeclaration> core_attrs, bool block_image = false);
+
+private:
+    friend class Schema;
+    static std::string fingerprint(const std::vector<MarkDeclaration>& marks,
+                                    const std::vector<NodeDeclaration>& nodes,
+                                    const std::vector<CoreAttrDeclaration>& core_attrs, bool block_image);
 };
 
 }  // namespace marktip

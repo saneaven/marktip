@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass, field
 
 from ._core import IntList, Schema as _CompiledSchema
@@ -77,13 +75,52 @@ def _attrs_key(attrs: dict[str, Attr]) -> tuple:
     )
 
 
+def _attr_to_dict(attr: Attr) -> dict:
+    type_ = attr.type
+    if all(type_ is not allowed for allowed in (str, int, bool, IntList)):
+        raise TypeError("Attr.type must be str, int, bool or IntList")
+    choices = attr.choices
+    if choices is not None and not isinstance(choices, (tuple, list)):
+        raise TypeError("choices must be a tuple or list")
+    return {"type": type_.__name__, "required": attr.required,
+            "choices": None if choices is None else list(choices),
+            "default": attr.default, "uri": attr.uri}
+
+
 def _attrs_to_dict(attrs: dict[str, Attr]) -> dict:
-    return {
-        name: {"type": attr.type.__name__, "required": attr.required,
-               "choices": None if attr.choices is None else list(attr.choices),
-               "default": attr.default, "uri": attr.uri}
-        for name, attr in attrs.items()
-    }
+    if not isinstance(attrs, dict):
+        raise TypeError("attrs must be a dict")
+    return {name: _attr_to_dict(attr) for name, attr in attrs.items()}
+
+
+def _excludes_to_dict(excludes):
+    if excludes is None or isinstance(excludes, str):
+        return excludes
+    if not isinstance(excludes, tuple):
+        raise TypeError("excludes must be None, '_' or a tuple of mark names")
+    return list(excludes)
+
+
+def _declaration_to_dict(marks, nodes, core_attrs, block_image) -> dict:
+    declaration = {"marks": [
+        {"name": mark.name, "tag": mark.tag, "attrs": _attrs_to_dict(mark.attrs),
+         "excludes": _excludes_to_dict(mark.excludes)}
+        for mark in marks
+    ]}
+    if nodes:
+        declaration["nodes"] = [
+            {"name": node.name, "kind": node.kind, "content": node.content, "group": node.group,
+             "tag": node.tag, "attrs": _attrs_to_dict(node.attrs), "implicit": node.implicit,
+             "fence": node.fence, "math": node.math, "body": node.body}
+            for node in nodes
+        ]
+    if core_attrs:
+        declaration["core_attrs"] = {
+            name: _attrs_to_dict(attrs) for name, attrs in core_attrs.items()
+        }
+    if block_image:
+        declaration["block_image"] = True
+    return declaration
 
 
 class Schema(_CompiledSchema):
@@ -94,11 +131,15 @@ class Schema(_CompiledSchema):
         nodes = tuple(nodes)
         if core_attrs is None:
             core_attrs = {}
-        super().__init__(marks=marks, nodes=nodes, core_attrs=core_attrs, block_image=block_image)
+        if not isinstance(core_attrs, dict):
+            raise TypeError("core_attrs must be a dict")
+        if not isinstance(block_image, bool):
+            raise TypeError("block_image must be a bool")
+        super().__init__(_declaration_to_dict(marks, nodes, core_attrs, block_image))
         self._marks = marks
         self._nodes = nodes
         self._core_attrs = {name: dict(attrs) for name, attrs in core_attrs.items()}
-        self._block_image = bool(block_image)
+        self._block_image = block_image
         self._key = (
             tuple((mark.name, mark.tag, _attrs_key(mark.attrs), mark.excludes) for mark in marks),
             tuple((node.name, node.kind, node.content, node.group, node.tag, _attrs_key(node.attrs), node.implicit,
@@ -107,8 +148,6 @@ class Schema(_CompiledSchema):
             tuple((name, _attrs_key(attrs)) for name, attrs in self._core_attrs.items()),
             self._block_image,
         )
-        declaration = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        self._set_fingerprint(hashlib.sha256(declaration.encode("utf-8")).hexdigest())
 
     @property
     def marks(self) -> tuple[MarkSpec, ...]:
@@ -127,25 +166,7 @@ class Schema(_CompiledSchema):
         return self._block_image
 
     def to_dict(self) -> dict:
-        declaration = {"marks": [
-            {"name": mark.name, "tag": mark.tag, "attrs": _attrs_to_dict(mark.attrs),
-             "excludes": list(mark.excludes) if isinstance(mark.excludes, tuple) else mark.excludes}
-            for mark in self._marks
-        ]}
-        if self._nodes:
-            declaration["nodes"] = [
-                {"name": node.name, "kind": node.kind, "content": node.content, "group": node.group,
-                 "tag": node.tag, "attrs": _attrs_to_dict(node.attrs), "implicit": node.implicit,
-                 "fence": node.fence, "math": node.math, "body": node.body}
-                for node in self._nodes
-            ]
-        if self._core_attrs:
-            declaration["core_attrs"] = {
-                name: _attrs_to_dict(attrs) for name, attrs in self._core_attrs.items()
-            }
-        if self._block_image:
-            declaration["block_image"] = True
-        return declaration
+        return _declaration_to_dict(self._marks, self._nodes, self._core_attrs, self._block_image)
 
     @classmethod
     def from_dict(cls, data: dict) -> Schema:

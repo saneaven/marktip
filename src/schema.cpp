@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <utility>
 
+#include "schema_builder.h"
+
 namespace marktip {
 
 bool is_declared_uri_attr(const AttrSpec& attr, bool core) {
@@ -99,16 +101,16 @@ Schema::Schema() {
 }
 
 const std::shared_ptr<const Schema>& Schema::gfm() {
-    static const std::shared_ptr<const Schema> schema(new Schema);
+    static const std::shared_ptr<const Schema> schema = [] {
+        std::shared_ptr<Schema> result(new Schema);
+        result->fingerprint_ = SchemaBuilder::fingerprint({}, {}, {}, false);
+        return result;
+    }();
     return schema;
 }
 
 const std::string& Schema::fingerprint() const {
     return fingerprint_;
-}
-
-void Schema::set_fingerprint(std::string fingerprint) {
-    fingerprint_ = std::move(fingerprint);
 }
 
 const NodeSpec* Schema::node(std::string_view type) const {

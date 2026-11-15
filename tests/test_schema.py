@@ -51,6 +51,12 @@ def test_empty_schema_equals_the_default_declaration():
     assert tm.from_dict(ast, schema=empty).to_markdown(canonical=True) == tm.from_dict(ast).to_markdown(canonical=True)
 
 
+@pytest.mark.parametrize("block_image", (None, 0, 1, "yes", [], {}))
+def test_block_image_requires_a_bool(block_image):
+    with pytest.raises(TypeError, match="block_image must be a bool"):
+        tm.Schema(block_image=block_image)
+
+
 def test_schema_json_roundtrip_preserves_all_declaration_fields():
     schema = tm.Schema(marks=[
         tm.MarkSpec("underline", tag="u"),

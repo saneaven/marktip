@@ -1,6 +1,7 @@
 #include "schema_builder.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <initializer_list>
 #include <stdexcept>
 #include <string_view>
@@ -160,6 +161,164 @@ std::vector<std::string> groups_from_declaration(const NodeDeclaration& declarat
 }
 
 }  // namespace
+
+std::string SchemaBuilder::fingerprint(const std::vector<MarkDeclaration>& marks,
+                                        const std::vector<NodeDeclaration>& nodes,
+                                        const std::vector<CoreAttrDeclaration>& core_attrs, bool block_image) {
+    // Discriminant bytes are fixed storage codes, independent of internal enum and variant numbering.
+    class DeclarationHash {
+    public:
+        void byte(std::uint8_t value) {
+            value_ ^= value;
+            value_ *= UINT64_C(1099511628211);
+        }
+
+        void integer(std::uint64_t value) {
+            for (unsigned i = 0; i < 8; ++i) {
+                byte(static_cast<std::uint8_t>(value));
+                value >>= 8;
+            }
+        }
+
+        void text(std::string_view value) {
+            integer(value.size());
+            for (unsigned char ch : value) {
+                byte(ch);
+            }
+        }
+
+        void optional_text(const std::optional<std::string>& value) {
+            byte(value.has_value());
+            if (value) {
+                text(*value);
+            }
+        }
+
+        void attr_value(const AttrValue& value) {
+            switch (value.kind) {
+                case AttrValue::Kind::String:
+                    byte(0);
+                    text(value.string_value);
+                    break;
+                case AttrValue::Kind::Int:
+                    byte(1);
+                    integer(static_cast<std::uint64_t>(value.int_value));
+                    break;
+                case AttrValue::Kind::Bool:
+                    byte(2);
+                    byte(value.bool_value);
+                    break;
+                case AttrValue::Kind::IntList: {
+                    byte(3);
+                    std::vector<long long> numbers = value.int_list_value();
+                    integer(numbers.size());
+                    for (long long number : numbers) {
+                        integer(static_cast<std::uint64_t>(number));
+                    }
+                    break;
+                }
+            }
+        }
+
+        void attrs(const std::vector<AttrDeclaration>& declarations) {
+            integer(declarations.size());
+            for (const AttrDeclaration& declaration : declarations) {
+                text(declaration.name);
+                switch (declaration.rule) {
+                    case AttrRule::Str: byte(0); break;
+                    case AttrRule::InfoStr: byte(1); break;
+                    case AttrRule::Bool: byte(2); break;
+                    case AttrRule::Int: byte(3); break;
+                    case AttrRule::Level: byte(4); break;
+                    case AttrRule::ListStart: byte(5); break;
+                    case AttrRule::Count: byte(6); break;
+                    case AttrRule::Align: byte(7); break;
+                    case AttrRule::Size: byte(8); break;
+                    case AttrRule::ColWidth: byte(9); break;
+                    case AttrRule::NoSpan: byte(10); break;
+                }
+                byte(declaration.required);
+                byte(declaration.choices.has_value());
+                if (declaration.choices) {
+                    integer(declaration.choices->size());
+                    for (const AttrValue& value : *declaration.choices) {
+                        attr_value(value);
+                    }
+                }
+                byte(declaration.fallback.has_value());
+                if (declaration.fallback) {
+                    attr_value(*declaration.fallback);
+                }
+                optional_text(declaration.uri);
+            }
+        }
+
+        void excludes(const ExcludeDeclaration& declaration) {
+            struct Visitor {
+                DeclarationHash& hash;
+
+                void operator()(const std::monostate&) const { hash.byte(0); }
+                void operator()(const std::string& value) const {
+                    hash.byte(1);
+                    hash.text(value);
+                }
+                void operator()(const std::vector<std::string>& names) const {
+                    hash.byte(2);
+                    hash.integer(names.size());
+                    for (const std::string& name : names) {
+                        hash.text(name);
+                    }
+                }
+            };
+            std::visit(Visitor {*this}, declaration);
+        }
+
+        std::string finish() const {
+            constexpr char digits[] = "0123456789abcdef";
+            std::string result(16, '0');
+            std::uint64_t value = value_;
+            for (unsigned i = 0; i < 16; ++i) {
+                result[15 - i] = digits[value & 15];
+                value >>= 4;
+            }
+            return result;
+        }
+
+    private:
+        std::uint64_t value_ = UINT64_C(14695981039346656037);
+    };
+
+    // Field order follows the declaration structs; lengths and presence bytes delimit every variable field.
+    // Integers and lengths use eight little-endian bytes, independent of the binding and host architecture.
+    DeclarationHash hash;
+    hash.integer(marks.size());
+    for (const MarkDeclaration& mark : marks) {
+        hash.text(mark.name);
+        hash.optional_text(mark.tag);
+        hash.attrs(mark.attrs);
+        hash.excludes(mark.excludes);
+    }
+    hash.integer(nodes.size());
+    for (const NodeDeclaration& node : nodes) {
+        hash.text(node.name);
+        hash.text(node.kind);
+        hash.optional_text(node.content);
+        hash.optional_text(node.group);
+        hash.optional_text(node.tag);
+        hash.attrs(node.attrs);
+        hash.byte(node.implicit);
+        hash.optional_text(node.fence);
+        hash.optional_text(node.math);
+        hash.optional_text(node.body);
+    }
+    hash.integer(core_attrs.size());
+    for (const CoreAttrDeclaration& declaration : core_attrs) {
+        hash.text(declaration.type);
+        hash.attrs(declaration.attrs);
+    }
+    hash.byte(block_image);
+    return hash.finish();
+}
 
 std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks, std::vector<NodeDeclaration> nodes,
                                              std::vector<CoreAttrDeclaration> core_attrs, bool block_image) {
@@ -597,6 +756,7 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
               [](const TagEntry& left, const TagEntry& right) { return left.tag < right.tag; });
     std::sort(schema->fences_.begin(), schema->fences_.end(),
               [](const Schema::FenceEntry& left, const Schema::FenceEntry& right) { return left.word < right.word; });
+    schema->fingerprint_ = fingerprint(marks, nodes, core_attrs, block_image);
     return schema;
 }
 

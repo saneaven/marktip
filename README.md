@@ -128,12 +128,12 @@ assert restored.to_dict() == doc.to_dict()
 assert restored.to_markdown() == doc.to_markdown()
 ```
 
-The stored form has this shape, with the fingerprint and `doc.content` abbreviated:
+The stored form has this shape, with `doc.content` abbreviated:
 
 ```json
 {
   "marktip": 1,
-  "schema": "9f2c…",
+  "schema": "d4657f55662f817f",
   "doc": {"type": "doc", "content": [...]},
   "source": {
     "head": "",
@@ -154,6 +154,7 @@ An item without `text` has no remembered spelling; `sep` is its trailing gap.
 A document without spelling omits `source` entirely and still round-trips through `dump` and `load`.
 
 The schema is compared by a stable fingerprint of its declaration, so separately constructed equal schemas can reuse spelling through both `base=` and `load`.
+The core computes the fingerprint with FNV-1a 64-bit and stores it as 16 hexadecimal characters.
 `load(data, schema=S)` reads the stored content and restores spelling only when the declaration fingerprint matches.
 The content must be readable under the supplied schema.
 A different declaration drops the spelling, so readable content is written in marktip's spelling.
@@ -176,6 +177,7 @@ The frontend can render the stored `doc` without running marktip.
 
 ### Source-spelling limits
 
+- Dumps stored before the FNV-1a fingerprint change are read without their source spelling; their content stays intact.
 - Changing parser options (`html`, `cjk_friendly`) can make documents stored earlier read back differently.
 - The unit is one top-level block.
   When a list, table, quote, or declared container needs rewriting, that whole block is written again and its internal source spelling is lost.
