@@ -35,6 +35,7 @@ test = ["pytest>=8"]
 [tool.scikit-build]
 cmake.build-type = "Release"
 wheel.packages = ["python/marktip"]
+sdist.exclude = ["tests/**"]
 sdist.include = [
   "src/**",
   "bindings/python/**",
