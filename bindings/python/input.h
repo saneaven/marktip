@@ -24,13 +24,15 @@ struct PythonInput {
 
     static pybind11::dict items(Value value) { return pybind11::reinterpret_borrow<pybind11::dict>(value); }
     static pybind11::list elements(Value value) { return pybind11::reinterpret_borrow<pybind11::list>(value); }
+    static std::size_t size(Value value) { return PyList_Size(value.ptr()); }
     static std::string string(Value value) { return pybind11::cast<std::string>(value); }
+    static std::string coerce_string(Value value) { return pybind11::cast<std::string>(pybind11::str(value)); }
     static bool boolean(Value value) { return pybind11::cast<bool>(value); }
 
     static bool integer(Value value, long long& result) {
         int overflow = 0;
         result = PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
-        if (overflow != 0) {
+        if (overflow != 0 || (result == -1 && PyErr_Occurred() != nullptr)) {
             PyErr_Clear();
             return false;
         }

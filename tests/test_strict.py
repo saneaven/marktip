@@ -288,6 +288,19 @@ def test_heading_level_range(value, expected, level):
     assert code_for(doc(node("heading", level=value)), strict=level) == expected
 
 
+@pytest.mark.parametrize("level", ("off", *LEVELS))
+def test_oversized_integer_attr_is_dropped_off_and_reported_with_a_path_under_strict(level):
+    ast = doc(node("heading", level=10**100))
+    if level == "off":
+        assert tm.from_dict(ast, strict=level).to_dict() == doc({"type": "heading", "content": [text()]})
+    else:
+        with pytest.raises(tm.InvalidNodeError) as excinfo:
+            tm.from_dict(ast, strict=level)
+        assert excinfo.value.code == "invalid_attr_value"
+        assert excinfo.value.field == "level"
+        assert excinfo.value.path == "content[0]"
+
+
 @pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize(
     "start, expected",

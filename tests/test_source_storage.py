@@ -178,6 +178,14 @@ def test_load_rejects_an_unknown_storage_version(version):
         tm.load(stored)
 
 
+@pytest.mark.parametrize("version", (True, 10**100))
+def test_load_rejects_boolean_and_oversized_storage_versions(version):
+    stored = tm.from_markdown("text\n").dump()
+    stored["marktip"] = version
+    with pytest.raises(ValueError, match="^unsupported marktip version$"):
+        tm.load(stored)
+
+
 @pytest.mark.parametrize("change", ("remove", "add"))
 def test_load_drops_spelling_when_block_item_count_differs(change):
     document = tm.from_markdown("# Keep ###\n\n*body*\n")
