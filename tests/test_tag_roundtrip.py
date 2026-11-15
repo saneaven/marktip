@@ -11,6 +11,7 @@ LEVELS = ("off", "content", "exact")
 HTML = (True, False)
 PARENT_PATH = "content[0]"
 MARK_PATH = "content[0].content[0].marks[0]"
+MAX_NODE_DEPTH = 512
 
 
 def doc(*blocks):
@@ -593,19 +594,19 @@ def test_excluded_declared_pair_is_rejected_even_when_the_inner_tag_is_empty(htm
     assert excinfo.value.path == PARENT_PATH
 
 
-def test_two_thousand_nonexclusive_nested_marks_parse_in_under_one_second():
-    depth = 2000
+def test_nonexclusive_nested_marks_at_the_depth_limit_parse_in_under_one_second():
+    depth = MAX_NODE_DEPTH
     schema = tm.Schema(marks=[tm.MarkSpec("comment", attrs={"id": tm.Attr(int)}, excludes=())])
     markdown = "".join(f'<comment id="{index}">x' for index in range(depth)) + "</comment>" * depth
     start = time.perf_counter()
     parsed = tm.from_markdown(markdown, schema=schema)
     elapsed = time.perf_counter() - start
     assert isinstance(parsed, tm.Document)
-    assert elapsed < 1.0, f"2000 nested nonexclusive marks took {elapsed:.3f}s"
+    assert elapsed < 1.0, f"{depth} nested nonexclusive marks took {elapsed:.3f}s"
 
 
 def test_nonexclusive_mark_nesting_uses_the_existing_depth_limit():
-    depth = 2048
+    depth = MAX_NODE_DEPTH
     schema = tm.Schema(marks=[tm.MarkSpec("comment", attrs={"id": tm.Attr(int)}, excludes=())])
     opening = "".join(f'<comment id="{index}">' for index in range(depth))
     closing = "</comment>" * depth

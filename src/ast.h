@@ -15,9 +15,9 @@ namespace marktip {
 
 class Schema;
 
-// Deep documents are traversed recursively (to_dict, to_markdown); cap nesting
-// at build time so those traversals cannot overflow the C stack.
-inline constexpr std::size_t kMaxNodeDepth = 2048;
+// Deep document traversals recurse; cap nesting for the smallest binding stack.
+// In wasm, that includes the JS engine's call stack.
+inline constexpr std::size_t kMaxNodeDepth = 512;
 
 struct Node {
     std::string type;

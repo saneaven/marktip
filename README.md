@@ -666,7 +666,7 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `missing_type` | `InvalidNodeError` | a node or mark has no `type` key |
 | `invalid_root` | `InvalidNodeError` | the root node's type is not `doc` |
 | `wrong_type` | `InvalidNodeError` | `attrs`/`content`/`marks`/a child has the wrong Python type |
-| `max_depth` | `InvalidNodeError` | dict nesting exceeds 2048 |
+| `max_depth` | `InvalidNodeError` | dict nesting exceeds 512 |
 | `disallowed_scheme` | `InvalidNodeError` | a core or declared URI attr has a scheme outside its allowlist |
 | `disallowed_relative_url` | `InvalidNodeError` | a scheme-less core or declared URI attr violates its relative policy |
 | `invalid_uri_char` | `InvalidNodeError` | a core or declared URI attr contains an ASCII control character |
@@ -679,7 +679,7 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `missing_attr` | `InvalidNodeError` | a required attr is unset on strict dict input or a declared tag |
 | `invalid_mark_set` | `InvalidNodeError` | conflicting or duplicate marks on strict dict input or in declared tags |
 | `invalid_tag` | `InvalidNodeError` | a declared tag is unmatched, self-closing where a container is required, or in the wrong position |
-| `markdown_max_depth` | `ParseError` | Markdown node nesting or simultaneously open declared mark tags exceeds 2048 |
+| `markdown_max_depth` | `ParseError` | Markdown node nesting or simultaneously open declared mark tags exceeds 512 |
 | `parse_failed` | `ParseError` | MD4C could not parse the input |
 
 Malformed schema declarations are caller bugs and raise ordinary Python exceptions rather than `MarktipError`; bad declaration values raise `ValueError`.
@@ -713,7 +713,8 @@ It guarantees, for the whole tree:
 - **`type` is required** on every node and mark.
 - **The root is a `doc`.**
 - **Shapes**: `attrs` is a dict, `content` and `marks` are lists, and every entry of `content`/`marks` is a dict.
-- **Depth** is at most 2048 levels.
+- **Depth** is at most 512 levels.
+  The same limit caps simultaneously open declared mark tags.
 - **No ASCII control character** in a link `href` or image `src`, entity references included (`&Tab;`, `&#09;`).
 - **The URI policy**, when `link_schemes`/`image_schemes`/`link_relative`/`image_relative` ask for it — see [Restricting link and image URIs](#restricting-link-and-image-uris).
 - **The node-type policy**, when `reject_node_types` names a type — see [Rejecting node types](#rejecting-node-types).

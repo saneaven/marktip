@@ -10,6 +10,7 @@ import marktip as tm
 LEVELS = ("off", "content", "exact")
 HTML = (True, False)
 PARENT_PATH = "content[0]"
+MAX_NODE_DEPTH = 512
 
 
 def doc(*blocks):
@@ -307,14 +308,14 @@ def test_read_content_expression_errors_locate_the_declared_container(html, mark
 
 
 @pytest.mark.parametrize("html", HTML)
-def test_two_thousand_nested_inline_containers_parse_without_a_deep_python_expected_tree(html):
-    depth = 2000
+def test_nested_inline_containers_at_the_depth_limit_parse_without_a_deep_python_expected_tree(html):
+    depth = MAX_NODE_DEPTH - 2
     schema = inline_schema()
     markdown = "<wrap>" * depth + "x" + "</wrap>" * depth
     start = time.perf_counter()
     parsed = tm.from_markdown(markdown, schema=schema, html=html)
     elapsed = time.perf_counter() - start
-    assert elapsed < 1.0, f"2000 nested inline containers took {elapsed:.3f}s"
+    assert elapsed < 1.0, f"{depth} nested inline containers took {elapsed:.3f}s"
     assert parsed.to_markdown(canonical=True) == markdown
     child = parsed.to_dict()["content"][0]
     for _ in range(depth):
