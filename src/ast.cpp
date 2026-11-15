@@ -1,4 +1,5 @@
 #include "ast.h"
+#include "form.h"
 #include "schema.h"
 
 #include <algorithm>
@@ -53,6 +54,10 @@ void order_marks(std::vector<Mark>& marks, const Schema& schema) {
         const MarkSpec& right = *schema.mark(b.type);
         if (left.core != right.core) {
             return left.core;
+        }
+        if (left.core && schema.has_core_attrs()) {
+            // A tag link encloses the delimiter marks, so their original nesting order is not carried.
+            return !uses_tag_form(a, left) && uses_tag_form(b, right);
         }
         return !left.core && left.order < right.order;
     };

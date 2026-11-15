@@ -4,6 +4,7 @@
 #include <string_view>
 #include <utility>
 
+#include "form.h"
 
 namespace marktip {
 namespace {
@@ -167,33 +168,51 @@ void append_escaped_attr(std::string& out, std::string_view value) {
     }
 }
 
-std::string open_tag(const std::vector<AttrSpec>& specs, const std::string& tag, const AttrList& attrs,
-                     bool self_closing) {
+void append_tag_attr(std::string& out, const AttrSpec& attr, const AttrList& attrs) {
+    const AttrValue* value = find_attr(attrs, attr.name);
+    if (value == nullptr) {
+        return;
+    }
+    out += " " + attr.name + "=\"";
+    switch (value->kind) {
+        case AttrValue::Kind::String:
+        case AttrValue::Kind::IntList:
+            append_escaped_attr(out, value->string_value);
+            break;
+        case AttrValue::Kind::Int:
+            out += std::to_string(value->int_value);
+            break;
+        case AttrValue::Kind::Bool:
+            out += value->bool_value ? "true" : "false";
+            break;
+    }
+    out.push_back('"');
+}
+
+std::string open_tag(const std::vector<AttrSpec>& specs, const std::vector<std::size_t>& tag_attrs,
+                     const std::string& tag, const AttrList& attrs, bool self_closing, bool core) {
     std::string out = "<" + tag;
-    for (const AttrSpec& attr : specs) {
-        const AttrValue* value = find_attr(attrs, attr.name);
-        if (value == nullptr) {
-            continue;
+    if (core) {
+        for (std::size_t index : tag_attrs) {
+            append_tag_attr(out, specs[index], attrs);
         }
-        out += " " + attr.name + "=\"";
-        switch (value->kind) {
-            case AttrValue::Kind::String:
-                append_escaped_attr(out, value->string_value);
-                break;
-            case AttrValue::Kind::Int:
-                out += std::to_string(value->int_value);
-                break;
-            case AttrValue::Kind::Bool:
-                out += value->bool_value ? "true" : "false";
-                break;
+    } else {
+        for (const AttrSpec& attr : specs) {
+            append_tag_attr(out, attr, attrs);
         }
-        out.push_back('"');
     }
     if (self_closing) {
         out.push_back('/');
     }
     out.push_back('>');
     return out;
+}
+
+std::string node_tag(const NodeSpec& spec, const AttrList& attrs) {
+    if (spec.core && spec.name == "heading") {
+        return "h" + std::to_string(std::clamp<long long>(attr_int(attrs, "level", 1), 1, 6));
+    }
+    return spec.tag;
 }
 
 }  // namespace
@@ -271,7 +290,7 @@ bool starts_declared_tag(std::string_view html, const Schema& schema) {
 
 std::string open_tag(const Schema& schema, const Mark& mark) {
     const MarkSpec& spec = *schema.mark(mark.type);
-    return open_tag(spec.attrs, spec.tag, mark.attrs, false);
+    return open_tag(spec.attrs, spec.tag_attrs, spec.tag, mark.attrs, false, spec.core);
 }
 
 std::string close_tag(const Schema& schema, const Mark& mark) {
@@ -279,17 +298,19 @@ std::string close_tag(const Schema& schema, const Mark& mark) {
 }
 
 std::string open_node_tag(const NodeSpec& spec, const AttrList& attrs) {
-    return open_tag(spec.attrs, spec.tag, attrs,
-                    spec.shape == Shape::InlineAtom || spec.shape == Shape::BlockAtom);
+    return open_tag(spec.attrs, spec.tag_attrs, node_tag(spec, attrs), attrs,
+                    spec.shape == Shape::InlineAtom || spec.shape == Shape::BlockAtom,
+                    spec.core);
 }
 
-std::string close_node_tag(const NodeSpec& spec) {
-    return "</" + spec.tag + ">";
+std::string close_node_tag(const NodeSpec& spec, const AttrList& attrs) {
+    return "</" + node_tag(spec, attrs) + ">";
 }
 
 void order_tag_marks(std::vector<Mark>& marks, const Schema& schema) {
     std::stable_partition(marks.begin(), marks.end(), [&](const Mark& mark) {
-        return !schema.mark(mark.type)->core;
+        const MarkSpec& spec = *schema.mark(mark.type);
+        return !spec.core || uses_tag_form(mark, spec);
     });
 }
 

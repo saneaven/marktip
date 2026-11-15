@@ -3,7 +3,29 @@
 #include <algorithm>
 #include <utility>
 
+#include "ast.h"
+
 namespace marktip {
+namespace {
+
+bool has_tag_attr(const AttrList& attrs, const std::vector<AttrSpec>& specs) {
+    return std::any_of(specs.begin(), specs.end(), [&](const AttrSpec& spec) {
+        return spec.form == MarkdownForm::Tag && find_attr(attrs, spec.name) != nullptr;
+    });
+}
+
+}  // namespace
+
+bool uses_tag_form(const Node& node, const NodeSpec& spec) {
+    if (spec.tag.empty()) {
+        return false;
+    }
+    return !spec.core || has_tag_attr(node.attrs, spec.attrs);
+}
+
+bool uses_tag_form(const Mark& mark, const MarkSpec& spec) {
+    return !spec.core || (!spec.tag.empty() && has_tag_attr(mark.attrs, spec.attrs));
+}
 
 CodeInfo code_info(const AttrList& attrs) {
     std::string value = attr_string(attrs, "language");

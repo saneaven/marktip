@@ -17,6 +17,8 @@ namespace py = pybind11;
 
 namespace {
 
+struct IntList {};
+
 // Builds the Python exception instance and fills the fields every MarktipError carries.
 // The caller attaches any subclass-specific fields, then raises it.
 py::object make_marktip_error(const py::object& exc_type, const marktip::MarktipError& e) {
@@ -41,23 +43,37 @@ std::optional<std::string> declaration_optional_string(py::handle value, const c
     return declaration_string(value, field);
 }
 
+long long declaration_integer(py::handle value) {
+    int overflow = 0;
+    long long number = PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
+    if (overflow != 0) {
+        PyErr_Clear();
+        throw py::value_error("declaration integer must fit in long long");
+    }
+    return number;
+}
+
 marktip::AttrValue declaration_value(py::handle value) {
     if (py::isinstance<py::bool_>(value)) {
         return marktip::AttrValue::boolean(py::cast<bool>(value));
     }
     if (py::isinstance<py::int_>(value)) {
-        int overflow = 0;
-        long long number = PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
-        if (overflow != 0) {
-            PyErr_Clear();
-            throw py::value_error("declaration integer must fit in long long");
-        }
-        return marktip::AttrValue::integer(number);
+        return marktip::AttrValue::integer(declaration_integer(value));
     }
     if (py::isinstance<py::str>(value)) {
         return marktip::AttrValue::string(declaration_string(value, "declaration value"));
     }
-    throw py::value_error("declaration values must be str, int or bool");
+    if (py::isinstance<py::list>(value)) {
+        std::vector<long long> numbers;
+        for (py::handle item : py::reinterpret_borrow<py::list>(value)) {
+            if (!py::isinstance<py::int_>(item) || py::isinstance<py::bool_>(item)) {
+                throw py::value_error("IntList declaration values must be lists of ints");
+            }
+            numbers.push_back(declaration_integer(item));
+        }
+        return marktip::AttrValue::int_list(std::move(numbers));
+    }
+    throw py::value_error("declaration values must be str, int, bool or IntList");
 }
 
 marktip::AttrRule declaration_rule(py::handle value) {
@@ -70,7 +86,10 @@ marktip::AttrRule declaration_rule(py::handle value) {
     if (value.ptr() == reinterpret_cast<PyObject*>(&PyBool_Type)) {
         return marktip::AttrRule::Bool;
     }
-    throw py::type_error("Attr.type must be str, int or bool");
+    if (value.is(py::type::of<IntList>())) {
+        return marktip::AttrRule::ColWidth;
+    }
+    throw py::type_error("Attr.type must be str, int, bool or IntList");
 }
 
 std::vector<std::string> declaration_names(py::handle value, const char* field) {
@@ -164,6 +183,17 @@ std::vector<marktip::NodeDeclaration> node_declarations_from_py(py::handle value
     return result;
 }
 
+std::vector<marktip::CoreAttrDeclaration> core_attr_declarations_from_py(py::handle values) {
+    if (!py::isinstance<py::dict>(values)) {
+        throw py::type_error("core_attrs must be a dict");
+    }
+    std::vector<marktip::CoreAttrDeclaration> result;
+    for (auto owner : py::reinterpret_borrow<py::dict>(values)) {
+        result.push_back({declaration_string(owner.first, "core attr type"), attr_declarations_from_py(owner.second)});
+    }
+    return result;
+}
+
 }  // namespace
 
 PYBIND11_MODULE(_core, module) {
@@ -231,10 +261,14 @@ PYBIND11_MODULE(_core, module) {
         }
     });
 
+    py::class_<IntList>(module, "IntList");
+
     py::class_<marktip::Schema, std::shared_ptr<marktip::Schema>>(module, "Schema")
-        .def(py::init([](py::object marks, py::object nodes) {
-            return marktip::SchemaBuilder::build(mark_declarations_from_py(marks), node_declarations_from_py(nodes));
-        }), py::kw_only(), py::arg("marks") = py::tuple(), py::arg("nodes") = py::tuple());
+        .def(py::init([](py::object marks, py::object nodes, py::object core_attrs) {
+            return marktip::SchemaBuilder::build(mark_declarations_from_py(marks), node_declarations_from_py(nodes),
+                                                 core_attr_declarations_from_py(core_attrs));
+        }), py::kw_only(), py::arg("marks") = py::tuple(), py::arg("nodes") = py::tuple(),
+            py::arg("core_attrs") = py::dict());
 
     py::class_<marktip::Document>(module, "Document")
         .def("to_dict", &marktip::to_dict_py, "Convert the document AST to a Tiptap-style JSON dict.")

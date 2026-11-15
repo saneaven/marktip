@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,7 +13,7 @@ namespace marktip {
 inline constexpr long long kMaxListStart = 999999999;
 
 struct AttrValue {
-    enum class Kind { String, Int, Bool };
+    enum class Kind { String, Int, Bool, IntList };
 
     Kind kind = Kind::String;
     std::string string_value;
@@ -22,6 +23,9 @@ struct AttrValue {
     static AttrValue string(std::string value);
     static AttrValue integer(long long value);
     static AttrValue boolean(bool value);
+    static AttrValue int_list(std::vector<long long> value);
+
+    std::vector<long long> int_list_value() const;
 
     bool operator==(const AttrValue& other) const;
 };
@@ -36,6 +40,7 @@ struct Mark {
 };
 
 std::string normalize_content_string(std::string value);
+std::optional<std::vector<long long>> parse_int_list(std::string_view value);
 
 void set_attr(AttrList& attrs, std::string key, AttrValue value);
 const AttrValue* find_attr(const AttrList& attrs, std::string_view key);

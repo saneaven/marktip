@@ -110,6 +110,21 @@ std::string escape_dollars(std::string value) {
     return out;
 }
 
+std::string escape_autolinks(std::string_view value) {
+    // Raw <a> tags do not suppress MD4C's permissive autolinks inside them.
+    std::string out;
+    out.reserve(value.size());
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        char ch = value[i];
+        if (ch == '@' || (ch == ':' && value.substr(i + 1, 2) == "//") ||
+            (ch == '.' && i >= 3 && value.substr(i - 3, 3) == "www")) {
+            out.push_back('\\');
+        }
+        out.push_back(ch);
+    }
+    return out;
+}
+
 // Escape characters that would start a new block construct at the beginning of a
 // paragraph line ('-', '+', '>', setext underlines, ordered-list markers).
 std::string escape_line_starts(const std::string& value) {
@@ -223,6 +238,10 @@ std::string apply_marks(std::string rendered, const std::vector<Mark>& marks, co
         } else if (it->type == "code") {
             rendered = code_span(rendered);
         } else if (it->type == "link") {
+            if (schema.has_core_attrs() && uses_tag_form(*it, *schema.mark(it->type))) {
+                rendered = open_tag(schema, *it) + rendered + close_tag(schema, *it);
+                continue;
+            }
             std::string href = mark_attr_string(*it, "href");
             std::string title = mark_attr_string(*it, "title");
             rendered = "[" + rendered + "](" + escape_link_destination(href) +
@@ -310,6 +329,9 @@ std::string open_delimiter(const Mark& mark, const Schema& schema) {
         return "~~";
     }
     if (mark.type == "link") {
+        if (schema.has_core_attrs() && uses_tag_form(mark, *schema.mark(mark.type))) {
+            return open_tag(schema, mark);
+        }
         return "[";
     }
     return open_tag(schema, mark);
@@ -326,6 +348,9 @@ std::string close_delimiter(const Mark& mark, const Schema& schema) {
         return "~~";
     }
     if (mark.type == "link") {
+        if (schema.has_core_attrs() && uses_tag_form(mark, *schema.mark(mark.type))) {
+            return close_tag(schema, mark);
+        }
         std::string href = mark_attr_string(mark, "href");
         std::string title = mark_attr_string(mark, "title");
         return "](" + escape_link_destination(href) +
@@ -419,8 +444,10 @@ std::string emit_runs(const std::vector<InlineRun>& runs, const Schema& schema) 
 class MarkdownWriter {
 public:
     explicit MarkdownWriter(const Document& document)
-        : document_(document), schema_(document.schema()), extended_(schema_.has_declared_marks()),
-          declared_nodes_(schema_.has_declared_nodes()), inline_containers_(schema_.has_inline_containers()),
+        : document_(document), schema_(document.schema()),
+          extended_(schema_.has_declared_marks() || schema_.has_core_attrs()),
+          node_forms_(schema_.has_declared_nodes() || schema_.has_core_attrs()),
+          inline_containers_(schema_.has_inline_containers()),
           math_(schema_.has_math()) {}
 
     std::string render() {
@@ -438,17 +465,31 @@ private:
     const Document& document_;
     const Schema& schema_;
     bool extended_;
-    bool declared_nodes_;
+    bool node_forms_;
     bool inline_containers_;
     bool math_;
     std::vector<MathToken> math_tokens_;
 
-    std::string escape_text(std::string_view value, bool table_cell) {
+    std::string escape_text(std::string_view value, bool table_cell, bool tag_link = false) {
         std::string escaped = escape_inline(value, table_cell);
+        if (tag_link) {
+            escaped = escape_autolinks(escaped);
+        }
         if (math_) {
             escaped = escape_dollars(std::move(escaped));
         }
         return escaped;
+    }
+
+    bool has_tag_link(const std::vector<Mark>& marks) const {
+        if (schema_.has_link_tag()) {
+            for (const Mark& mark : marks) {
+                if (mark.type == "link") {
+                    return uses_tag_form(mark, *schema_.mark(mark.type));
+                }
+            }
+        }
+        return false;
     }
 
     std::string math_token(const Node& node, const NodeSpec& spec) {
@@ -500,7 +541,7 @@ private:
 
     const NodeSpec* declared_form(const Node& node) const {
         const NodeSpec& spec = *schema_.node(node.type);
-        return spec.core ? nullptr : &spec;
+        return !spec.core || uses_tag_form(node, spec) ? &spec : nullptr;
     }
 
     static BlockKind block_kind(const Node& node, const NodeSpec* spec) {
@@ -548,7 +589,7 @@ private:
 
     void append_container_tag(const Node& node, const NodeSpec& spec, int indent, bool closing,
                               std::vector<BlockPiece>& pieces, int& prev_variant) {
-        std::string tag = closing ? close_node_tag(spec) : open_node_tag(spec, node.attrs);
+        std::string tag = closing ? close_node_tag(spec, node.attrs) : open_node_tag(spec, node.attrs);
         pieces.emplace_back(add_indent(std::move(tag), indent), BlockKind::TagLine, ListFamily::None);
         prev_variant = 0;
     }
@@ -560,7 +601,7 @@ private:
             append_container_tag(node, *container, indent, false, pieces, prev_variant);
         }
         for_each_child(node, [&](const Node& child) {
-            const NodeSpec* spec = declared_nodes_ ? declared_form(child) : nullptr;
+            const NodeSpec* spec = node_forms_ ? declared_form(child) : nullptr;
             if (spec != nullptr && spec->shape == Shape::BlockContainer) {
                 collect_block_children(child, spec, indent, list_item, pieces, prev_variant);
                 return;
@@ -616,7 +657,7 @@ private:
         }
         if (spec.shape == Shape::TextBlock) {
             return add_indent(escape_line_starts(open_node_tag(spec, node.attrs) + render_inlines(node, ctx) +
-                                                close_node_tag(spec)), indent);
+                                                close_node_tag(spec, node.attrs)), indent);
         }
         if (spec.shape == Shape::BlockAtom) {
             if (const AttrValue* body = fence_body(spec, node.attrs, ctx == InlineContext::TableCell)) {
@@ -885,11 +926,13 @@ private:
         for_each_child(cell, [&](const Node& child) {
             const std::string& type = child.type;
             if (type == "paragraph") {
-                blocks.push_back(render_inlines(child, InlineContext::TableCell));
+                const NodeSpec* spec = node_forms_ ? declared_form(child) : nullptr;
+                blocks.push_back(spec != nullptr ? render_declared(child, *spec, 0, InlineContext::TableCell)
+                                                 : render_inlines(child, InlineContext::TableCell));
             } else if (type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline") {
                 blocks.push_back(render_inline(child, InlineContext::TableCell));
             } else {
-                const NodeSpec* spec = declared_nodes_ ? declared_form(child) : nullptr;
+                const NodeSpec* spec = node_forms_ ? declared_form(child) : nullptr;
                 blocks.push_back(render_block(child, 0, spec, 0, InlineContext::TableCell));
             }
         });
@@ -904,14 +947,15 @@ private:
     std::string render_inline_content(const Node& node, InlineContext ctx, bool in_code) {
         const std::string& type = node.type;
         if (type == "text") {
+            bool tag_link = !in_code && has_tag_link(node.marks);
             if (ctx == InlineContext::Heading && node.text.find('\n') != std::string::npos) {
                 // ATX headings are single-line; literal newlines (e.g. carried
                 // over from setext input) demote to spaces.
                 std::string flattened = node.text;
                 std::replace(flattened.begin(), flattened.end(), '\n', ' ');
-                return in_code ? flattened : escape_text(flattened, false);
+                return in_code ? flattened : escape_text(flattened, false, tag_link);
             }
-            return in_code ? node.text : escape_text(node.text, ctx == InlineContext::TableCell);
+            return in_code ? node.text : escape_text(node.text, ctx == InlineContext::TableCell, tag_link);
         }
         if (type == "hardBreak") {
             if (ctx == InlineContext::TableCell) {
@@ -923,6 +967,11 @@ private:
             return "  \n";
         }
         if (type == "image") {
+            if (node_forms_) {
+                if (const NodeSpec* spec = declared_form(node)) {
+                    return open_node_tag(*spec, node.attrs);
+                }
+            }
             std::string src = attr_string(node.attrs, "src");
             std::string alt = attr_string(node.attrs, "alt", plain_text(node));
             std::string title = attr_string(node.attrs, "title");
@@ -932,7 +981,7 @@ private:
         if (type == "htmlInline") {
             return attr_string(node.attrs, "html", plain_text(node));
         }
-        if (declared_nodes_) {
+        if (node_forms_) {
             const NodeSpec& spec = *schema_.node(type);
             if (!spec.core) {
                 if (spec.math == MathMode::Inline) {
@@ -993,7 +1042,7 @@ private:
             }
             // Container tags close the surrounding marks before the inner inline sequence starts.
             out += render_inline_segment(content, begin, i, ctx);
-            out += open_node_tag(*spec, child.attrs) + render_inlines(child, ctx) + close_node_tag(*spec);
+            out += open_node_tag(*spec, child.attrs) + render_inlines(child, ctx) + close_node_tag(*spec, child.attrs);
             begin = i + 1;
         }
         out += render_inline_segment(content, begin, content.size(), ctx);
@@ -1007,7 +1056,7 @@ private:
         while (i < end) {
             const Node& first = document_.node(content[i]);
             bool in_code = has_mark(first.marks, "code");
-            bool code_atom = in_code && declared_nodes_ && declared_inline_atom(first);
+            bool code_atom = in_code && node_forms_ && declared_inline_atom(first);
             in_code = in_code && !code_atom;
             std::size_t group_end = code_atom ? i + 1 : end;
             std::string group;
@@ -1017,7 +1066,7 @@ private:
                 if (!(child.marks == first.marks)) {
                     break;
                 }
-                if (in_code && declared_nodes_ && declared_inline_atom(child)) {
+                if (in_code && node_forms_ && declared_inline_atom(child)) {
                     break;
                 }
                 group += render_inline_content(child, ctx, in_code);
@@ -1043,9 +1092,9 @@ private:
     }
 
     std::string render_inline(const Node& node, InlineContext ctx = InlineContext::Default) {
-        const NodeSpec* spec = declared_nodes_ ? declared_inline_spec(node) : nullptr;
+        const NodeSpec* spec = node_forms_ ? declared_inline_spec(node) : nullptr;
         if (spec != nullptr && spec->shape == Shape::InlineContainer) {
-            return open_node_tag(*spec, node.attrs) + render_inlines(node, ctx) + close_node_tag(*spec);
+            return open_node_tag(*spec, node.attrs) + render_inlines(node, ctx) + close_node_tag(*spec, node.attrs);
         }
         bool in_code = has_mark(node.marks, "code");
         bool skip_code = in_code;

@@ -41,9 +41,15 @@ struct NodeDeclaration {
     std::optional<std::string> body = std::nullopt;
 };
 
+struct CoreAttrDeclaration {
+    std::string type;
+    std::vector<AttrDeclaration> attrs;
+};
+
 class SchemaBuilder {
 public:
-    static std::shared_ptr<Schema> build(std::vector<MarkDeclaration> marks, std::vector<NodeDeclaration> nodes);
+    static std::shared_ptr<Schema> build(std::vector<MarkDeclaration> marks, std::vector<NodeDeclaration> nodes,
+                                         std::vector<CoreAttrDeclaration> core_attrs);
 };
 
 }  // namespace marktip

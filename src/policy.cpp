@@ -175,9 +175,10 @@ MARKTIP_NOINLINE void check_uri_attr(const AttrList& attrs, const char* key, con
 
 template <typename DescribeOwner>
 void enforce_declared_uri(const std::vector<AttrSpec>& specs, const AttrList& attrs,
-                          const DescribeOwner& describe_owner, const UriPolicy& policy, const PathStack& path) {
+                          const DescribeOwner& describe_owner, const UriPolicy& policy, const PathStack& path,
+                          bool overlays_only) {
     for (const AttrSpec& attr : specs) {
-        if (attr.uri == UriKind::None) {
+        if (attr.uri == UriKind::None || (overlays_only && attr.form != MarkdownForm::Tag)) {
             continue;
         }
         const UriRule& rule = attr.uri == UriKind::Link ? policy.link : policy.image;
@@ -189,23 +190,23 @@ void enforce_declared_uri(const std::vector<AttrSpec>& specs, const AttrList& at
 void enforce_mark_uri(const Mark& mark, const Schema& schema, const UriPolicy& policy, const PathStack& path) {
     const MarkSpec& spec = *schema.mark(mark.type);
     auto describe_owner = [&]() { return "mark type '" + mark.type + "'"; };
-    enforce_declared_uri(spec.attrs, mark.attrs, describe_owner, policy, path);
+    enforce_declared_uri(spec.attrs, mark.attrs, describe_owner, policy, path, spec.core);
 }
 
 void enforce_declared_node_uri(const Node& node, const Schema& schema, const UriPolicy& policy,
                                const PathStack& path) {
     const NodeSpec& spec = *schema.node(node.type);
-    if (spec.core) {
+    if (spec.core && spec.tag.empty()) {
         return;
     }
     auto describe_owner = [&]() { return "node type '" + node.type + "'"; };
-    enforce_declared_uri(spec.attrs, node.attrs, describe_owner, policy, path);
+    enforce_declared_uri(spec.attrs, node.attrs, describe_owner, policy, path, spec.core);
 }
 
 // Keep node/mark URI checking out of enforce_node's recursive frame for the smaller Windows worker stack.
 MARKTIP_NOINLINE void enforce_fields_uri(const Node& node, const Schema& schema, const UriPolicy& policy,
                                         PathStack& path) {
-    if (schema.has_declared_nodes()) {
+    if (schema.has_declared_nodes() || schema.has_core_attrs()) {
         enforce_declared_node_uri(node, schema, policy, path);
     }
     bool extended = schema.has_declared_marks();
@@ -214,7 +215,11 @@ MARKTIP_NOINLINE void enforce_fields_uri(const Node& node, const Schema& schema,
     for (std::size_t i = 0; i < node.marks.size(); ++i) {
         if (node.marks[i].type == "link") {
             path.push_back({"marks", i});
-            check_uri_attr(node.marks[i].attrs, "href", policy.link, [] { return std::string("link href"); }, path);
+            check_uri_attr(node.marks[i].attrs, "href", policy.link, [] { return std::string("link href"); }, path,
+                           schema.has_link_tag());
+            if (schema.has_link_uri()) {
+                enforce_mark_uri(node.marks[i], schema, policy, path);
+            }
             path.pop_back();
         } else if (extended) {
             path.push_back({"marks", i});
@@ -228,9 +233,10 @@ void enforce_node(const Document& document, std::size_t index, const UriPolicy& 
     const Node& node = document.node(index);
 
     if (node.type == "image") {
-        check_uri_attr(node.attrs, "src", policy.image, [] { return std::string("image src"); }, path);
+        check_uri_attr(node.attrs, "src", policy.image, [] { return std::string("image src"); }, path,
+                       document.schema().has_core_attrs() && !document.schema().node("image")->tag.empty());
     }
-    if (!node.marks.empty() || document.schema().has_declared_nodes()) {
+    if (!node.marks.empty() || document.schema().has_declared_nodes() || document.schema().has_core_attrs()) {
         enforce_fields_uri(node, document.schema(), policy, path);
     }
 
@@ -312,7 +318,7 @@ void finalize_document(Document& document, const NodeTypePolicy& node_policy, co
     enforce_node_type_policy(document, node_policy);
     enforce_uri_policy(document, uri_policy);
     // URI errors must retain the input mark indices, so marks are ordered after policy checks.
-    if (document.schema().has_declared_marks()) {
+    if (document.schema().has_declared_marks() || document.schema().has_core_attrs()) {
         document.order_marks();
     }
 }

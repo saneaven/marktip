@@ -58,9 +58,47 @@ py::dict attrs_to_py(const AttrList& attrs) {
             case AttrValue::Kind::Bool:
                 out[py::str(attr.first)] = attr.second.bool_value;
                 break;
+            case AttrValue::Kind::IntList: {
+                py::list values;
+                for (long long number : attr.second.int_list_value()) {
+                    values.append(number);
+                }
+                out[py::str(attr.first)] = std::move(values);
+                break;
+            }
         }
     }
     return out;
+}
+
+// Out-of-range values (10 ** 100) come back false rather than raising,
+// so they report as a document problem with a path, not as an unlocated OverflowError.
+bool as_int(py::handle value, long long& out) {
+    int overflow = 0;
+    long long result = PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
+    if (overflow != 0 || (result == -1 && PyErr_Occurred() != nullptr)) {
+        PyErr_Clear();
+        return false;
+    }
+    out = result;
+    return true;
+}
+
+// py::bool_ is a subclass of py::int_, so every integer rule has to exclude it first.
+bool is_plain_int(py::handle value) {
+    return py::isinstance<py::int_>(value) && !py::isinstance<py::bool_>(value);
+}
+
+std::optional<std::vector<long long>> int_list_from_py(py::list values) {
+    std::vector<long long> numbers;
+    for (py::handle item : values) {
+        long long number = 0;
+        if (!is_plain_int(item) || !as_int(item, number)) {
+            return std::nullopt;
+        }
+        numbers.push_back(number);
+    }
+    return numbers;
 }
 
 // --- the attr schema --------------------------------------------------------
@@ -69,7 +107,7 @@ py::dict attrs_to_py(const AttrList& attrs) {
 // Two readers: attrs_from_py just below, which keeps the values markdown can act on,
 // and strict mode further down, which decides which of the losses a caller is willing to take.
 
-// str, int and bool are the values the serializer can act on; every other key is dropped.
+// Scalars and declared int lists are the values the serializer can act on; every other key is dropped.
 // Stamping the rest through py::str turned [100] into "[100]" and a None into "",
 // which put a string the caller never wrote into to_dict() and lost the value anyway.
 // Dropping says the same thing without the invention,
@@ -83,6 +121,12 @@ AttrList attrs_from_py(py::dict attrs, const std::vector<AttrSpec>& specs) {
         bool is_bool = py::isinstance<py::bool_>(value);
         bool is_int = !is_bool && py::isinstance<py::int_>(value);
         if (!is_bool && !is_int && !py::isinstance<py::str>(value)) {
+            if (py::isinstance<py::list>(value)) {
+                auto numbers = int_list_from_py(py::reinterpret_borrow<py::list>(value));
+                if (numbers) {
+                    store_attr(out, std::move(name), AttrValue::int_list(std::move(*numbers)), specs);
+                }
+            }
             continue;
         }
         AttrValue attr = is_bool ? AttrValue::boolean(py::cast<bool>(value)) :
@@ -149,10 +193,7 @@ py::dict node_to_py(const Document& document, std::size_t index) {
 // A caller storing markdown as the record wants Content; one keeping the JSON wants Exact.
 //
 // The attr check reads the raw py::dict rather than the built AttrList,
-// because attrs_from_py has already dropped a None and anything it cannot carry
-// by then. That also makes it from_dict-only, which is the whole story anyway —
-// the parser emits nothing but attrs it knows about, in range,
-// so there is nothing for from_markdown to catch.
+// because attrs_from_py has already dropped a None and anything it cannot carry by then.
 
 void check_top_level_fields(py::dict value, std::string_view owner_type, const char* kind,
                             bool inline_type, const PathStack& path) {
@@ -167,24 +208,6 @@ void check_text_payload_py(py::dict node_dict, const PathStack& path) {
     bool is_string = py::isinstance<py::str>(value);
     std::string text = is_string ? py::cast<std::string>(value) : std::string{};
     check_text_payload(present, is_string, text, path);
-}
-
-// Out-of-range values (10 ** 100) come back false rather than raising, so they report as
-// a document problem with a path, not as an unlocated OverflowError.
-bool as_int(py::handle value, long long& out) {
-    int overflow = 0;
-    long long result = PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
-    if (overflow != 0 || (result == -1 && PyErr_Occurred() != nullptr)) {
-        PyErr_Clear();
-        return false;
-    }
-    out = result;
-    return true;
-}
-
-// py::bool_ is a subclass of py::int_, so every integer rule has to exclude it first.
-bool is_plain_int(py::handle value) {
-    return py::isinstance<py::int_>(value) && !py::isinstance<py::bool_>(value);
 }
 
 AttrInput attr_input_from_py(py::handle value, const AttrSpec& spec) {
@@ -209,15 +232,8 @@ AttrInput attr_input_from_py(py::handle value, const AttrSpec& spec) {
         return std::string{};
     }
     if (attr_reads_int_list(spec) && py::isinstance<py::list>(value)) {
-        std::vector<long long> numbers;
-        for (py::handle item : py::reinterpret_borrow<py::list>(value)) {
-            long long number = 0;
-            if (!is_plain_int(item) || !as_int(item, number)) {
-                return OtherValue{};
-            }
-            numbers.push_back(number);
-        }
-        return numbers;
+        auto numbers = int_list_from_py(py::reinterpret_borrow<py::list>(value));
+        return numbers ? AttrInput(std::move(*numbers)) : AttrInput(OtherValue{});
     }
     return OtherValue{};
 }

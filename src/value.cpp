@@ -1,5 +1,7 @@
 #include "value.h"
 
+#include <charconv>
+
 namespace marktip {
 
 // CommonMark replaces an insecure NUL with U+FFFD before parsing. from_dict
@@ -46,12 +48,58 @@ AttrValue AttrValue::boolean(bool value) {
     return attr;
 }
 
+AttrValue AttrValue::int_list(std::vector<long long> value) {
+    AttrValue attr;
+    attr.kind = Kind::IntList;
+    // Canonical spelling keeps list storage from enlarging every scalar attr.
+    for (long long number : value) {
+        if (!attr.string_value.empty()) {
+            attr.string_value.push_back(',');
+        }
+        attr.string_value += std::to_string(number);
+    }
+    return attr;
+}
+
+std::optional<std::vector<long long>> parse_int_list(std::string_view value) {
+    std::vector<long long> numbers;
+    if (value.empty()) {
+        return numbers;
+    }
+    std::size_t begin = 0;
+    while (true) {
+        std::size_t end = value.find(',', begin);
+        std::string_view digits = value.substr(begin, end - begin);
+        if (!digits.empty() && digits.front() == '+') {
+            digits.remove_prefix(1);
+            if (digits.empty() || digits.front() < '0' || digits.front() > '9') {
+                return std::nullopt;
+            }
+        }
+        long long number;
+        auto result = std::from_chars(digits.data(), digits.data() + digits.size(), number);
+        if (result.ec != std::errc {} || result.ptr != digits.data() + digits.size()) {
+            return std::nullopt;
+        }
+        numbers.push_back(number);
+        if (end == std::string_view::npos) {
+            return numbers;
+        }
+        begin = end + 1;
+    }
+}
+
+std::vector<long long> AttrValue::int_list_value() const {
+    return std::move(*parse_int_list(string_value));
+}
+
 bool AttrValue::operator==(const AttrValue& other) const {
     if (kind != other.kind) {
         return false;
     }
     switch (kind) {
         case Kind::String:
+        case Kind::IntList:
             return string_value == other.string_value;
         case Kind::Int:
             return int_value == other.int_value;
@@ -89,7 +137,7 @@ std::string attr_string(const AttrList& attrs, std::string_view key, std::string
     if (attr == nullptr) {
         return fallback;
     }
-    if (attr->kind == AttrValue::Kind::String) {
+    if (attr->kind == AttrValue::Kind::String || attr->kind == AttrValue::Kind::IntList) {
         return attr->string_value;
     }
     if (attr->kind == AttrValue::Kind::Int) {

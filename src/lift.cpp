@@ -36,6 +36,10 @@ AttrInput decode_attr_input(const HtmlAttr& attr, const AttrSpec& spec) {
         }
         return OtherValue {};
     }
+    if (spec.rule == AttrRule::ColWidth) {
+        std::optional<std::vector<long long>> numbers = parse_int_list(value);
+        return numbers ? AttrInput(std::move(*numbers)) : AttrInput(OtherValue {});
+    }
 
     std::string_view digits = value;
     if (!digits.empty() && digits.front() == '+') {
@@ -59,7 +63,7 @@ AttrList decode_tag_attrs(const HtmlConstruct& tag, const std::vector<AttrSpec>&
     for (const HtmlAttr& attr : tag.attrs) {
         std::string name(attr.name);
         const AttrSpec& attr_spec = *check_attr_name(specs, name, false, type, kind,
-                                                    StrictMode::Content, path);
+                                                    StrictMode::Content, path, true);
         if (std::find(seen.begin(), seen.end(), attr.name) != seen.end()) {
             throw InvalidNodeError("invalid_attr_value", name, "attr '" + name + "' is repeated", format_path(path));
         }
@@ -67,14 +71,24 @@ AttrList decode_tag_attrs(const HtmlConstruct& tag, const std::vector<AttrSpec>&
         AttrInput input = decode_attr_input(attr, attr_spec);
         check_attr_value(input, attr_spec, path);
         AttrValue value;
-        if (attr_spec.rule == AttrRule::Str) {
+        if (std::holds_alternative<std::string>(input)) {
             value = AttrValue::string(std::get<std::string>(std::move(input)));
-        } else if (attr_spec.rule == AttrRule::Int) {
+        } else if (std::holds_alternative<long long>(input)) {
             value = AttrValue::integer(std::get<long long>(input));
-        } else {
+        } else if (std::holds_alternative<bool>(input)) {
             value = AttrValue::boolean(std::get<bool>(input));
+        } else {
+            value = AttrValue::int_list(std::get<std::vector<long long>>(std::move(input)));
         }
         store_attr(attrs, std::move(name), std::move(value), specs);
+    }
+    if (type == "image" || type == "link") {
+        attrs.erase(std::remove_if(attrs.begin(), attrs.end(), [](const auto& attr) {
+            return attr.first == "title" && attr.second.string_value.empty();
+        }), attrs.end());
+        if (type == "image" && find_attr(attrs, "alt") == nullptr) {
+            set_attr(attrs, "alt", AttrValue::string(""));
+        }
     }
     check_required_attrs(attrs, specs, type, kind, path);
     AttrList ordered_attrs;
@@ -337,6 +351,9 @@ const NodeSpec& peel_textblock(Document& document, std::size_t index, const Node
     }
     const NodeSpec& spec = document.schema().node(tag->spec);
     AttrList attrs = decode_tag_attrs(opening, spec.attrs, spec.name, "node", path);
+    if (spec.name == "heading") {
+        set_attr(attrs, "level", AttrValue::integer(opening.name[1] - '0'));
+    }
     document.node(index).type = spec.name;
     document.node(index).attrs = std::move(attrs);
     if (first == last) {
@@ -424,15 +441,15 @@ void build_containers(Document& document, std::size_t index, const NodeSpec& par
 // Clang otherwise inlines this state into lift_node, exhausting small worker stacks on deep documents.
 MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t index, const NodeSpec& parent_spec,
                                                bool html, PathStack& path) {
-    const NodeSpec& content_spec = document.schema().has_declared_nodes()
-                                       ? peel_textblock(document, index, parent_spec, path)
-                                       : parent_spec;
+    const Schema& schema = document.schema();
+    const NodeSpec& content_spec = schema.has_declared_nodes() || schema.has_core_attrs()
+                                      ? peel_textblock(document, index, parent_spec, path)
+                                      : parent_spec;
     std::vector<std::size_t> original = std::move(document.node(index).content);
     std::vector<InlinePiece> pieces;
     pieces.reserve(original.size());
     std::vector<OpenMark> open;
     std::vector<Mark> effective;
-    const Schema& schema = document.schema();
     bool math = schema.has_math();
     const NodeSpec* inline_math = math ? schema.inline_math() : nullptr;
     const NodeSpec* display_math = math ? schema.display_math() : nullptr;
@@ -471,7 +488,7 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
             if (!tag->is_mark) {
                 const NodeSpec& spec = schema.node(tag->spec);
                 if (spec.shape != Shape::InlineAtom && spec.shape != Shape::InlineContainer) {
-                    invalid_tag("tag '<" + spec.tag + ">' must occupy its declared block form", path);
+                    invalid_tag("tag '<" + std::string(token.name) + ">' must occupy its declared block form", path);
                 }
                 if (spec.shape == Shape::InlineContainer && token.closing && !token.self_closing) {
                     pieces.push_back({InlinePieceKind::CloseContainer, 0, &spec});

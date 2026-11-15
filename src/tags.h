@@ -31,7 +31,7 @@ bool starts_declared_tag(std::string_view html, const Schema& schema);
 std::string open_tag(const Schema& schema, const Mark& mark);
 std::string close_tag(const Schema& schema, const Mark& mark);
 std::string open_node_tag(const NodeSpec& spec, const AttrList& attrs);
-std::string close_node_tag(const NodeSpec& spec);
+std::string close_node_tag(const NodeSpec& spec, const AttrList& attrs);
 void order_tag_marks(std::vector<Mark>& marks, const Schema& schema);
 
 }  // namespace marktip

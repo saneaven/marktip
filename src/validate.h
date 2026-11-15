@@ -48,7 +48,7 @@ void check_raw_carriers(const Node& node, const Schema& schema, const PathStack&
 // A nullptr result means the attr is unset; callers skip value conversion and checking.
 const AttrSpec* check_attr_name(const std::vector<AttrSpec>& specs, const std::string& name, bool is_none,
                                 std::string_view owner_type, const char* kind, StrictMode mode,
-                                const PathStack& path);
+                                const PathStack& path, bool tag_form = false);
 bool attr_reads_string(const AttrSpec& spec);
 bool attr_reads_int_list(const AttrSpec& spec);
 void check_attr_value(const AttrInput& value, const AttrSpec& spec, const PathStack& path);

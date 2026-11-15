@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ._core import Schema as _CompiledSchema
+from ._core import IntList, Schema as _CompiledSchema
 
 
 @dataclass(frozen=True)
@@ -40,15 +40,20 @@ class NodeSpec:
 
 def _attr_from_dict(data: dict) -> Attr:
     name = data.get("type")
-    types = {"str": str, "int": int, "bool": bool}
+    types = {"str": str, "int": int, "bool": bool, "IntList": IntList}
     if name not in types:
-        raise ValueError("attr type must be 'str', 'int' or 'bool'")
+        raise ValueError("attr type must be 'str', 'int', 'bool' or 'IntList'")
     return Attr(types[name], data.get("required", False), data.get("choices"), data.get("default"), data.get("uri"))
 
 
 def _attrs_key(attrs: dict[str, Attr]) -> tuple:
+    def value_key(value):
+        return tuple(value) if isinstance(value, list) else value
+
     return tuple(
-        (name, attr.type, attr.required, None if attr.choices is None else tuple(attr.choices), attr.default, attr.uri)
+        (name, attr.type, attr.required,
+         None if attr.choices is None else tuple(value_key(value) for value in attr.choices),
+         value_key(attr.default), attr.uri)
         for name, attr in attrs.items()
     )
 
@@ -63,19 +68,23 @@ def _attrs_to_dict(attrs: dict[str, Attr]) -> dict:
 
 
 class Schema(_CompiledSchema):
-    __slots__ = ("_marks", "_nodes", "_key")
+    __slots__ = ("_marks", "_nodes", "_core_attrs", "_key")
 
-    def __init__(self, *, marks=(), nodes=()):
+    def __init__(self, *, marks=(), nodes=(), core_attrs=None):
         marks = tuple(marks)
         nodes = tuple(nodes)
-        super().__init__(marks=marks, nodes=nodes)
+        if core_attrs is None:
+            core_attrs = {}
+        super().__init__(marks=marks, nodes=nodes, core_attrs=core_attrs)
         self._marks = marks
         self._nodes = nodes
+        self._core_attrs = {name: dict(attrs) for name, attrs in core_attrs.items()}
         self._key = (
             tuple((mark.name, mark.tag, _attrs_key(mark.attrs), mark.excludes) for mark in marks),
             tuple((node.name, node.kind, node.content, node.group, node.tag, _attrs_key(node.attrs), node.implicit,
                    node.fence, node.math, node.body)
                   for node in nodes),
+            tuple((name, _attrs_key(attrs)) for name, attrs in self._core_attrs.items()),
         )
 
     @property
@@ -85,6 +94,10 @@ class Schema(_CompiledSchema):
     @property
     def nodes(self) -> tuple[NodeSpec, ...]:
         return self._nodes
+
+    @property
+    def core_attrs(self) -> dict[str, dict[str, Attr]]:
+        return self._core_attrs
 
     def to_dict(self) -> dict:
         declaration = {"marks": [
@@ -99,6 +112,10 @@ class Schema(_CompiledSchema):
                  "fence": node.fence, "math": node.math, "body": node.body}
                 for node in self._nodes
             ]
+        if self._core_attrs:
+            declaration["core_attrs"] = {
+                name: _attrs_to_dict(attrs) for name, attrs in self._core_attrs.items()
+            }
         return declaration
 
     @classmethod
@@ -117,10 +134,23 @@ class Schema(_CompiledSchema):
                      node.get("implicit", False), node.get("fence"), node.get("math"), node.get("body"))
             for node in data.get("nodes", ())
         ]
-        return cls(marks=marks, nodes=nodes)
+        core_attrs = {
+            name: {attr_name: _attr_from_dict(attr) for attr_name, attr in attrs.items()}
+            for name, attrs in data.get("core_attrs", {}).items()
+        }
+        return cls(marks=marks, nodes=nodes, core_attrs=core_attrs)
 
-    def extend(self, *, marks=(), nodes=()) -> Schema:
-        return type(self)(marks=(*self._marks, *marks), nodes=(*self._nodes, *nodes))
+    def extend(self, *, marks=(), nodes=(), core_attrs=None) -> Schema:
+        combined = {name: dict(attrs) for name, attrs in self._core_attrs.items()}
+        if core_attrs is None:
+            core_attrs = {}
+        for name, attrs in core_attrs.items():
+            target = combined.setdefault(name, {})
+            for attr_name, attr in attrs.items():
+                if attr_name in target:
+                    raise ValueError(f"duplicate core attr '{name}.{attr_name}'")
+                target[attr_name] = attr
+        return type(self)(marks=(*self._marks, *marks), nodes=(*self._nodes, *nodes), core_attrs=combined)
 
     def __eq__(self, other):
         if not isinstance(other, Schema):

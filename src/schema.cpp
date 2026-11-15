@@ -124,6 +124,18 @@ bool Schema::has_declared_nodes() const {
     return declared_nodes_;
 }
 
+bool Schema::has_core_attrs() const {
+    return core_attrs_;
+}
+
+bool Schema::has_link_tag() const {
+    return link_tag_;
+}
+
+bool Schema::has_link_uri() const {
+    return link_uri_;
+}
+
 bool Schema::has_inline_containers() const {
     return inline_containers_;
 }

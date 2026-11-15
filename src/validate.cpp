@@ -192,9 +192,9 @@ void check_raw_carriers(const Node& node, const Schema& schema, const PathStack&
 
 const AttrSpec* check_attr_name(const std::vector<AttrSpec>& specs, const std::string& name, bool is_none,
                                 std::string_view owner_type, const char* kind, StrictMode mode,
-                                const PathStack& path) {
+                                const PathStack& path, bool tag_form) {
     const AttrSpec* spec = find_attr_spec(specs, name);
-    if (spec == nullptr) {
+    if (spec == nullptr || (tag_form && spec->form == MarkdownForm::Dropped)) {
         // Outside both dialects: a typo, or a key an app invented and expects to survive.
         throw InvalidNodeError("unknown_attr", name,
                                "attr '" + name + "' is not defined for " + kind + " type '" +
@@ -321,6 +321,9 @@ void check_attr_value(const AttrInput& value, const AttrSpec& spec, const PathSt
                 if (choice.kind == AttrValue::Kind::Int) {
                     return std::get<long long>(value) == choice.int_value;
                 }
+                if (choice.kind == AttrValue::Kind::IntList) {
+                    return std::get<std::vector<long long>>(value) == choice.int_list_value();
+                }
                 return std::get<bool>(value) == choice.bool_value;
             })) {
             expected("one of the declared choices");
@@ -344,6 +347,10 @@ void check_required_attrs(const AttrList& attrs, const std::vector<AttrSpec>& sp
 
 void store_attr(AttrList& attrs, std::string&& name, AttrValue&& value, const std::vector<AttrSpec>& specs) {
     const AttrSpec* spec = find_attr_spec(specs, name);
+    if (value.kind == AttrValue::Kind::IntList &&
+        (spec == nullptr || spec->rule != AttrRule::ColWidth || spec->form == MarkdownForm::Dropped)) {
+        return;
+    }
     if (value.kind == AttrValue::Kind::String && (spec == nullptr || spec->uri == UriKind::None)) {
         value.string_value = normalize_content_string(std::move(value.string_value));
     }
@@ -368,7 +375,8 @@ void check_child_content(const Schema& schema, const NodeSpec& parent, const Nod
     if (!schema.content_model_allows(parent.allow, child)) {
         throw_invalid_child_content(parent, child, path);
     }
-    if (!child.core && (parent.name == "tableCell" || parent.name == "tableHeader")) {
+    if ((parent.name == "tableCell" || parent.name == "tableHeader") &&
+        (!child.core || uses_tag_form(child_node, child))) {
         if (child.shape == Shape::BlockContainer) {
             throw_table_container(child, path);
         }

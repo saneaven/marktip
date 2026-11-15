@@ -1,6 +1,7 @@
 #include "schema_builder.h"
 
 #include <algorithm>
+#include <initializer_list>
 #include <stdexcept>
 #include <string_view>
 #include <unordered_set>
@@ -48,7 +49,8 @@ std::string ascii_lower(std::string value) {
 bool value_type(const AttrValue& value, AttrRule rule) {
     return (rule == AttrRule::Str && value.kind == AttrValue::Kind::String) ||
            (rule == AttrRule::Int && value.kind == AttrValue::Kind::Int) ||
-           (rule == AttrRule::Bool && value.kind == AttrValue::Kind::Bool);
+           (rule == AttrRule::Bool && value.kind == AttrValue::Kind::Bool) ||
+           (rule == AttrRule::ColWidth && value.kind == AttrValue::Kind::IntList);
 }
 
 AttrSpec compile_attr(const AttrDeclaration& declaration) {
@@ -103,6 +105,42 @@ std::vector<AttrSpec> compile_attrs(const std::vector<AttrDeclaration>& declarat
     return specs;
 }
 
+std::vector<std::size_t> core_tag_attrs(const std::vector<AttrSpec>& attrs,
+                                      std::initializer_list<std::string_view> names) {
+    std::vector<std::size_t> order;
+    for (std::string_view name : names) {
+        auto attr = std::find_if(attrs.begin(), attrs.end(), [&](const AttrSpec& spec) { return spec.name == name; });
+        order.push_back(static_cast<std::size_t>(attr - attrs.begin()));
+    }
+    return order;
+}
+
+void merge_core_attrs(std::vector<AttrSpec>& attrs, std::vector<std::size_t>& order,
+                      const CoreAttrDeclaration& declaration) {
+    for (const AttrDeclaration& attr : declaration.attrs) {
+        if (attr.required) {
+            throw std::invalid_argument("core attr '" + declaration.type + "." + attr.name + "' cannot be required");
+        }
+    }
+    for (AttrSpec& attr : compile_attrs(declaration.attrs)) {
+        auto existing = std::find_if(attrs.begin(), attrs.end(), [&](const AttrSpec& spec) {
+            return spec.name == attr.name;
+        });
+        if (existing != attrs.end() && existing->form != MarkdownForm::Dropped) {
+            throw std::invalid_argument("core attr '" + declaration.type + "." + attr.name +
+                                        "' is already carried by Markdown");
+        }
+        attr.form = MarkdownForm::Tag;
+        if (existing == attrs.end()) {
+            order.push_back(attrs.size());
+            attrs.push_back(std::move(attr));
+        } else {
+            order.push_back(static_cast<std::size_t>(existing - attrs.begin()));
+            *existing = std::move(attr);
+        }
+    }
+}
+
 std::vector<std::string> groups_from_declaration(const NodeDeclaration& declaration) {
     std::string_view group = declaration.group ? std::string_view(*declaration.group)
                                                : std::string_view(declaration.kind);
@@ -125,8 +163,43 @@ std::vector<std::string> groups_from_declaration(const NodeDeclaration& declarat
 
 }  // namespace
 
-std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks, std::vector<NodeDeclaration> nodes) {
+std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks, std::vector<NodeDeclaration> nodes,
+                                             std::vector<CoreAttrDeclaration> core_attrs) {
     std::shared_ptr<Schema> schema(new Schema);
+    for (const CoreAttrDeclaration& declaration : core_attrs) {
+        if (declaration.type == "link") {
+            auto mark = std::find_if(schema->marks_.begin(), schema->marks_.end(), [](const MarkSpec& spec) {
+                return spec.name == "link";
+            });
+            mark->tag_attrs = core_tag_attrs(mark->attrs, {"href", "title"});
+            merge_core_attrs(mark->attrs, mark->tag_attrs, declaration);
+            mark->tag = "a";
+            schema->link_tag_ = true;
+            schema->link_uri_ = std::any_of(mark->attrs.begin(), mark->attrs.end(), [](const AttrSpec& attr) {
+                return attr.form == MarkdownForm::Tag && attr.uri != UriKind::None;
+            });
+        } else if (declaration.type == "paragraph" || declaration.type == "heading" || declaration.type == "image") {
+            auto node = std::find_if(schema->nodes_.begin(), schema->nodes_.end(), [&](const NodeSpec& spec) {
+                return spec.name == declaration.type;
+            });
+            if (declaration.type == "image") {
+                node->tag_attrs = core_tag_attrs(node->attrs, {"src", "alt", "title"});
+            }
+            merge_core_attrs(node->attrs, node->tag_attrs, declaration);
+            if (declaration.type == "paragraph") {
+                node->tag = "p";
+                node->shape = Shape::TextBlock;
+            } else if (declaration.type == "heading") {
+                node->tag = "h1";
+                node->shape = Shape::TextBlock;
+            } else {
+                node->tag = "img";
+            }
+        } else {
+            throw std::invalid_argument("core attrs are not supported for type '" + declaration.type + "'");
+        }
+    }
+    schema->core_attrs_ = !core_attrs.empty();
     std::unordered_set<std::string> names;
     std::unordered_set<std::string> mark_names;
     std::unordered_set<std::string> tags;
@@ -437,15 +510,21 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
               [](const MarkSpec& left, const MarkSpec& right) { return left.name < right.name; });
     for (std::size_t i = 0; i < schema->marks_.size(); ++i) {
         const MarkSpec& mark = schema->marks_[i];
-        if (!mark.core) {
+        if (!mark.tag.empty()) {
             schema->tags_.push_back({mark.tag, true, false, i});
         }
     }
     for (std::size_t i = 0; i < schema->nodes_.size(); ++i) {
         const NodeSpec& node = schema->nodes_[i];
-        if (!node.core && !node.implicit) {
-            schema->tags_.push_back({node.tag, false,
-                                      node.shape == Shape::BlockAtom || node.shape == Shape::BlockContainer, i});
+        if (!node.tag.empty()) {
+            if (node.name == "heading" && node.core) {
+                for (char level = '1'; level <= '6'; ++level) {
+                    schema->tags_.push_back({std::string("h") + level, false, false, i});
+                }
+            } else {
+                schema->tags_.push_back({node.tag, false,
+                                          node.shape == Shape::BlockAtom || node.shape == Shape::BlockContainer, i});
+            }
         }
         if (!node.fence.empty()) {
             schema->fences_.push_back({node.fence, i});

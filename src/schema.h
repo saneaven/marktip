@@ -69,6 +69,7 @@ enum class NullAttr {
 enum class MarkdownForm {
     Carried,  // the default
     Dropped,
+    Tag,
 };
 
 // A fourth: must this attr be there for the node to mean anything.
@@ -116,6 +117,7 @@ struct NodeSpec {
     std::string fence = {};
     MathMode math = MathMode::None;
     int body = -1;
+    std::vector<std::size_t> tag_attrs = {};
 };
 
 struct ExcludeSet {
@@ -130,6 +132,7 @@ struct MarkSpec {
     std::string tag = {};
     ExcludeSet excludes = {};
     std::size_t order = 0;
+    std::vector<std::size_t> tag_attrs = {};
 };
 
 struct TagEntry {
@@ -155,6 +158,9 @@ public:
     bool has_tags() const;
     bool has_declared_marks() const;
     bool has_declared_nodes() const;
+    bool has_core_attrs() const;
+    bool has_link_tag() const;
+    bool has_link_uri() const;
     bool has_inline_containers() const;
     bool has_fences() const;
     const NodeSpec* fence(std::string_view word) const;
@@ -180,10 +186,13 @@ private:
     std::vector<std::string> creatable_;
     std::vector<TagEntry> tags_;
     bool declared_nodes_ = false;
+    bool core_attrs_ = false;
     bool inline_containers_ = false;
     std::vector<FenceEntry> fences_;
     int inline_math_ = -1;
     int display_math_ = -1;
+    bool link_tag_ = false;
+    bool link_uri_ = false;
 };
 
 }  // namespace marktip
