@@ -161,6 +161,8 @@ public:
     bool has_core_attrs() const;
     bool has_link_tag() const;
     bool has_link_uri() const;
+    bool has_list_tags() const;
+    bool has_table_tags() const;
     bool has_inline_containers() const;
     bool has_fences() const;
     const NodeSpec* fence(std::string_view word) const;
@@ -193,6 +195,8 @@ private:
     int display_math_ = -1;
     bool link_tag_ = false;
     bool link_uri_ = false;
+    bool list_tags_ = false;
+    bool table_tags_ = false;
 };
 
 }  // namespace marktip

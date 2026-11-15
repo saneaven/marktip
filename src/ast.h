@@ -50,4 +50,6 @@ private:
     std::vector<Node> nodes_;
 };
 
+void normalize_task_list(Document& document, std::size_t index);
+
 }  // namespace marktip

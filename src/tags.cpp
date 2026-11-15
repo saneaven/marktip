@@ -168,7 +168,11 @@ void append_escaped_attr(std::string& out, std::string_view value) {
     }
 }
 
-void append_tag_attr(std::string& out, const AttrSpec& attr, const AttrList& attrs) {
+void append_tag_attr(std::string& out, const AttrSpec& attr, const AttrList& attrs, bool task_item) {
+    if (task_item && attr.name == "checked") {
+        out += attr_bool(attrs, "checked", false) ? " checked=\"true\"" : " checked=\"false\"";
+        return;
+    }
     const AttrValue* value = find_attr(attrs, attr.name);
     if (value == nullptr) {
         return;
@@ -190,15 +194,15 @@ void append_tag_attr(std::string& out, const AttrSpec& attr, const AttrList& att
 }
 
 std::string open_tag(const std::vector<AttrSpec>& specs, const std::vector<std::size_t>& tag_attrs,
-                     const std::string& tag, const AttrList& attrs, bool self_closing, bool core) {
+                     const std::string& tag, const AttrList& attrs, bool self_closing, bool core, bool task_item) {
     std::string out = "<" + tag;
     if (core) {
         for (std::size_t index : tag_attrs) {
-            append_tag_attr(out, specs[index], attrs);
+            append_tag_attr(out, specs[index], attrs, task_item);
         }
     } else {
         for (const AttrSpec& attr : specs) {
-            append_tag_attr(out, attr, attrs);
+            append_tag_attr(out, attr, attrs, false);
         }
     }
     if (self_closing) {
@@ -290,7 +294,7 @@ bool starts_declared_tag(std::string_view html, const Schema& schema) {
 
 std::string open_tag(const Schema& schema, const Mark& mark) {
     const MarkSpec& spec = *schema.mark(mark.type);
-    return open_tag(spec.attrs, spec.tag_attrs, spec.tag, mark.attrs, false, spec.core);
+    return open_tag(spec.attrs, spec.tag_attrs, spec.tag, mark.attrs, false, spec.core, false);
 }
 
 std::string close_tag(const Schema& schema, const Mark& mark) {
@@ -300,7 +304,7 @@ std::string close_tag(const Schema& schema, const Mark& mark) {
 std::string open_node_tag(const NodeSpec& spec, const AttrList& attrs) {
     return open_tag(spec.attrs, spec.tag_attrs, node_tag(spec, attrs), attrs,
                     spec.shape == Shape::InlineAtom || spec.shape == Shape::BlockAtom,
-                    spec.core);
+                    spec.core, spec.core && spec.name == "taskItem");
 }
 
 std::string close_node_tag(const NodeSpec& spec, const AttrList& attrs) {

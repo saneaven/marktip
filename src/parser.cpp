@@ -283,7 +283,7 @@ public:
             case MD_BLOCK_TBODY:
                 return 0;
             case MD_BLOCK_UL:
-                normalize_task_list(stack_.back());
+                normalize_task_list(document_, stack_.back());
                 pop_node();
                 return 0;
             case MD_BLOCK_LI:
@@ -662,33 +662,6 @@ private:
         }
         set_attr(node.attrs, "alt", AttrValue::string(std::move(alt)));
         node.content.clear();
-    }
-
-    void normalize_task_list(std::size_t index) {
-        Node& list = document_.node(index);
-        if (list.type != "bulletList") {
-            return;
-        }
-
-        bool has_task = false;
-        for (std::size_t child : list.content) {
-            if (document_.node(child).type == "taskItem") {
-                has_task = true;
-                break;
-            }
-        }
-        if (!has_task) {
-            return;
-        }
-
-        list.type = "taskList";
-        for (std::size_t child : list.content) {
-            Node& item = document_.node(child);
-            if (item.type == "listItem") {
-                item.type = "taskItem";
-                set_attr(item.attrs, "checked", AttrValue::boolean(false));
-            }
-        }
     }
 
     bool is_inline_node(std::size_t index) const {

@@ -136,6 +136,14 @@ bool Schema::has_link_uri() const {
     return link_uri_;
 }
 
+bool Schema::has_list_tags() const {
+    return list_tags_;
+}
+
+bool Schema::has_table_tags() const {
+    return table_tags_;
+}
+
 bool Schema::has_inline_containers() const {
     return inline_containers_;
 }

@@ -48,6 +48,33 @@ std::size_t Document::append_child(std::size_t parent, Node node) {
     return index;
 }
 
+void normalize_task_list(Document& document, std::size_t index) {
+    Node& list = document.node(index);
+    if (list.type != "bulletList") {
+        return;
+    }
+
+    bool has_task = false;
+    for (std::size_t child : list.content) {
+        if (document.node(child).type == "taskItem") {
+            has_task = true;
+            break;
+        }
+    }
+    if (!has_task) {
+        return;
+    }
+
+    list.type = "taskList";
+    for (std::size_t child : list.content) {
+        Node& item = document.node(child);
+        if (item.type == "listItem") {
+            item.type = "taskItem";
+            set_attr(item.attrs, "checked", AttrValue::boolean(false));
+        }
+    }
+}
+
 void order_marks(std::vector<Mark>& marks, const Schema& schema) {
     auto before = [&](const Mark& a, const Mark& b) {
         const MarkSpec& left = *schema.mark(a.type);

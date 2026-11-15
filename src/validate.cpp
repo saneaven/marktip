@@ -367,16 +367,16 @@ void check_content_field(const NodeSpec& spec, const PathStack& path) {
     }
 }
 
-void check_child_content(const Schema& schema, const NodeSpec& parent, const NodeSpec& child,
+void check_child_content(const Document& document, const NodeSpec& parent, const NodeSpec& child,
                          const Node& child_node, std::size_t siblings, const PathStack& path) {
     if (parent.dfa >= 0) {
         return;
     }
-    if (!schema.content_model_allows(parent.allow, child)) {
+    if (!document.schema().content_model_allows(parent.allow, child)) {
         throw_invalid_child_content(parent, child, path);
     }
     if ((parent.name == "tableCell" || parent.name == "tableHeader") &&
-        (!child.core || uses_tag_form(child_node, child))) {
+        !document.schema().has_table_tags() && (!child.core || uses_tag_form(document, child_node, child))) {
         if (child.shape == Shape::BlockContainer) {
             throw_table_container(child, path);
         }
@@ -399,6 +399,15 @@ void check_node_marks(const Node& node, const NodeSpec& spec, const PathStack& p
 // Keep the complete child sequence out of the recursive dict and lift frames.
 void check_node_content(const Document& document, std::size_t index, const NodeSpec& spec, const PathStack& path) {
     if (spec.dfa < 0) {
+        const Node& node = document.node(index);
+        PathStack child_path = path;
+        for (std::size_t position = 0; position < node.content.size(); ++position) {
+            const Node& child = document.node(node.content[position]);
+            child_path.push_back({"content", position});
+            check_child_content(document, spec, *document.schema().node(child.type), child,
+                                node.content.size(), child_path);
+            child_path.pop_back();
+        }
         return;
     }
     const Node& node = document.node(index);

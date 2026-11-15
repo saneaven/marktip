@@ -115,6 +115,15 @@ std::vector<std::size_t> core_tag_attrs(const std::vector<AttrSpec>& attrs,
     return order;
 }
 
+bool list_owner(std::string_view type) {
+    return type == "bulletList" || type == "taskList" || type == "orderedList" ||
+           type == "listItem" || type == "taskItem";
+}
+
+bool table_owner(std::string_view type) {
+    return type == "table" || type == "tableRow" || type == "tableHeader" || type == "tableCell";
+}
+
 void merge_core_attrs(std::vector<AttrSpec>& attrs, std::vector<std::size_t>& order,
                       const CoreAttrDeclaration& declaration) {
     for (const AttrDeclaration& attr : declaration.attrs) {
@@ -126,7 +135,7 @@ void merge_core_attrs(std::vector<AttrSpec>& attrs, std::vector<std::size_t>& or
         auto existing = std::find_if(attrs.begin(), attrs.end(), [&](const AttrSpec& spec) {
             return spec.name == attr.name;
         });
-        if (existing != attrs.end() && existing->form != MarkdownForm::Dropped) {
+        if (existing != attrs.end() && existing->form != MarkdownForm::Dropped && existing->rule != AttrRule::NoSpan) {
             throw std::invalid_argument("core attr '" + declaration.type + "." + attr.name +
                                         "' is already carried by Markdown");
         }
@@ -167,6 +176,38 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
                                              std::vector<CoreAttrDeclaration> core_attrs) {
     std::shared_ptr<Schema> schema(new Schema);
     for (const CoreAttrDeclaration& declaration : core_attrs) {
+        schema->list_tags_ = schema->list_tags_ || list_owner(declaration.type);
+        schema->table_tags_ = schema->table_tags_ || table_owner(declaration.type);
+    }
+    for (NodeSpec& node : schema->nodes_) {
+        if (schema->list_tags_ && list_owner(node.name)) {
+            node.shape = Shape::BlockContainer;
+            if (node.name == "listItem" || node.name == "taskItem") {
+                node.tag = "li";
+                if (node.name == "taskItem") {
+                    node.tag_attrs = core_tag_attrs(node.attrs, {"checked"});
+                }
+            } else if (node.name == "orderedList") {
+                node.tag = "ol";
+                node.tag_attrs = core_tag_attrs(node.attrs, {"start", "tight"});
+            } else {
+                node.tag = "ul";
+                node.tag_attrs = core_tag_attrs(node.attrs, {"tight"});
+            }
+        } else if (schema->table_tags_ && table_owner(node.name)) {
+            node.shape = Shape::BlockContainer;
+            if (node.name == "table") {
+                node.tag = "table";
+                node.tag_attrs = core_tag_attrs(node.attrs, {"colCount"});
+            } else if (node.name == "tableRow") {
+                node.tag = "tr";
+            } else {
+                node.tag = node.name == "tableHeader" ? "th" : "td";
+                node.tag_attrs = core_tag_attrs(node.attrs, {"align"});
+            }
+        }
+    }
+    for (const CoreAttrDeclaration& declaration : core_attrs) {
         if (declaration.type == "link") {
             auto mark = std::find_if(schema->marks_.begin(), schema->marks_.end(), [](const MarkSpec& spec) {
                 return spec.name == "link";
@@ -178,7 +219,8 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
             schema->link_uri_ = std::any_of(mark->attrs.begin(), mark->attrs.end(), [](const AttrSpec& attr) {
                 return attr.form == MarkdownForm::Tag && attr.uri != UriKind::None;
             });
-        } else if (declaration.type == "paragraph" || declaration.type == "heading" || declaration.type == "image") {
+        } else if (declaration.type == "paragraph" || declaration.type == "heading" || declaration.type == "image" ||
+                   declaration.type == "blockquote" || list_owner(declaration.type) || table_owner(declaration.type)) {
             auto node = std::find_if(schema->nodes_.begin(), schema->nodes_.end(), [&](const NodeSpec& spec) {
                 return spec.name == declaration.type;
             });
@@ -192,8 +234,11 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
             } else if (declaration.type == "heading") {
                 node->tag = "h1";
                 node->shape = Shape::TextBlock;
-            } else {
+            } else if (declaration.type == "image") {
                 node->tag = "img";
+            } else if (declaration.type == "blockquote") {
+                node->tag = "blockquote";
+                node->shape = Shape::BlockContainer;
             }
         } else {
             throw std::invalid_argument("core attrs are not supported for type '" + declaration.type + "'");
@@ -516,7 +561,7 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
     }
     for (std::size_t i = 0; i < schema->nodes_.size(); ++i) {
         const NodeSpec& node = schema->nodes_[i];
-        if (!node.tag.empty()) {
+        if (!node.tag.empty() && !(node.core && (node.name == "taskList" || node.name == "taskItem"))) {
             if (node.name == "heading" && node.core) {
                 for (char level = '1'; level <= '6'; ++level) {
                     schema->tags_.push_back({std::string("h") + level, false, false, i});

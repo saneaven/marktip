@@ -16,11 +16,42 @@ bool has_tag_attr(const AttrList& attrs, const std::vector<AttrSpec>& specs) {
 
 }  // namespace
 
-bool uses_tag_form(const Node& node, const NodeSpec& spec) {
+bool uses_tag_form(const Document& document, const Node& node, const NodeSpec& spec) {
     if (spec.tag.empty()) {
         return false;
     }
-    return !spec.core || has_tag_attr(node.attrs, spec.attrs);
+    if (!spec.core || has_tag_attr(node.attrs, spec.attrs)) {
+        return true;
+    }
+    const Schema& schema = document.schema();
+    if (schema.has_list_tags() &&
+        (node.type == "bulletList" || node.type == "orderedList" || node.type == "taskList")) {
+        for (std::size_t child : node.content) {
+            const Node& item = document.node(child);
+            if (uses_tag_form(document, item, *schema.node(item.type))) {
+                return true;
+            }
+        }
+    }
+    if (schema.has_table_tags() && node.type == "table") {
+        for (std::size_t row_index = 0; row_index < node.content.size(); ++row_index) {
+            const Node& row = document.node(node.content[row_index]);
+            if (uses_tag_form(document, row, *schema.node(row.type))) {
+                return true;
+            }
+            for (std::size_t child : row.content) {
+                const Node& cell = document.node(child);
+                if ((cell.type == "tableHeader") != (row_index == 0) || cell.content.size() > 1 ||
+                    std::any_of(cell.content.begin(), cell.content.end(), [&](std::size_t index) {
+                        return document.node(index).type != "paragraph";
+                    }) ||
+                    uses_tag_form(document, cell, *schema.node(cell.type))) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 bool uses_tag_form(const Mark& mark, const MarkSpec& spec) {

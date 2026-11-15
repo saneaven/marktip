@@ -541,7 +541,7 @@ private:
 
     const NodeSpec* declared_form(const Node& node) const {
         const NodeSpec& spec = *schema_.node(node.type);
-        return !spec.core || uses_tag_form(node, spec) ? &spec : nullptr;
+        return !spec.core || uses_tag_form(document_, node, spec) ? &spec : nullptr;
     }
 
     static BlockKind block_kind(const Node& node, const NodeSpec* spec) {
@@ -597,11 +597,31 @@ private:
     void collect_block_children(const Node& node, const NodeSpec* container, int indent, bool list_item,
                                 std::vector<BlockPiece>& pieces, int& prev_variant) {
         pieces.reserve(node.content.size());
+        ContentModel inherited = container != nullptr && container->core ? container->allow : ContentModel::None;
         if (container != nullptr && !container->implicit) {
             append_container_tag(node, *container, indent, false, pieces, prev_variant);
         }
         for_each_child(node, [&](const Node& child) {
-            const NodeSpec* spec = node_forms_ ? declared_form(child) : nullptr;
+            const NodeSpec* spec = nullptr;
+            if (node_forms_) {
+                bool follows_parent = false;
+                switch (inherited) {
+                    case ContentModel::ListItems:
+                    case ContentModel::OrderedListItems:
+                    case ContentModel::TaskItems:
+                        follows_parent = child.type == "listItem" || child.type == "taskItem";
+                        break;
+                    case ContentModel::Rows:
+                        follows_parent = child.type == "tableRow";
+                        break;
+                    case ContentModel::Cells:
+                        follows_parent = child.type == "tableCell" || child.type == "tableHeader";
+                        break;
+                    default:
+                        break;
+                }
+                spec = follows_parent ? schema_.node(child.type) : declared_form(child);
+            }
             if (spec != nullptr && spec->shape == Shape::BlockContainer) {
                 collect_block_children(child, spec, indent, list_item, pieces, prev_variant);
                 return;

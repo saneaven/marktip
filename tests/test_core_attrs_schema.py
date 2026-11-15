@@ -68,15 +68,6 @@ def test_markdown_carried_core_attrs_cannot_be_redeclared(type_, name):
 
 
 @pytest.mark.parametrize("type_", (
-    "blockquote", "bulletList", "orderedList", "taskList", "listItem", "taskItem",
-    "table", "tableRow", "tableHeader", "tableCell",
-))
-def test_container_core_attrs_are_refused_until_their_tag_forms_are_supported(type_):
-    with pytest.raises(ValueError):
-        tm.Schema(core_attrs={type_: {"data-label": tm.Attr(str)}})
-
-
-@pytest.mark.parametrize("type_", (
     "doc", "text", "htmlInline", "htmlBlock", "codeBlock", "hardBreak", "horizontalRule",
     "bold", "italic", "strike", "code", "missing",
 ))

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,7 +25,7 @@ AttrInput decode_attr_input(const HtmlAttr& attr, const AttrSpec& spec) {
         return spec.rule == AttrRule::Bool ? AttrInput(true) : AttrInput(OtherValue {});
     }
     std::string value = decode_entities(*attr.value);
-    if (spec.rule == AttrRule::Str) {
+    if (spec.rule == AttrRule::Str || spec.rule == AttrRule::Align) {
         return value;
     }
     if (spec.rule == AttrRule::Bool) {
@@ -125,6 +126,7 @@ struct InlinePiece {
     InlinePieceKind kind;
     std::size_t node;
     const NodeSpec* spec;
+    std::optional<std::size_t> opening = std::nullopt;
 };
 
 struct PlacedChild {
@@ -137,6 +139,7 @@ struct InlineParent {
     const NodeSpec* spec;
     std::vector<std::size_t> content;
     std::vector<PlacedChild> placed = {};
+    std::optional<std::size_t> opening = std::nullopt;
 };
 
 [[noreturn]] void invalid_tag(std::string message, const PathStack& path) {
@@ -243,9 +246,17 @@ bool block_token(const Document& document, std::size_t index, std::string& paylo
     return single_tag(payload, token);
 }
 
+AttrList decode_opening(const Document& document, std::size_t opening, const NodeSpec& spec,
+                        const PathStack& path) {
+    std::string payload;
+    HtmlConstruct token;
+    block_token(document, opening, payload, token);
+    return decode_tag_attrs(token, spec.attrs, spec.name, "node", path);
+}
+
 // Block carriers are siblings before they are containers, so pair them before descending into their children.
 MARKTIP_NOINLINE void process_blocks(Document& document, std::size_t index, const NodeSpec& parent_spec,
-                                     PathStack& path) {
+                                     PathStack& path, std::size_t& paired_from) {
     std::vector<std::size_t> original = std::move(document.node(index).content);
     std::vector<InlinePiece> pieces;
     pieces.reserve(original.size());
@@ -314,11 +325,24 @@ MARKTIP_NOINLINE void process_blocks(Document& document, std::size_t index, cons
 
         Node node;
         node.type = spec.name;
-        node.attrs = decode_tag_attrs(token, spec.attrs, spec.name, "node", path);
+        // A UL's children decide whether it uses the task spec.
+        bool list_owner = spec.core && (spec.tag == "ul" || spec.tag == "li");
+        if (spec.core && spec.tag == "li" &&
+            std::any_of(token.attrs.begin(), token.attrs.end(), [](const HtmlAttr& attr) {
+                return attr.name == "checked";
+            })) {
+            node.type = "taskItem";
+        }
+        if (!list_owner) {
+            node.attrs = decode_tag_attrs(token, spec.attrs, spec.name, "node", path);
+        }
         std::size_t node_index = document.append_node(std::move(node));
+        if (spec.core && spec.shape == Shape::BlockContainer) {
+            paired_from = std::min(paired_from, node_index);
+        }
         InlinePieceKind kind = spec.shape == Shape::BlockAtom ? InlinePieceKind::Atom
                                                               : InlinePieceKind::OpenContainer;
-        pieces.push_back({kind, node_index, &spec});
+        pieces.push_back({kind, node_index, &spec, spec.core ? std::optional<std::size_t>(child) : std::nullopt});
     }
     build_containers(document, index, parent_spec, pieces, std::move(original), path);
 }
@@ -368,8 +392,22 @@ const NodeSpec& peel_textblock(Document& document, std::size_t index, const Node
     return spec;
 }
 
-void finish_parent(Document& document, InlineParent& parent, PathStack& path) {
+void finish_parent(Document& document, InlineParent& parent, PathStack& path, std::size_t source_depth) {
     document.node(parent.node).content = std::move(parent.content);
+    const Schema& schema = document.schema();
+    if (schema.has_list_tags() && document.node(parent.node).type == "bulletList") {
+        normalize_task_list(document, parent.node);
+        parent.spec = schema.node(document.node(parent.node).type);
+    }
+    if (parent.opening && parent.spec->core &&
+        (parent.spec->tag == "ul" || parent.spec->tag == "li")) {
+        // Deferred UL attrs retain the tag's original parent path after list normalization.
+        PathStack attr_path(path.begin(), path.begin() + source_depth);
+        const NodeSpec& spec = *schema.node(document.node(parent.node).type);
+        parent.spec = &spec;
+        Node& node = document.node(parent.node);
+        node.attrs = decode_opening(document, *parent.opening, spec, attr_path);
+    }
     if (!parent.spec->core && parent.spec->shape == Shape::InlineContainer) {
         complete_content(document, parent.node, *parent.spec, path);
     }
@@ -377,10 +415,14 @@ void finish_parent(Document& document, InlineParent& parent, PathStack& path) {
     if (siblings != 0) {
         check_lift_depth(path.size() + 1);
     }
+    if (parent.opening && parent.spec->core) {
+        check_node_content(document, parent.node, *parent.spec, path);
+        return;
+    }
     for (const PlacedChild& child : parent.placed) {
         path.push_back({"content", child.position});
         std::size_t index = document.node(parent.node).content[child.position];
-        check_child_content(document.schema(), *parent.spec, *child.spec, document.node(index), siblings, path);
+        check_child_content(document, *parent.spec, *child.spec, document.node(index), siblings, path);
         path.pop_back();
     }
 }
@@ -400,11 +442,12 @@ void build_containers(Document& document, std::size_t index, const NodeSpec& par
                 invalid_tag("closing tag '</" + piece.spec->tag + ">' has no matching opening container", path);
             }
             std::size_t node = current.node;
-            finish_parent(document, current, path);
+            finish_parent(document, current, path, parent_depth);
+            const NodeSpec* spec = current.spec;
             current = std::move(parents.back());
             parents.pop_back();
             if (current.spec->dfa < 0) {
-                current.placed.push_back({piece.spec, current.content.size()});
+                current.placed.push_back({spec, current.content.size()});
             }
             append_inline(document, current.content, node);
             path.pop_back();
@@ -416,6 +459,7 @@ void build_containers(Document& document, std::size_t index, const NodeSpec& par
             check_lift_depth(path.size());
             parents.push_back(std::move(current));
             current = {piece.node, piece.spec, {}};
+            current.opening = piece.opening;
             continue;
         }
         if (piece.kind == InlinePieceKind::Atom) {
@@ -435,7 +479,7 @@ void build_containers(Document& document, std::size_t index, const NodeSpec& par
         path.resize(parent_depth);
         invalid_tag("opening tag '<" + opening.tag + ">' has no matching closing container", path);
     }
-    finish_parent(document, current, path);
+    finish_parent(document, current, path, parent_depth);
 }
 
 // Clang otherwise inlines this state into lift_node, exhausting small worker stacks on deep documents.
@@ -568,7 +612,8 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
     return content_spec;
 }
 
-const NodeSpec& lift_node(Document& document, std::size_t index, bool html, bool block_forms, PathStack& path) {
+const NodeSpec& lift_node(Document& document, std::size_t index, bool html, bool block_forms, PathStack& path,
+                          std::size_t& paired_from) {
     if (block_forms) {
         check_lift_depth(path.size());
     }
@@ -576,15 +621,16 @@ const NodeSpec& lift_node(Document& document, std::size_t index, bool html, bool
     if (spec.allow == ContentModel::Inlines) {
         return process_inline(document, index, spec, html, path);
     }
-    if (block_forms && spec.core && spec.allow == ContentModel::Blocks) {
-        process_blocks(document, index, spec, path);
+    // Appended core containers were paired already; parser-built nodes have lower arena indices.
+    if (block_forms && spec.core && spec.allow == ContentModel::Blocks && index < paired_from) {
+        process_blocks(document, index, spec, path, paired_from);
     }
     for (std::size_t i = 0; i < document.node(index).content.size(); ++i) {
         path.push_back({"content", i});
         std::size_t child = document.node(index).content[i];
-        const NodeSpec& child_spec = lift_node(document, child, html, block_forms, path);
+        const NodeSpec& child_spec = lift_node(document, child, html, block_forms, path, paired_from);
         if (child_spec.shape == Shape::TextBlock) {
-            check_child_content(document.schema(), spec, child_spec, document.node(child),
+            check_child_content(document, spec, child_spec, document.node(child),
                                 document.node(index).content.size(), path);
             complete_content(document, child, child_spec, path);
         }
@@ -758,7 +804,8 @@ void lift(Document& document, bool html) {
     path.reserve(32);
     bool block_forms = std::any_of(document.schema().tags().begin(), document.schema().tags().end(),
                                     [](const TagEntry& tag) { return tag.block_line; });
-    lift_node(document, 0, html, block_forms, path);
+    std::size_t paired_from = std::numeric_limits<std::size_t>::max();
+    lift_node(document, 0, html, block_forms, path, paired_from);
 }
 
 }  // namespace marktip
