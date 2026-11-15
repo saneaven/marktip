@@ -367,9 +367,9 @@ Without a set overlay, empty paragraphs and breaks inside headings behave exactl
 A set overlay selects a heading tag form that preserves hard breaks and newlines, subject to Markdown table cells' single-line rules.
 Declaring attrs on any list or table type activates its whole family.
 A list uses tags when it or any item needs them; items follow the list's form.
-A table uses tags when header cells are not exactly its first row, a cell has more than one child or any non-paragraph child, or an overlay on the table, a row or a cell is set.
+A table uses tags when header cells are not exactly its first row, a cell has more than one child or a child its one-line Markdown form cannot carry, or an overlay on the table, a row or a cell is set.
 Rows and cells follow the table's form.
-A cell with no children or one paragraph remains Markdown-shaped.
+A cell with no children, one paragraph, one block atom or one textblock tag form remains Markdown-shaped.
 Empty lists and tables gain no special form rule.
 
 An active table family can carry multiple blocks and block containers in a cell; the Markdown form cannot.
@@ -381,6 +381,7 @@ Heading level is carried by its tag name.
 Declared tags exposed as tag constructs are syntax with either `html=True` or `html=False`.
 With `html=True`, declared-looking tags inside an undeclared HTML block or a comment stay part of that raw construct.
 An unmatched tag, wrong placement, invalid attr, conflicting mark set or invalid content is an error, not a raw-HTML fallback.
+Marks around a lone declared block tag are `invalid_mark_set`, since a block tag cannot carry those marks.
 This includes hand-written HTML tables and lists once their family is active: each container tag must occupy its own block line and its children must fit the content model.
 `<table>\n<tr><td>a</td></tr>\n</table>` is not a substitute for that form.
 Strict dict input also refuses raw HTML payloads that would be read as declared tags, with `unrepresentable`.

@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "ast.h"
+#include "compiler.h"
 
 namespace marktip {
 namespace {
@@ -12,6 +13,13 @@ bool has_tag_attr(const AttrList& attrs, const std::vector<AttrSpec>& specs) {
     return std::any_of(specs.begin(), specs.end(), [&](const AttrSpec& spec) {
         return spec.form == MarkdownForm::Tag && find_attr(attrs, spec.name) != nullptr;
     });
+}
+
+// A recursive form query would otherwise enlarge the ordinary paragraph-cell path.
+MARKTIP_NOINLINE bool cell_child_needs_tag(const Document& document, const Node& child) {
+    const NodeSpec& spec = *document.schema().node(child.type);
+    return spec.shape != Shape::BlockAtom &&
+           (spec.shape != Shape::TextBlock || !uses_tag_form(document, child, spec));
 }
 
 }  // namespace
@@ -42,10 +50,9 @@ bool uses_tag_form(const Document& document, const Node& node, const NodeSpec& s
             for (std::size_t child : row.content) {
                 const Node& cell = document.node(child);
                 if ((cell.type == "tableHeader") != (row_index == 0) || cell.content.size() > 1 ||
-                    std::any_of(cell.content.begin(), cell.content.end(), [&](std::size_t index) {
-                        return document.node(index).type != "paragraph";
-                    }) ||
-                    uses_tag_form(document, cell, *schema.node(cell.type))) {
+                    (!cell.content.empty() && document.node(cell.content.front()).type != "paragraph" &&
+                     cell_child_needs_tag(document, document.node(cell.content.front()))) ||
+                    has_tag_attr(cell.attrs, schema.node(cell.type)->attrs)) {
                     return true;
                 }
             }

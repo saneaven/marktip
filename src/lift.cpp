@@ -134,6 +134,12 @@ struct InlineParent {
     throw InvalidNodeError("invalid_tag", "content", std::move(message), format_path(path));
 }
 
+void check_block_marks(const Node& node, const char* message, const PathStack& path) {
+    if (!node.marks.empty()) {
+        throw InvalidNodeError("invalid_mark_set", "marks", message, format_path(path));
+    }
+}
+
 void apply_declared_marks(std::vector<Mark>& marks, const std::vector<Mark>& effective,
                            const Schema& schema, const PathStack& path) {
     for (const Mark& mark : effective) {
@@ -300,6 +306,13 @@ MARKTIP_NOINLINE void process_blocks(Document& document, std::size_t index, cons
         }
 
         const NodeSpec& spec = document.schema().node(tag->spec);
+        if (parsed.type == "paragraph") {
+            for (std::size_t part : parsed.content) {
+                if (document.node(part).type == "htmlInline") {
+                    check_block_marks(document.node(part), "a block tag cannot carry marks", path);
+                }
+            }
+        }
         if (token.closing) {
             if (token.self_closing || spec.shape == Shape::BlockAtom) {
                 invalid_tag("closing tag '</" + spec.tag + ">' has no matching opening container", path);
