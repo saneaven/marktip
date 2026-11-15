@@ -22,7 +22,7 @@ namespace marktip {
 // is_int excludes bools; integer(value, long long&) returns false on overflow; size reads a checked list.
 // string and boolean may receive stored scalars of another type; conversion and failure follow the host.
 // coerce_string receives non-null values, including numbers, bools, lists, dicts and dict keys.
-// items yields entries with first/second as key/value; elements yields Value items; type_error does not return.
+// items yields entries with first/second as key/value; elements yields Value items.
 template <typename Input>
 class DocumentReader {
     using Value = typename Input::Value;
@@ -371,7 +371,6 @@ public:
         }
         return document;
     }
-
 };
 
 }  // namespace marktip

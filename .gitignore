@@ -1,4 +1,5 @@
 build/
+build-wasm/
 dist/
 *.egg-info/
 *.whl

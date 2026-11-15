@@ -49,6 +49,7 @@ else()
 endif()
 
 option(MARKTIP_BUILD_PYTHON "Build the Python extension" ON)
+option(MARKTIP_BUILD_WASM "Build the WebAssembly module" OFF)
 
 if(MARKTIP_BUILD_PYTHON)
   set(PYBIND11_FINDPYTHON ON)
@@ -74,4 +75,40 @@ if(MARKTIP_BUILD_PYTHON)
   endif()
 
   install(TARGETS _core LIBRARY DESTINATION marktip)
+endif()
+
+if(MARKTIP_BUILD_WASM)
+  add_library(yyjson STATIC third_party/yyjson/yyjson.c)
+  target_include_directories(yyjson PUBLIC third_party/yyjson)
+  target_compile_definitions(yyjson PUBLIC
+    YYJSON_DISABLE_WRITER=1
+    YYJSON_DISABLE_UTILS=1
+    YYJSON_DISABLE_INCR_READER=1
+    YYJSON_DISABLE_FILE=1
+    YYJSON_DISABLE_NON_STANDARD=1
+    YYJSON_DISABLE_FAST_FP_CONV=1
+  )
+
+  target_compile_options(marktip_core PRIVATE -fwasm-exceptions)
+
+  add_executable(marktip_wasm
+    bindings/wasm/module.cpp
+    bindings/wasm/options.cpp
+  )
+  target_link_libraries(marktip_wasm PRIVATE marktip_core yyjson)
+  target_compile_definitions(marktip_wasm PRIVATE MARKTIP_VERSION="${SKBUILD_PROJECT_VERSION}")
+  target_compile_options(marktip_wasm PRIVATE -O3 -Wall -Wextra -Wpedantic -fwasm-exceptions)
+  target_link_options(marktip_wasm PRIVATE
+    -O3
+    -fwasm-exceptions
+    --no-entry
+    -sMODULARIZE=1
+    -sEXPORT_ES6=1
+    -sENVIRONMENT=web,worker,node
+    -sALLOW_MEMORY_GROWTH=1
+    -sSTACK_SIZE=1048576
+    "-sEXPORTED_FUNCTIONS=['_malloc','_free']"
+    "-sEXPORTED_RUNTIME_METHODS=['HEAPU8']"
+  )
+  set_target_properties(marktip_wasm PROPERTIES OUTPUT_NAME marktip SUFFIX ".mjs")
 endif()
