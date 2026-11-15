@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "errors.h"
+#include "spelling.h"
 #include "value.h"
 
 namespace marktip {
@@ -39,6 +40,8 @@ public:
     const Node& node(std::size_t index) const;
     Node& node(std::size_t index);
     const Schema& schema() const;
+    const std::optional<Spelling>& spelling() const;
+    std::optional<Spelling>& spelling();
 
     std::size_t append_node(Node node);
     std::size_t append_child(std::size_t parent, Node node);
@@ -48,6 +51,7 @@ public:
 private:
     std::shared_ptr<const Schema> schema_;
     std::vector<Node> nodes_;
+    std::optional<Spelling> spelling_;
 };
 
 void normalize_task_list(Document& document, std::size_t index);

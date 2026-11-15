@@ -34,11 +34,11 @@ def test_heading_container_preserves_the_core_break_and_newline_normalization(ht
     ast = doc({"type": "heading", "attrs": {"level": 2}, "content": [wrap(*children)]})
     source = tm.from_dict(ast, schema=schema, strict=level)
     markdown = "## <wrap>a b</wrap>"
-    assert source.to_markdown() == markdown
+    assert source.to_markdown(canonical=True) == markdown
     parsed = tm.from_markdown(markdown, schema=schema, html=html)
     expected = doc({"type": "heading", "attrs": {"level": 2}, "content": [wrap(text("a b"))]})
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == markdown
+    assert parsed.to_markdown(canonical=True) == markdown
 
 
 @pytest.mark.parametrize("html", (True, False))
@@ -57,8 +57,8 @@ def test_off_ignores_container_own_marks_and_keeps_the_container_as_a_barrier(ht
     children = [text("a", mark), wrap(text("b", mark), marks=[mark]), text("c", mark)]
     source = tm.from_dict(doc({"type": "paragraph", "content": children}), schema=schema, strict="off")
     markdown = before + "<wrap>" + inside + "</wrap>" + after
-    assert source.to_markdown() == markdown
+    assert source.to_markdown(canonical=True) == markdown
     parsed = tm.from_markdown(markdown, schema=schema, html=html)
     expected = doc({"type": "paragraph", "content": [text("a", mark), wrap(text("b", mark)), text("c", mark)]})
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == markdown
+    assert parsed.to_markdown(canonical=True) == markdown

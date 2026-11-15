@@ -152,10 +152,10 @@ def test_tiptap_json_with_inline_images_roundtrips_with_presets_under_exact(html
               node("paragraph", text("Documentation", link)), node("paragraph", image), table, details,
               node("blockMath", attrs={"latex": r"E = mc^2"}))
     source = tm.from_dict(ast, schema=schema, strict="exact")
-    written = source.to_markdown()
+    written = source.to_markdown(canonical=True)
     parsed = tm.from_markdown(written, schema=schema, html=html)
     assert parsed.to_dict() == source.to_dict()
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
 
 
 @pytest.mark.parametrize("html", (True, False))
@@ -172,7 +172,7 @@ def test_stock_defaults_are_unset_even_under_exact(html):
     assert paragraph["content"][0]["marks"] == [mark("link", href="https://example.com")]
     assert paragraph["content"][2]["attrs"] == {"id": "user-1"}
     assert source.to_dict()["content"][1] == {"type": "blockMath"}
-    parsed = tm.from_markdown(source.to_markdown(), schema=schema, html=html)
+    parsed = tm.from_markdown(source.to_markdown(canonical=True), schema=schema, html=html)
     assert parsed.to_dict() == source.to_dict()
 
 
@@ -184,7 +184,7 @@ def test_text_align_uses_the_documented_paragraph_and_heading_targets():
     ast = doc(node("paragraph", text("x"), attrs={"textAlign": "left"}))
     source = tm.from_dict(ast, schema=schema, strict="exact")
     assert source.to_dict() == doc(node("paragraph", text("x")))
-    assert source.to_markdown() == "x"
+    assert source.to_markdown(canonical=True) == "x"
 
 
 def test_preset_constants_declare_the_optional_extension_attrs():
@@ -201,7 +201,7 @@ def test_configured_text_style_only_declares_the_enabled_extension_attrs():
     schema = tm.Schema(marks=[configured])
     ast = doc(node("paragraph", text("x", mark("textStyle", color="red"))))
     source = tm.from_dict(ast, schema=schema, strict="exact")
-    assert tm.from_markdown(source.to_markdown(), schema=schema).to_dict() == source.to_dict()
+    assert tm.from_markdown(source.to_markdown(canonical=True), schema=schema).to_dict() == source.to_dict()
 
 
 def test_configured_text_align_checks_the_editors_alignment_options():
@@ -220,4 +220,4 @@ def test_configured_link_defaults_follow_the_editor_html_attributes():
                                                 rel="nofollow", **{"class": "reference"}))))
     source = tm.from_dict(ast, schema=schema, strict="exact")
     assert source.to_dict() == doc(node("paragraph", text("Link", mark("link", href="https://example.com"))))
-    assert source.to_markdown() == "[Link](https://example.com)"
+    assert source.to_markdown(canonical=True) == "[Link](https://example.com)"

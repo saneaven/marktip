@@ -170,9 +170,14 @@ std::string align_to_string(MD_ALIGN align) {
 
 class AstBuilder {
 public:
-    AstBuilder(std::size_t input_size, bool html, std::shared_ptr<const Schema> schema)
-        : document_(std::move(schema), std::max<std::size_t>(32, input_size / 24)), html_(html) {
+    AstBuilder(std::string markdown, bool html, std::shared_ptr<const Schema> schema)
+        : document_(std::move(schema), std::max<std::size_t>(32, markdown.size() / 24)), html_(html) {
+        document_.spelling().emplace(std::move(markdown));
         stack_.push_back(0);
+    }
+
+    std::string_view source() const {
+        return *document_.spelling()->source;
     }
 
     int enter_block(MD_BLOCKTYPE type, void* detail) {
@@ -451,18 +456,26 @@ public:
     }
 
     int source_segments(const MD_SOURCE_SEGMENT* segments, MD_SIZE count) {
-        segments_.reserve(count);
-        std::size_t root_child = 0;
+        Spelling& spelling = *document_.spelling();
+        spelling.head = {0, count == 0 ? source().size() : segments[0].beg};
+        spelling.items.reserve(count);
         for (MD_SIZE i = 0; i < count; ++i) {
-            segments_.push_back({segments[i].beg,
-                                 segments[i].has_block ? std::optional<std::size_t>(root_child++) : std::nullopt});
+            std::size_t end = i + 1 < count ? segments[i + 1].beg : source().size();
+            spelling.append_segment(segments[i].beg, end, segments[i].has_block != 0);
         }
         return 0;
     }
 
     Document into_document(ParseObservation* observation) && {
         if (observation != nullptr) {
-            observation->segments = std::move(segments_);
+            const auto& items = document_.spelling()->items;
+            observation->segments.reserve(items.size());
+            std::size_t root_child = 0;
+            for (const SpellingPiece& item : items) {
+                observation->segments.push_back({item.text->begin,
+                                                item.has_node ? std::optional<std::size_t>(root_child++)
+                                                              : std::nullopt});
+            }
             observation->root_child_count = document_.root().content.size();
         }
         return std::move(document_);
@@ -470,7 +483,6 @@ public:
 
 private:
     Document document_;
-    std::vector<ParseSegment> segments_;
     std::vector<std::size_t> stack_;
     std::vector<Mark> active_marks_;
     std::vector<std::size_t> active_mark_depths_;
@@ -780,7 +792,7 @@ Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
         }
     }
     unsigned math_flag = schema->has_math() ? MD_FLAG_LATEXMATHSPANS : 0;
-    AstBuilder builder(markdown.size(), html, std::move(schema));
+    AstBuilder builder(std::move(markdown), html, std::move(schema));
     MD_PARSER parser {};
     parser.abi_version = 0;
     parser.typed_tags = typed_tags.data();
@@ -800,7 +812,8 @@ Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
     parser.debug_log = nullptr;
     parser.syntax = nullptr;
 
-    int rc = md_parse(markdown.data(), static_cast<MD_SIZE>(markdown.size()), &parser, &builder);
+    std::string_view source = builder.source();
+    int rc = md_parse(source.data(), static_cast<MD_SIZE>(source.size()), &parser, &builder);
     if (rc != 0) {
         if (!builder.error().empty()) {
             throw ParseError(builder.error_code(), builder.error());

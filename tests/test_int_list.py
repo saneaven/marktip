@@ -34,8 +34,8 @@ def test_integer_lists_are_stored_as_lists_and_written_as_comma_separated_values
     ast = doc({"sizes": values})
     document = tm.from_dict(ast, schema=schema, strict=level)
     assert document.to_dict() == ast
-    assert document.to_markdown() == f'<measure sizes="{rendered}"/>'
-    assert tm.from_markdown(document.to_markdown(), schema=schema).to_dict() == ast
+    assert document.to_markdown(canonical=True) == f'<measure sizes="{rendered}"/>'
+    assert tm.from_markdown(document.to_markdown(canonical=True), schema=schema).to_dict() == ast
 
 
 @pytest.mark.parametrize("level", STRICT_LEVELS)
@@ -66,7 +66,7 @@ def test_integer_list_defaults_are_unset_at_every_strict_level(level, value):
     schema = list_schema(tm.Attr(tm.IntList, default=[100, 200]))
     document = tm.from_dict(doc({"sizes": value}), schema=schema, strict=level)
     assert document.to_dict() == doc()
-    assert document.to_markdown() == "<measure/>"
+    assert document.to_markdown(canonical=True) == "<measure/>"
     assert tm.from_markdown('<measure sizes="100,200"/>', schema=schema).to_dict() == doc()
 
 

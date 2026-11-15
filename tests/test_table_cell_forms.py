@@ -33,7 +33,7 @@ def test_a_lone_block_atom_or_textblock_cell_keeps_its_pipe_table(html, type_):
     child = node("embed") if type_ == "embed" else node("lead", text("Lead"))
     ast = doc(node("table", node("tableRow", node("tableHeader", child)), attrs={"colCount": 1}))
     source = tm.from_dict(ast, schema=selected, strict="exact")
-    written = source.to_markdown()
+    written = source.to_markdown(canonical=True)
     assert written == f"| {'<embed/>' if type_ == 'embed' else '<lead>Lead</lead>'} |\n| --- |"
     assert tm.from_markdown(written, schema=selected, html=html).to_dict() == source.to_dict()
 
@@ -46,7 +46,7 @@ def test_heading_cells_use_pipe_form_only_when_the_heading_is_written_as_a_textb
     heading = node("heading", text("Title"), attrs=attrs)
     ast = doc(node("table", node("tableRow", node("tableHeader", heading)), attrs={"colCount": 1}))
     source = tm.from_dict(ast, schema=selected, strict="exact")
-    written = source.to_markdown()
+    written = source.to_markdown(canonical=True)
     if aligned:
         assert written == '| <h2 textAlign="right">Title</h2> |\n| --- |'
     else:
@@ -54,6 +54,6 @@ def test_heading_cells_use_pipe_form_only_when_the_heading_is_written_as_a_textb
         assert "## Title" in written
     parsed = tm.from_markdown(written, schema=selected, html=html)
     assert parsed.to_dict() == source.to_dict()
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
 
 

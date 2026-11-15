@@ -29,10 +29,10 @@ def assert_roundtrip(ast, *, loose=False):
     expected = copy.deepcopy(source.to_dict())
     if loose:
         expected["content"][0]["attrs"]["tight"] = False
-    written = source.to_markdown()
+    written = source.to_markdown(canonical=True)
     parsed = tm.from_markdown(written)
     assert parsed.to_dict() == expected
-    assert tm.from_markdown(parsed.to_markdown()).to_dict() == expected
+    assert tm.from_markdown(parsed.to_markdown(canonical=True)).to_dict() == expected
     return written
 
 

@@ -136,7 +136,7 @@ def test_ordered_list_accepts_the_task_item_shape_emitted_by_the_parser(level):
 
     converted = tm.from_dict(parsed.to_dict(), strict=level)
 
-    assert converted.to_markdown() == parsed.to_markdown() == "1. [x] done"
+    assert converted.to_markdown(canonical=True) == parsed.to_markdown(canonical=True) == "1. [x] done"
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -155,5 +155,5 @@ def test_block_nodes_cannot_carry_marks_or_text_fields(level):
 def test_strict_off_retains_the_converter_compatibility_surface():
     ast = doc(p({"type": "text", "text": "x", "arbitrary": True}, p(text("flattened"))))
     converted = tm.from_dict(ast)
-    assert converted.to_markdown() == "xflattened"
+    assert converted.to_markdown(canonical=True) == "xflattened"
     assert "arbitrary" not in converted.to_dict()["content"][0]["content"][0]

@@ -56,12 +56,12 @@ def block_schema(*, display=False, fence=True):
 
 def roundtrip(ast, schema, markdown, html, level, **options):
     source = tm.from_dict(ast, schema=schema, strict=level, **options)
-    written = source.to_markdown()
+    written = source.to_markdown(canonical=True)
     if markdown is not None:
         assert written == markdown
     parsed = tm.from_markdown(written, schema=schema, html=html, **options)
     assert parsed.to_dict() == source.to_dict()
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
     return parsed
 
 
@@ -179,7 +179,7 @@ def test_both_the_fence_and_tag_forms_read_as_the_same_declared_block(html):
     for markdown in ("```math\nx + y\n```", '<blockMath latex="x + y"/>'):
         parsed = tm.from_markdown(markdown, schema=schema, html=html)
         assert parsed.to_dict() == expected
-        assert parsed.to_markdown() == "```math\nx + y\n```"
+        assert parsed.to_markdown(canonical=True) == "```math\nx + y\n```"
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -301,10 +301,10 @@ def test_image_alt_flattens_declared_math_but_keeps_undeclared_mode_literal(html
     parsed = tm.from_markdown(f"![value {source}](image.png)", schema=schema, html=html)
     expected = doc(p(node("image", attrs={"src": "image.png", "alt": "value " + alt})))
     assert parsed.to_dict() == expected
-    written = parsed.to_markdown()
+    written = parsed.to_markdown(canonical=True)
     reparsed = tm.from_markdown(written, schema=schema, html=html)
     assert reparsed.to_dict() == expected
-    assert reparsed.to_markdown() == written
+    assert reparsed.to_markdown(canonical=True) == written
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -312,7 +312,7 @@ def test_fence_only_schema_does_not_turn_dollars_into_math(html):
     schema = block_schema()
     parsed = tm.from_markdown("$x$", schema=schema, html=html)
     assert parsed.to_dict() == doc(p(text("$x$")))
-    assert parsed.to_markdown() == "$x$"
+    assert parsed.to_markdown(canonical=True) == "$x$"
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -323,7 +323,7 @@ def test_display_math_is_read_as_a_block_but_never_written_with_double_dollars(h
     parsed = tm.from_markdown("$$x + y$$", schema=schema, html=html)
     expected = doc(node("blockMath", attrs={"latex": "x + y"}))
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == markdown
+    assert parsed.to_markdown(canonical=True) == markdown
     assert tm.from_markdown(markdown, schema=schema, html=html).to_dict() == expected
 
 
@@ -351,7 +351,7 @@ def test_display_math_reads_from_a_whole_paragraph_in_block_contexts(html, conte
         written = '| <blockMath latex="x"/> |\n| --- |'
     parsed = tm.from_markdown(source, schema=schema, html=html)
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
     assert tm.from_markdown(written, schema=schema, html=html).to_dict() == expected
 
 
@@ -361,6 +361,6 @@ def test_undeclared_math_mode_is_literal_including_its_unparsed_markdown(html, m
     schema = inline_schema() if mode == "inline" else block_schema(display=True, fence=False)
     parsed = tm.from_markdown(source, schema=schema, html=html)
     assert parsed.to_dict() == doc(p(text(source)))
-    written = parsed.to_markdown()
+    written = parsed.to_markdown(canonical=True)
     assert tm.from_markdown(written, schema=schema, html=html).to_dict() == parsed.to_dict()
-    assert tm.from_markdown(written, schema=schema, html=html).to_markdown() == written
+    assert tm.from_markdown(written, schema=schema, html=html).to_markdown(canonical=True) == written

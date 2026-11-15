@@ -29,6 +29,7 @@ add_library(marktip_core STATIC
   src/schema.cpp
   src/schema_builder.cpp
   src/serializer.cpp
+  src/spelling.cpp
   src/tags.cpp
   src/validate.cpp
   src/value.cpp

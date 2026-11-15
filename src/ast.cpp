@@ -37,6 +37,14 @@ const Schema& Document::schema() const {
     return *schema_;
 }
 
+const std::optional<Spelling>& Document::spelling() const {
+    return spelling_;
+}
+
+std::optional<Spelling>& Document::spelling() {
+    return spelling_;
+}
+
 std::size_t Document::append_node(Node node) {
     nodes_.push_back(std::move(node));
     return nodes_.size() - 1;

@@ -5,7 +5,7 @@ import marktip as tm
 
 def assert_stable(markdown: str):
     doc = tm.from_markdown(markdown)
-    serialized = doc.to_markdown()
+    serialized = doc.to_markdown(canonical=True)
     assert tm.from_markdown(serialized).to_dict() == doc.to_dict()
 
 
@@ -105,11 +105,11 @@ def hard_break(*marks):
 
 
 def normalize(md):
-    return tm.from_markdown(md).to_markdown()
+    return tm.from_markdown(md).to_markdown(canonical=True)
 
 
 def assert_ast_roundtrip(ast, cjk_friendly=False):
-    md = tm.from_dict(ast).to_markdown()
+    md = tm.from_dict(ast).to_markdown(canonical=True)
     back = tm.from_markdown(md, cjk_friendly=cjk_friendly).to_dict()
     assert back == ast, f"serialized markdown: {md!r}"
 
@@ -189,7 +189,7 @@ def test_cjk_relaxation_is_opt_in():
     # close, so the delimiters remain literal text.
     md = tm.from_dict(
         doc(p(text("마크다운(Markdown)", "bold"), text("은 표준이다")))
-    ).to_markdown()
+    ).to_markdown(canonical=True)
     reparsed = tm.from_markdown(md).to_dict()
     assert reparsed["content"][0]["content"][0]["text"].startswith("**")
 
@@ -203,7 +203,7 @@ def test_cjk_relaxation_is_opt_in():
 
 def test_trailing_space_inside_bold_is_expelled():
     ast = doc(p(text("굵게 ", "bold"), text("이후 텍스트")))
-    md = tm.from_dict(ast).to_markdown()
+    md = tm.from_dict(ast).to_markdown(canonical=True)
     assert md == "**굵게** 이후 텍스트"
     assert tm.from_markdown(md).to_dict() == doc(
         p(text("굵게", "bold"), text(" 이후 텍스트"))
@@ -212,7 +212,7 @@ def test_trailing_space_inside_bold_is_expelled():
 
 def test_leading_space_inside_bold_is_expelled():
     ast = doc(p(text("앞"), text(" 굵게", "bold")))
-    md = tm.from_dict(ast).to_markdown()
+    md = tm.from_dict(ast).to_markdown(canonical=True)
     assert md == "앞 **굵게**"
     assert tm.from_markdown(md).to_dict() == doc(p(text("앞 "), text("굵게", "bold")))
 
@@ -249,7 +249,7 @@ def test_hard_break_inside_heading_demotes_to_space():
             "content": [text("a"), hard_break(), text("b")],
         }
     )
-    md = tm.from_dict(ast).to_markdown()
+    md = tm.from_dict(ast).to_markdown(canonical=True)
     assert md == "# a b"
     assert tm.from_markdown(md).to_dict() == doc(
         {"type": "heading", "attrs": {"level": 1}, "content": [text("a b")]}
@@ -299,7 +299,7 @@ def task_item(checked, *blocks):
 
 def test_adjacent_bullet_lists_stay_separate():
     ast = doc(bullet_list(list_item(p(text("a")))), bullet_list(list_item(p(text("b")))))
-    assert tm.from_dict(ast).to_markdown() == "- a\n\n* b"
+    assert tm.from_dict(ast).to_markdown(canonical=True) == "- a\n\n* b"
     assert_ast_roundtrip(ast)
 
 
@@ -309,7 +309,7 @@ def test_three_adjacent_bullet_lists_alternate():
         bullet_list(list_item(p(text("b")))),
         bullet_list(list_item(p(text("c")))),
     )
-    assert tm.from_dict(ast).to_markdown() == "- a\n\n* b\n\n- c"
+    assert tm.from_dict(ast).to_markdown(canonical=True) == "- a\n\n* b\n\n- c"
     assert_ast_roundtrip(ast)
 
 
@@ -318,7 +318,7 @@ def test_adjacent_ordered_lists_preserve_starts():
         ordered_list(3, list_item(p(text("a"))), list_item(p(text("b")))),
         ordered_list(0, list_item(p(text("c"))), list_item(p(text("d")))),
     )
-    assert tm.from_dict(ast).to_markdown() == "3. a\n4. b\n\n0) c\n1) d"
+    assert tm.from_dict(ast).to_markdown(canonical=True) == "3. a\n4. b\n\n0) c\n1) d"
     assert_ast_roundtrip(ast)
 
 
@@ -326,7 +326,7 @@ def test_task_list_after_bullet_list_no_checkbox_bleed():
     ast = doc(
         bullet_list(list_item(p(text("a")))), task_list(task_item(False, p(text("b"))))
     )
-    assert tm.from_dict(ast).to_markdown() == "- a\n\n* [ ] b"
+    assert tm.from_dict(ast).to_markdown(canonical=True) == "- a\n\n* [ ] b"
     assert_ast_roundtrip(ast)
 
 
@@ -356,7 +356,7 @@ def test_non_adjacent_lists_keep_default_marker():
         p(text("mid")),
         bullet_list(list_item(p(text("b")))),
     )
-    assert tm.from_dict(ast).to_markdown() == "- a\n\nmid\n\n- b"
+    assert tm.from_dict(ast).to_markdown(canonical=True) == "- a\n\nmid\n\n- b"
     assert_ast_roundtrip(ast)
 
 
@@ -373,9 +373,9 @@ def test_non_adjacent_lists_keep_default_marker():
 )
 def test_html_disabled_normalizes_stable(md):
     doc_obj = tm.from_markdown(md, html=False)
-    once = doc_obj.to_markdown()
+    once = doc_obj.to_markdown(canonical=True)
     assert tm.from_markdown(once, html=False).to_dict() == doc_obj.to_dict()
-    assert tm.from_markdown(once, html=False).to_markdown() == once
+    assert tm.from_markdown(once, html=False).to_markdown(canonical=True) == once
 
 
 # ── idempotence: normalize twice == normalize once ───────────────────────
@@ -410,12 +410,12 @@ def test_tilde_fence_info_string_survives_serialization():
     # A backtick is legal in a tilde fence's info string, so the parser really does
     # produce a language that a backtick fence cannot carry.
     assert_stable("~~~py`x\ncode\n~~~\n")
-    assert tm.from_markdown("~~~py`x\ncode\n~~~\n").to_markdown() == "~~~py`x\ncode\n~~~"
+    assert tm.from_markdown("~~~py`x\ncode\n~~~\n").to_markdown(canonical=True) == "~~~py`x\ncode\n~~~"
 
 
 def test_clamped_ordered_list_start_still_reparses_as_a_list():
     # "-5. a" would come back as a paragraph, losing the list entirely.
     item = {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "a"}]}]}
     ast = {"type": "doc", "content": [{"type": "orderedList", "attrs": {"start": -5}, "content": [item]}]}
-    md = tm.from_dict(ast).to_markdown()
+    md = tm.from_dict(ast).to_markdown(canonical=True)
     assert tm.from_markdown(md).to_dict()["content"][0]["type"] == "orderedList"

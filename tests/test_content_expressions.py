@@ -97,7 +97,7 @@ def test_none_and_empty_content_declare_atoms(level):
         ast = document((), empty_content=False)
         parsed = tm.from_dict(ast, schema=schema, strict=level)
         assert parsed.to_dict() == ast
-        assert parsed.to_markdown() == "<wrap/>"
+        assert parsed.to_markdown(canonical=True) == "<wrap/>"
         assert_invalid_content(document(()), schema, level)
         assert_invalid_content(document(("F",)), schema, level)
 

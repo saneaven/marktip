@@ -89,7 +89,7 @@ def test_undeclared_dropped_attrs_stay_dropped_in_core_tag_forms(type_, field, v
         ast = doc(p(text("x", mark("link", href="https://example.com", rel=value, target="_self"))))
     document = tm.from_dict(ast, schema=schema, strict="content")
     assert document.to_dict() == ast
-    written = document.to_markdown()
+    written = document.to_markdown(canonical=True)
     assert f" {field}=" not in written
     parsed = tm.from_markdown(written, schema=schema).to_dict()["content"][0]["content"][0]
     attrs = parsed["marks"][0]["attrs"] if type_ == "link" else parsed["attrs"]

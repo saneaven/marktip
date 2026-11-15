@@ -34,7 +34,7 @@ def carrier(attrs, container):
 def test_inline_atoms_accept_bare_and_self_closing_open_tags(html, markup):
     parsed = tm.from_markdown(markup, schema=note_schema(), html=html)
     assert parsed.to_dict() == doc({"type": "note"})
-    assert parsed.to_markdown() == "<note/>"
+    assert parsed.to_markdown(canonical=True) == "<note/>"
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -73,7 +73,7 @@ def test_inline_node_attrs_elide_explicit_defaults_when_read(html, container):
         node["content"] = [text("x")]
     parsed = tm.from_markdown(carrier('tone="red" number=0 enabled=false', container), schema=schema, html=html)
     assert parsed.to_dict() == doc(node)
-    assert parsed.to_markdown() == ("<note>x</note>" if container else "<note/>")
+    assert parsed.to_markdown(canonical=True) == ("<note>x</note>" if container else "<note/>")
 
 
 @pytest.mark.parametrize("html", HTML)

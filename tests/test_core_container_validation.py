@@ -90,7 +90,7 @@ def test_default_container_overlay_values_are_unset_and_keep_the_markdown_form(o
     expected, _ = container_case(owner, {})
     document = tm.from_dict(ast, schema=schema, strict="exact")
     assert document.to_dict() == expected
-    assert document.to_markdown() == tm.from_dict(expected, strict="exact").to_markdown()
+    assert document.to_markdown(canonical=True) == tm.from_dict(expected, strict="exact").to_markdown(canonical=True)
 
 
 @pytest.mark.parametrize("owner, source", (
@@ -156,7 +156,7 @@ def test_declared_cell_spans_and_widths_are_carried_by_the_tag(owner, field, val
     ast = doc(node("table", node("tableRow", node(owner, p(), attrs={field: value}))))
     document = tm.from_dict(ast, schema=schema, strict="exact")
     assert document.to_dict() == ast
-    written = document.to_markdown()
+    written = document.to_markdown(canonical=True)
     rendered = "100,200" if field == "colwidth" else "2"
     assert f' {field}="{rendered}"' in written
     parsed = tm.from_markdown(written, schema=schema).to_dict()
@@ -188,7 +188,7 @@ def test_any_active_table_owner_allows_block_cells_and_promotes_the_whole_table(
     ast = doc(node("table", node("tableRow", node(cell_type, *children))))
     document = tm.from_dict(ast, schema=schema, strict="exact")
     assert document.to_dict() == ast
-    written = document.to_markdown()
+    written = document.to_markdown(canonical=True)
     assert written.startswith("<table")
     assert "<tr>" in written
     assert ("<th>" if cell_type == "tableHeader" else "<td>") in written

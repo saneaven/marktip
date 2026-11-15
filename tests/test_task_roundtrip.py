@@ -45,10 +45,10 @@ def code_block():
 
 def assert_roundtrip(ast, markdown):
     source = tm.from_dict(ast)
-    assert source.to_markdown() == markdown
+    assert source.to_markdown(canonical=True) == markdown
     parsed = tm.from_markdown(markdown)
     assert parsed.to_dict() == source.to_dict()
-    assert parsed.to_markdown() == markdown
+    assert parsed.to_markdown(canonical=True) == markdown
 
 
 def test_task_item_with_two_paragraphs_keeps_the_second_paragraph():
@@ -103,17 +103,17 @@ def test_loose_checkbox_only_line_before_a_quote_normalizes_to_an_empty_first_pa
     expected = doc(task_list(task_item(True, {"type": "paragraph"}, quote("quoted")),
                              task_item(False, p(text("next"))), tight=False))
     assert parsed.to_dict() == expected
-    written = parsed.to_markdown()
+    written = parsed.to_markdown(canonical=True)
     reread = tm.from_markdown(written)
     assert reread.to_dict() == expected
-    assert reread.to_markdown() == written
+    assert reread.to_markdown(canonical=True) == written
 
 
 def test_tight_checkbox_only_line_before_a_quote_does_not_add_an_empty_paragraph():
     parsed = tm.from_markdown("- [x]\n  > quoted")
     expected = doc(task_list(task_item(True, quote("quoted"))))
     assert parsed.to_dict() == expected
-    written = parsed.to_markdown()
+    written = parsed.to_markdown(canonical=True)
     reread = tm.from_markdown(written)
     assert reread.to_dict() == expected
-    assert reread.to_markdown() == written
+    assert reread.to_markdown(canonical=True) == written

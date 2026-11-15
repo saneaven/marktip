@@ -49,7 +49,7 @@ def underline_schema():
 def test_declared_mark_writes_its_tag_and_document_keeps_the_schema(level):
     document = tm.from_dict(marked(mark("underline")), schema=underline_schema(), strict=level)
     assert stored_marks(document) == [mark("underline")]
-    assert document.to_markdown() == "<u>x</u>"
+    assert document.to_markdown(canonical=True) == "<u>x</u>"
 
 
 def test_an_undeclared_mark_is_still_unknown():
@@ -102,7 +102,7 @@ def test_valid_declared_attr_values_are_carried_at_every_level(level, type_, val
     schema = tm.Schema(marks=[tm.MarkSpec("note", attrs={"value": tm.Attr(type_)})])
     document = tm.from_dict(marked(mark("note", value=value)), schema=schema, strict=level)
     assert stored_marks(document) == [mark("note", value=value)]
-    assert document.to_markdown() == f'<note value="{rendered}">x</note>'
+    assert document.to_markdown(canonical=True) == f'<note value="{rendered}">x</note>'
 
 
 @pytest.mark.parametrize("level", STRICT_LEVELS)
@@ -136,7 +136,7 @@ def test_off_skips_declared_attr_and_mark_set_validation():
     ast = marked(mark("note", id=True, unknown="lost"), mark("note"))
     document = tm.from_dict(ast, schema=schema, strict="off")
     assert stored_marks(document) == ast["content"][0]["content"][0]["marks"]
-    assert document.to_markdown() == '<note id="true"><note>x</note></note>'
+    assert document.to_markdown(canonical=True) == '<note id="true"><note>x</note></note>'
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -146,7 +146,7 @@ def test_none_and_default_values_are_elided_at_every_level(level, type_, default
     for value in (None, default):
         document = tm.from_dict(marked(mark("note", value=value)), schema=schema, strict=level)
         assert stored_marks(document) == [mark("note")]
-        assert document.to_markdown() == "<note>x</note>"
+        assert document.to_markdown(canonical=True) == "<note>x</note>"
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -311,7 +311,7 @@ def test_non_uri_declared_strings_keep_existing_nul_normalization(level):
     schema = tm.Schema(marks=[tm.MarkSpec("note", attrs={"value": tm.Attr(str)})])
     document = tm.from_dict(marked(mark("note", value="a\0b")), schema=schema, strict=level)
     assert stored_marks(document) == [mark("note", value="a\ufffdb")]
-    assert document.to_markdown() == '<note value="a\ufffdb">x</note>'
+    assert document.to_markdown(canonical=True) == '<note value="a\ufffdb">x</note>'
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -332,7 +332,7 @@ def test_tag_attrs_write_in_declaration_order_and_escape_every_carried_control(l
     value = '&"<>|`' + "".join(chr(number) for number in range(1, 32))
     escaped = "&amp;&quot;&lt;&gt;&#124;&#96;" + "".join(f"&#{number};" for number in range(1, 32))
     document = tm.from_dict(marked(mark("note", count=-12, value=value)), schema=schema, strict=level)
-    assert document.to_markdown() == f'<note value="{escaped}" count="-12">x</note>'
+    assert document.to_markdown(canonical=True) == f'<note value="{escaped}" count="-12">x</note>'
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -349,7 +349,7 @@ def test_tag_marks_stay_outside_each_core_mark_in_both_input_orders(level, rever
     if reverse:
         marks.reverse()
     document = tm.from_dict(marked(*marks), schema=underline_schema(), strict=level)
-    assert document.to_markdown() == f"<u>{rendered}</u>"
+    assert document.to_markdown(canonical=True) == f"<u>{rendered}</u>"
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -358,14 +358,14 @@ def test_code_stays_innermost_with_all_other_marks(level):
         mark("underline"), mark("bold"), mark("italic"), mark("strike"),
         mark("code"), mark("link", href="https://example.com"),
     ), schema=underline_schema(), strict=level)
-    assert document.to_markdown() == "<u>***~~[`x`](https://example.com)~~***</u>"
+    assert document.to_markdown(canonical=True) == "<u>***~~[`x`](https://example.com)~~***</u>"
 
 
 @pytest.mark.parametrize("level", LEVELS)
 def test_tag_mark_nesting_follows_declaration_order(level):
     schema = tm.Schema(marks=[tm.MarkSpec("zulu"), tm.MarkSpec("alpha")])
     document = tm.from_dict(marked(mark("alpha"), mark("bold"), mark("zulu")), schema=schema, strict=level)
-    assert document.to_markdown() == "<zulu><alpha>**x**</alpha></zulu>"
+    assert document.to_markdown(canonical=True) == "<zulu><alpha>**x**</alpha></zulu>"
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -375,7 +375,7 @@ def test_shared_tag_marks_remain_open_across_run_boundaries(level):
         text("b", mark("bold"), mark("underline")),
         text("c", mark("underline")),
     )), schema=underline_schema(), strict=level)
-    assert document.to_markdown() == "**a**<u>**b**c</u>"
+    assert document.to_markdown(canonical=True) == "**a**<u>**b**c</u>"
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -385,7 +385,7 @@ def test_same_type_nonexclusive_marks_can_overlap(level):
     second = mark("comment", id="2")
     document = tm.from_dict(doc(p(text("a", first), text("b", first, second), text("c", second))),
                             schema=schema, strict=level)
-    assert document.to_markdown() == (
+    assert document.to_markdown(canonical=True) == (
         '<comment id="1">a<comment id="2">b</comment></comment><comment id="2">c</comment>'
     )
 
@@ -395,7 +395,7 @@ def test_same_type_nonexclusive_marks_can_overlap(level):
 def test_expelled_emphasis_whitespace_keeps_its_tag_mark(level, emphasis, delimiter):
     document = tm.from_dict(doc(p(text("left"), text(" x ", mark(emphasis), mark("underline")), text("right"))),
                             schema=underline_schema(), strict=level)
-    assert document.to_markdown() == f"left<u> {delimiter}x{delimiter} </u>right"
+    assert document.to_markdown(canonical=True) == f"left<u> {delimiter}x{delimiter} </u>right"
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -409,7 +409,7 @@ def test_tag_marks_write_inside_headings_table_cells_and_on_images(level):
         ]}]},
         p({"type": "image", "attrs": {"src": "image.png", "alt": "alt"}, "marks": [tagged, mark("bold")]}),
     )
-    assert tm.from_dict(ast, schema=schema, strict=level).to_markdown() == (
+    assert tm.from_dict(ast, schema=schema, strict=level).to_markdown(canonical=True) == (
         '## <mark value="a&#124;b">**title**</mark>\n\n'
         '| <mark value="a&#124;b">cell</mark> |\n| --- |\n\n'
         '<mark value="a&#124;b">**![alt](image.png)**</mark>'

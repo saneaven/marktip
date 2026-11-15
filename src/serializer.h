@@ -6,6 +6,6 @@
 
 namespace marktip {
 
-std::string to_markdown(const Document& document);
+std::string to_markdown(const Document& document, bool canonical = false);
 
 }  // namespace marktip

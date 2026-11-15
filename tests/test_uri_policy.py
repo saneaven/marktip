@@ -39,7 +39,7 @@ IMAGE_PATH = "content[0].content[0]"
 def code_for(ast, **options):
     """The .code from converting `ast`, or None when it is accepted."""
     try:
-        tm.from_dict(ast, **options).to_markdown()
+        tm.from_dict(ast, **options).to_markdown(canonical=True)
     except tm.MarktipError as err:
         return err.code
     return None
@@ -271,7 +271,7 @@ def test_decoding_is_only_for_the_check_and_never_rewrites_the_stored_value():
 
     stored = document.to_dict()["content"][0]["content"][0]["marks"][0]["attrs"]["href"]
     assert stored == href
-    assert document.to_markdown().strip() == f"[x]({href})"
+    assert document.to_markdown(canonical=True).strip() == f"[x]({href})"
 
 
 # ── from_markdown is the same boundary ───────────────────────────────────────
@@ -321,7 +321,7 @@ def test_raw_html_is_not_scanned_and_html_false_is_the_way_to_close_it():
     # A documented non-guarantee: the policy governs link/image nodes, not raw HTML.
     markdown = '<a href="javascript:alert(1)">x</a>'
     accepted = tm.from_markdown(markdown, link_schemes=("https",))
-    assert "javascript:alert(1)" in accepted.to_markdown()
+    assert "javascript:alert(1)" in accepted.to_markdown(canonical=True)
 
     # html=False keeps the same characters but as literal text, not as markup.
     as_text = tm.from_markdown(markdown, link_schemes=("https",), html=False).to_dict()

@@ -276,10 +276,11 @@ PYBIND11_MODULE(_core, module) {
     py::class_<marktip::Document>(module, "Document")
         .def("to_dict", &marktip::to_dict_py, "Convert the document AST to a Tiptap-style JSON dict.")
         .def("to_markdown",
-             [](const marktip::Document& document) {
-                 return marktip::to_markdown(document);
+             [](const marktip::Document& document, bool canonical) {
+                 return marktip::to_markdown(document, canonical);
              },
-             "Serialize the document AST to canonical Markdown.");
+             py::arg("canonical") = false,
+             "Write Markdown with remembered source spelling. Pass canonical=True to write the whole AST canonically.");
 
     // The URI policy is keyword-only and documented once here;
     // the README carries the prose.

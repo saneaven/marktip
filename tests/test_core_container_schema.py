@@ -149,5 +149,5 @@ def test_inactive_container_tags_keep_the_existing_raw_html_behavior(source, unr
 @pytest.mark.parametrize("owner", ("bulletList", "orderedList", "taskList", "table"))
 def test_empty_lists_and_tables_keep_the_existing_written_form(owner):
     ast = {"type": "doc", "content": [{"type": owner}]}
-    baseline = tm.from_dict(ast, strict="exact").to_markdown()
-    assert tm.from_dict(ast, schema=tm.Schema(core_attrs={owner: {}}), strict="exact").to_markdown() == baseline
+    baseline = tm.from_dict(ast, strict="exact").to_markdown(canonical=True)
+    assert tm.from_dict(ast, schema=tm.Schema(core_attrs={owner: {}}), strict="exact").to_markdown(canonical=True) == baseline

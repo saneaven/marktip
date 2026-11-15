@@ -48,10 +48,10 @@ def schema():
 def roundtrip(ast, markdown):
     declarations = schema()
     source = tm.from_dict(ast, schema=declarations, strict="exact")
-    assert source.to_markdown() == markdown
+    assert source.to_markdown(canonical=True) == markdown
     parsed = tm.from_markdown(markdown, schema=declarations)
     assert parsed.to_dict() == source.to_dict()
-    assert parsed.to_markdown() == markdown
+    assert parsed.to_markdown(canonical=True) == markdown
 
 
 @pytest.mark.parametrize("body", ("x^*", "x~~y", "[0,1)", "x]y"))
@@ -105,11 +105,11 @@ def test_fence_followed_by_an_ordinary_block_keeps_a_list_tight(following, type_
         assert first["content"][1] == {"type": "listItem", "content": [p(text("next"))]}
     else:
         assert len(first["content"]) == 1
-    written = parsed.to_markdown()
+    written = parsed.to_markdown(canonical=True)
     assert "\n  ```\n  " + following.split("\n")[0] in written
     reparsed = tm.from_markdown(written, schema=declarations)
     assert reparsed.to_dict() == parsed.to_dict()
-    assert reparsed.to_markdown() == written
+    assert reparsed.to_markdown(canonical=True) == written
 
 
 @pytest.mark.parametrize("source, body", [
@@ -124,7 +124,7 @@ def test_display_math_trims_its_boundary_whitespace_and_normalizes_internal_line
     expected = doc(node("blockMath", attrs={"latex": body}))
     assert parsed.to_dict() == expected
     written = f"```math\n{body}\n```"
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
     assert tm.from_markdown(written, schema=declarations).to_dict() == expected
 
 
@@ -134,8 +134,8 @@ def test_inline_math_keeps_boundary_spaces_and_normalizes_line_breaks(source, bo
     parsed = tm.from_markdown(source, schema=declarations)
     expected = doc(p(node("inlineMath", attrs={"latex": body})))
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == f"${body}$"
-    assert tm.from_markdown(parsed.to_markdown(), schema=declarations).to_dict() == expected
+    assert parsed.to_markdown(canonical=True) == f"${body}$"
+    assert tm.from_markdown(parsed.to_markdown(canonical=True), schema=declarations).to_dict() == expected
 
 
 @pytest.mark.parametrize("info", ("math title", "math title with spaces"))
@@ -144,5 +144,5 @@ def test_fence_reader_uses_the_first_word_of_effective_info(info):
     parsed = tm.from_markdown(f"```{info}\nx\n```", schema=declarations)
     expected = doc(node("blockMath", attrs={"latex": "x"}))
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == "```math\nx\n```"
-    assert tm.from_markdown(parsed.to_markdown(), schema=declarations).to_dict() == expected
+    assert parsed.to_markdown(canonical=True) == "```math\nx\n```"
+    assert tm.from_markdown(parsed.to_markdown(canonical=True), schema=declarations).to_dict() == expected

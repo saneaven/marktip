@@ -58,12 +58,12 @@ def alignment_schema():
 
 def roundtrip(ast, schema, markdown, html, level, **options):
     source = tm.from_dict(ast, schema=schema, strict=level, **options)
-    written = source.to_markdown()
+    written = source.to_markdown(canonical=True)
     if markdown is not None:
         assert written == markdown
     parsed = tm.from_markdown(written, schema=schema, html=html, **options)
     assert parsed.to_dict() == source.to_dict()
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
     return parsed
 
 
@@ -121,11 +121,11 @@ def test_unset_core_overlays_keep_empty_paragraph_and_heading_normalizations(htm
     baseline = tm.from_dict(ast, strict=level)
     document = tm.from_dict(ast, schema=schema, strict=level)
     assert document.to_dict() == baseline.to_dict()
-    assert document.to_markdown() == baseline.to_markdown()
-    parsed = tm.from_markdown(document.to_markdown(), schema=schema, html=html)
-    baseline_parsed = tm.from_markdown(baseline.to_markdown(), html=html)
+    assert document.to_markdown(canonical=True) == baseline.to_markdown(canonical=True)
+    parsed = tm.from_markdown(document.to_markdown(canonical=True), schema=schema, html=html)
+    baseline_parsed = tm.from_markdown(baseline.to_markdown(canonical=True), html=html)
     assert parsed.to_dict() == baseline_parsed.to_dict()
-    assert parsed.to_markdown() == baseline_parsed.to_markdown()
+    assert parsed.to_markdown(canonical=True) == baseline_parsed.to_markdown(canonical=True)
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -140,7 +140,7 @@ def test_handwritten_empty_paragraph_tag_uses_general_textblock_reading(html):
     schema = tm.Schema(core_attrs={"paragraph": {}})
     parsed = tm.from_markdown("<p></p>", schema=schema, html=html)
     assert parsed.to_dict() == doc(node("paragraph"))
-    assert parsed.to_markdown() == tm.from_dict(doc(p())).to_markdown()
+    assert parsed.to_markdown(canonical=True) == tm.from_dict(doc(p())).to_markdown(canonical=True)
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -205,7 +205,7 @@ def test_tag_link_text_escapes_autolink_triggers_and_outside_text_keeps_its_byte
     parsed = roundtrip(ast, schema, markdown, html, "exact")
     assert parsed.to_dict()["content"][0]["content"][1]["marks"] == [mark("bold"), link]
     outside = doc(p(text(f"visit {value} today")))
-    assert tm.from_dict(outside, schema=schema).to_markdown() == tm.from_dict(outside).to_markdown()
+    assert tm.from_dict(outside, schema=schema).to_markdown(canonical=True) == tm.from_dict(outside).to_markdown(canonical=True)
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -223,7 +223,7 @@ def test_markdown_form_link_text_keeps_its_existing_bytes_when_tag_form_is_activ
     schema = tm.Schema(core_attrs={"link": {"target": tm.Attr(str, default="_blank")}})
     link = mark("link", href="https://example.com")
     ast = doc(p(text(f"visit {value} today", link)))
-    baseline = tm.from_dict(ast, strict="exact").to_markdown()
+    baseline = tm.from_dict(ast, strict="exact").to_markdown(canonical=True)
     roundtrip(ast, schema, baseline, html, "exact")
 
 
@@ -272,7 +272,7 @@ def test_tag_link_order_preserves_the_relative_order_of_the_other_core_marks():
     source = tm.from_dict(ast, schema=schema, strict="exact")
     expected = [mark("strike"), mark("bold"), link, mark("underline")]
     assert source.to_dict()["content"][0]["content"][0]["marks"] == expected
-    parsed = tm.from_markdown(source.to_markdown(), schema=schema)
+    parsed = tm.from_markdown(source.to_markdown(canonical=True), schema=schema)
     assert parsed.to_dict() == source.to_dict()
 
 
@@ -287,7 +287,7 @@ def test_core_tag_lift_applies_markdown_image_and_link_normalizations(html, type
     schema = tm.Schema(core_attrs={type_: {}})
     parsed = tm.from_markdown(markup, schema=schema, html=html)
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
     assert tm.from_markdown(written, schema=schema, html=html).to_dict() == expected
 
 
@@ -298,7 +298,7 @@ def test_each_heading_tag_supplies_its_level_without_a_level_attribute(html, lev
     markup = f'<h{level} textAlign="right">x</h{level}>'
     parsed = tm.from_markdown(markup, schema=schema, html=html)
     assert parsed.to_dict() == doc(node("heading", text("x"), attrs={"level": level, "textAlign": "right"}))
-    assert parsed.to_markdown() == markup
+    assert parsed.to_markdown(canonical=True) == markup
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -321,4 +321,4 @@ def test_core_tags_keep_the_existing_raw_html_behavior_when_the_type_is_inactive
     baseline = tm.from_markdown(markup, html=html)
     parsed = tm.from_markdown(markup, schema=schema, html=html)
     assert parsed.to_dict() == baseline.to_dict()
-    assert parsed.to_markdown() == baseline.to_markdown()
+    assert parsed.to_markdown(canonical=True) == baseline.to_markdown(canonical=True)

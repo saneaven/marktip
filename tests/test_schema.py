@@ -48,7 +48,7 @@ def test_empty_schema_equals_the_default_declaration():
     assert hash(empty) == hash(rebuilt)
     ast = {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "x"}]}]}
     assert tm.from_dict(ast, schema=empty).to_dict() == tm.from_dict(ast, schema=None).to_dict()
-    assert tm.from_dict(ast, schema=empty).to_markdown() == tm.from_dict(ast).to_markdown()
+    assert tm.from_dict(ast, schema=empty).to_markdown(canonical=True) == tm.from_dict(ast).to_markdown(canonical=True)
 
 
 def test_schema_json_roundtrip_preserves_all_declaration_fields():

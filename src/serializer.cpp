@@ -299,6 +299,24 @@ ListFamily list_family(const std::string& type) {
     return ListFamily::None;
 }
 
+bool gap_has_blank_line(std::string_view gap) {
+    unsigned lines = 0;
+    for (std::size_t i = 0; i < gap.size(); ++i) {
+        if (gap[i] == '\r') {
+            ++lines;
+            if (i + 1 < gap.size() && gap[i + 1] == '\n') {
+                ++i;
+            }
+        } else if (gap[i] == '\n') {
+            ++lines;
+        }
+        if (lines == 2) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool is_emphasis_mark(const Mark& mark) {
     return mark.type == "bold" || mark.type == "italic" || mark.type == "strike";
 }
@@ -453,11 +471,12 @@ public:
           inline_containers_(schema_.has_inline_containers()),
           math_(schema_.has_math()) {}
 
-    std::string render() {
+    std::string render(bool canonical) {
         if (document_.root().type != "doc") {
             throw InvalidNodeError("invalid_root", "type", "root node must have type 'doc'", "");
         }
-        std::string rendered = render_doc(document_.root());
+        const Spelling* spelling = !canonical && document_.spelling() ? &*document_.spelling() : nullptr;
+        std::string rendered = render_doc(document_.root(), spelling);
         if (!math_tokens_.empty()) {
             return resolve_math(std::move(rendered));
         }
@@ -505,6 +524,7 @@ private:
     }
 
     std::string resolve_math(std::string rendered) {
+        // Remembered source contains no NUL, so this pass replaces only markers emitted for generated text.
         std::string out;
         out.reserve(rendered.size());
         std::size_t begin = 0;
@@ -534,8 +554,43 @@ private:
         return out;
     }
 
-    std::string render_doc(const Node& node) {
-        return render_blocks(node, 0);
+    std::string render_doc(const Node& node, const Spelling* spelling = nullptr) {
+        if (spelling == nullptr) {
+            return render_blocks(node, 0);
+        }
+        std::vector<BlockPiece> pieces;
+        std::vector<const SpellingPiece*> origins;
+        origins.reserve(spelling->items.size());
+        int prev_variant = 0;
+        collect_block_children(node, nullptr, 0, false, pieces, prev_variant, spelling, &origins);
+        if (pieces.empty()) {
+            return std::string(spelling->view(spelling->head));
+        }
+        std::string out = std::move(pieces.front().text);
+        out.insert(0, spelling->view(spelling->head));
+        std::size_t size = out.size();
+        for (std::size_t i = 1; i < pieces.size(); ++i) {
+            size += pieces[i].text.size();
+        }
+        size += 2 * (pieces.size() - 1);
+        out.reserve(size);
+        for (std::size_t i = 1; i < pieces.size(); ++i) {
+            const SpellingPiece& previous = *origins[i - 1];
+            const SpellingPiece& next = *origins[i];
+            std::string_view gap = spelling->view(previous.gap);
+            bool original_neighbours = previous.text && next.text && previous.gap.end == next.text->begin;
+            if (&previous != &next && (gap_has_blank_line(gap) || original_neighbours)) {
+                out += gap;
+            } else {
+                out.append("\n\n");
+            }
+            out += pieces[i].text;
+        }
+        const SpellingPiece& last = *origins.back();
+        if (last.text) {
+            out += spelling->view(last.gap);
+        }
+        return out;
     }
 
     std::string render_blocks(const Node& node, int indent) {
@@ -607,13 +662,15 @@ private:
     }
 
     void collect_block_children(const Node& node, const NodeSpec* container, int indent, bool list_item,
-                                std::vector<BlockPiece>& pieces, int& prev_variant) {
+                                std::vector<BlockPiece>& pieces, int& prev_variant,
+                                const Spelling* spelling = nullptr,
+                                std::vector<const SpellingPiece*>* origins = nullptr) {
         pieces.reserve(node.content.size());
         ContentModel inherited = container != nullptr && container->core ? container->allow : ContentModel::None;
         if (container != nullptr && !container->implicit) {
             append_container_tag(node, *container, indent, false, pieces, prev_variant);
         }
-        for_each_child(node, [&](const Node& child) {
+        auto collect_child = [&](const Node& child) {
             const NodeSpec* spec = nullptr;
             if (node_forms_) {
                 bool follows_parent = false;
@@ -651,7 +708,21 @@ private:
             }
             pieces.emplace_back(std::move(rendered), list_item ? block_kind(child, spec) : BlockKind::Other, family);
             prev_variant = variant;
-        });
+        };
+        if (spelling != nullptr) {
+            std::size_t child_index = 0;
+            for (const SpellingPiece& source : spelling->items) {
+                const Node* child = source.has_node ? &document_.node(node.content[child_index++]) : nullptr;
+                if (source.text) {
+                    pieces.emplace_back(std::string(spelling->view(*source.text)), BlockKind::Other, ListFamily::None);
+                } else if (child != nullptr) {
+                    collect_child(*child);
+                }
+                origins->resize(pieces.size(), &source);
+            }
+        } else {
+            for_each_child(node, collect_child);
+        }
         if (container != nullptr && !container->implicit) {
             append_container_tag(node, *container, indent, true, pieces, prev_variant);
         }
@@ -1229,9 +1300,9 @@ private:
 
 }  // namespace
 
-std::string to_markdown(const Document& document) {
+std::string to_markdown(const Document& document, bool canonical) {
     MarkdownWriter writer(document);
-    return writer.render();
+    return writer.render(canonical);
 }
 
 }  // namespace marktip

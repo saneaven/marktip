@@ -346,6 +346,37 @@ MARKTIP_NOINLINE void process_blocks(Document& document, std::size_t index, cons
         pieces.push_back({kind, node_index, &spec, spec.core ? std::optional<std::size_t>(child) : std::nullopt});
     }
     build_containers(document, index, parent_spec, pieces, std::move(original), path);
+    if (index == 0 && document.spelling()) {
+        Spelling& spelling = *document.spelling();
+        std::vector<SpellingPiece> merged;
+        merged.reserve(spelling.items.size());
+        std::size_t piece_index = 0;
+        unsigned depth = 0;
+        for (const SpellingPiece& source : spelling.items) {
+            if (!source.has_node) {
+                if (depth == 0) {
+                    merged.push_back(source);
+                }
+                continue;
+            }
+            InlinePieceKind kind = pieces[piece_index++].kind;
+            if (kind == InlinePieceKind::CloseContainer) {
+                --depth;
+                if (depth == 0) {
+                    merged.back().text->end = source.text->end;
+                    merged.back().gap = source.gap;
+                }
+            } else {
+                if (depth == 0) {
+                    merged.push_back(source);
+                }
+                if (kind == InlinePieceKind::OpenContainer) {
+                    ++depth;
+                }
+            }
+        }
+        spelling.items = std::move(merged);
+    }
 }
 
 const NodeSpec& peel_textblock(Document& document, std::size_t index, const NodeSpec& parent_spec,
@@ -673,13 +704,29 @@ void append_image_fragment(Document& document, std::vector<std::size_t>& parts, 
 // The split must precede the parent's expression check, which sees images as blocks in this schema.
 MARKTIP_NOINLINE void split_block_images(Document& document, std::size_t index, const NodeSpec& parent_spec,
                                         PathStack& path) {
+    Spelling* spelling = index == 0 && document.spelling() ? &*document.spelling() : nullptr;
+    std::vector<SpellingPiece> source_items;
+    std::size_t source_position = 0;
+    if (spelling != nullptr) {
+        source_items.reserve(spelling->items.size());
+    }
     std::vector<std::size_t> original = std::move(document.node(index).content);
     std::vector<std::size_t> children;
     children.reserve(original.size());
     for (std::size_t position = 0; position < original.size(); ++position) {
+        const SpellingPiece* source = nullptr;
+        if (spelling != nullptr) {
+            while (source_position < spelling->items.size() && !spelling->items[source_position].has_node) {
+                source_items.push_back(spelling->items[source_position++]);
+            }
+            source = &spelling->items[source_position++];
+        }
         std::size_t child = original[position];
         if (document.node(child).type != "paragraph") {
             children.push_back(child);
+            if (spelling != nullptr) {
+                source_items.push_back(*source);
+            }
             continue;
         }
         std::vector<std::size_t> inline_children = document.node(child).content;
@@ -688,6 +735,9 @@ MARKTIP_NOINLINE void split_block_images(Document& document, std::size_t index, 
         });
         if (first_image == inline_children.end()) {
             children.push_back(child);
+            if (spelling != nullptr) {
+                source_items.push_back(*source);
+            }
             continue;
         }
         AttrList attrs = document.node(child).attrs;
@@ -714,6 +764,18 @@ MARKTIP_NOINLINE void split_block_images(Document& document, std::size_t index, 
             path.pop_back();
         }
         children.insert(children.end(), parts.begin(), parts.end());
+        if (spelling != nullptr) {
+            if (parts.size() == 1) {
+                source_items.push_back(*source);
+            } else {
+                source_items.insert(source_items.end(), parts.size(), SpellingPiece {});
+                source_items.back().gap = source->gap;
+            }
+        }
+    }
+    if (spelling != nullptr) {
+        source_items.insert(source_items.end(), spelling->items.begin() + source_position, spelling->items.end());
+        spelling->items = std::move(source_items);
     }
     document.node(index).content = std::move(children);
 }

@@ -30,13 +30,13 @@ ISSUE_1_CASES = [
 def test_every_malformed_input_is_caught_by_the_base(ast):
     # The point of the issue: one except clause covers the lot.
     with pytest.raises(tm.MarktipError):
-        tm.from_dict(ast).to_markdown()
+        tm.from_dict(ast).to_markdown(canonical=True)
 
 
 @pytest.mark.parametrize("ast, cls, code, path", ISSUE_1_CASES)
 def test_malformed_input_carries_class_code_and_path(ast, cls, code, path):
     with pytest.raises(cls) as excinfo:
-        tm.from_dict(ast).to_markdown()
+        tm.from_dict(ast).to_markdown(canonical=True)
 
     err = excinfo.value
     assert err.code == code

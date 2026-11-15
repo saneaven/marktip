@@ -82,7 +82,7 @@ def test_off_stores_atom_code_marks_but_the_writer_drops_them():
     mention = {"type": "mention", "marks": [{"type": "code"}]}
     document = tm.from_dict(doc(p(mention)), schema=atom_schema(), strict="off")
     assert document.to_dict() == doc(p(mention))
-    assert document.to_markdown() == "<mention/>"
+    assert document.to_markdown(canonical=True) == "<mention/>"
 
 
 @pytest.mark.parametrize("level", STRICT_LEVELS)

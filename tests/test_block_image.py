@@ -103,10 +103,10 @@ def test_block_images_roundtrip_in_their_block_parent_contexts(level, html, cont
     ast = in_context(image(sized=sized), context)
     selected = schema(sized=sized)
     source = tm.from_dict(ast, schema=selected, strict=level)
-    written = source.to_markdown()
+    written = source.to_markdown(canonical=True)
     parsed = tm.from_markdown(written, schema=selected, html=html)
     assert parsed.to_dict() == source.to_dict()
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
     if context == "doc":
         assert written == ('<img src="/logo.png" alt="Logo" title="A logo" width="320" height="200"/>'
                            if sized else MARKDOWN_IMAGE)
@@ -120,7 +120,7 @@ def test_a_block_image_uses_paragraph_separation_between_other_blocks(level):
     ast = doc(p(text("Before")), image(), p(text("After")))
     selected = schema()
     source = tm.from_dict(ast, schema=selected, strict=level)
-    written = source.to_markdown()
+    written = source.to_markdown(canonical=True)
     assert written == f"Before\n\n{MARKDOWN_IMAGE}\n\nAfter"
     assert tm.from_markdown(written, schema=selected).to_dict() == source.to_dict()
 
@@ -164,7 +164,7 @@ def test_content_expressions_resolve_image_as_a_block_type():
     selected = tm.Schema(block_image=True, nodes=[tm.NodeSpec("gallery", "block", content="image+")])
     ast = doc(node("gallery", image()))
     source = tm.from_dict(ast, schema=selected, strict="exact")
-    assert tm.from_markdown(source.to_markdown(), schema=selected).to_dict() == source.to_dict()
+    assert tm.from_markdown(source.to_markdown(canonical=True), schema=selected).to_dict() == source.to_dict()
     with pytest.raises(ValueError):
         tm.Schema(block_image=True, nodes=[tm.NodeSpec("caption", "inline", content="image*")])
 
@@ -183,7 +183,7 @@ def test_paragraphs_are_split_at_images_and_empty_fragments_are_omitted(html, ca
         expected.append(p(text(after.strip())))
     parsed = tm.from_markdown(before + carrier + after, schema=selected, html=html)
     assert parsed.to_dict() == doc(*expected)
-    assert tm.from_markdown(parsed.to_markdown(), schema=selected, html=html).to_dict() == parsed.to_dict()
+    assert tm.from_markdown(parsed.to_markdown(canonical=True), schema=selected, html=html).to_dict() == parsed.to_dict()
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -193,7 +193,7 @@ def test_whitespace_and_breaks_touching_a_split_image_are_trimmed(html, break_, 
     markdown = f"Before{space}{break_}{MARKDOWN_IMAGE}{break_}{space}After"
     parsed = tm.from_markdown(markdown, schema=selected, html=html)
     assert parsed.to_dict() == doc(p(text("Before")), image(), p(text("After")))
-    assert tm.from_markdown(parsed.to_markdown(), schema=selected, html=html).to_dict() == parsed.to_dict()
+    assert tm.from_markdown(parsed.to_markdown(canonical=True), schema=selected, html=html).to_dict() == parsed.to_dict()
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -239,7 +239,7 @@ def test_an_image_overlay_activates_img_with_the_selected_block_shape(html):
     selected = schema(sized=True)
     parsed = tm.from_markdown(TAG_IMAGE, schema=selected, html=html)
     assert parsed.to_dict() == doc(image())
-    assert parsed.to_markdown() == MARKDOWN_IMAGE
+    assert parsed.to_markdown(canonical=True) == MARKDOWN_IMAGE
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -255,7 +255,7 @@ def test_images_without_surviving_text_cannot_discard_their_paragraphs_overlay(h
 def test_a_lone_block_image_cell_keeps_its_pipe_table_with_the_table_family_active(html):
     selected = tm.Schema(block_image=True, core_attrs=tm.TABLE_SPANS)
     source = tm.from_dict(in_context(image(), "table"), schema=selected, strict="exact")
-    written = source.to_markdown()
+    written = source.to_markdown(canonical=True)
     assert written == f"| {MARKDOWN_IMAGE} |\n| --- |"
     assert tm.from_markdown(written, schema=selected, html=html).to_dict() == source.to_dict()
 
@@ -301,8 +301,8 @@ def test_turning_the_option_off_keeps_the_inline_image_behavior(sized):
     source = tm.from_dict(ast, schema=selected, strict="exact")
     baseline = tm.from_dict(ast, schema=default, strict="exact")
     assert source.to_dict() == baseline.to_dict()
-    assert source.to_markdown() == baseline.to_markdown()
-    assert tm.from_markdown(source.to_markdown(), schema=selected).to_dict() == baseline.to_dict()
+    assert source.to_markdown(canonical=True) == baseline.to_markdown(canonical=True)
+    assert tm.from_markdown(source.to_markdown(canonical=True), schema=selected).to_dict() == baseline.to_dict()
     with pytest.raises(tm.InvalidNodeError) as excinfo:
         tm.from_dict(doc(image()), schema=selected, strict="exact")
     assert_error(excinfo, "invalid_content", "content", "content[0]")

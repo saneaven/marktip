@@ -12,4 +12,4 @@ def test_a_block_after_a_fence_stays_in_its_list_item(prefix_length):
     item = ast["content"][1]["content"][0]
     assert [node["type"] for node in item["content"]] == ["paragraph", "codeBlock", "paragraph"]
     assert item["content"][-1]["content"][0]["text"] == "last"
-    assert tm.from_markdown(document.to_markdown()).to_dict() == ast
+    assert tm.from_markdown(document.to_markdown(canonical=True)).to_dict() == ast

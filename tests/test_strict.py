@@ -95,7 +95,7 @@ LEVELS = ["content", "exact"]
 def code_for(ast, **options):
     """The .code from converting `ast`, or None when it is accepted."""
     try:
-        tm.from_dict(ast, **options).to_markdown()
+        tm.from_dict(ast, **options).to_markdown(canonical=True)
     except tm.MarktipError as err:
         return err.code
     return None
@@ -170,7 +170,7 @@ def test_mark_set_validation_is_skipped_when_strict_is_off(marks):
     ast = marked(*marks)
     document = tm.from_dict(ast, strict="off")
     assert document.to_dict() == ast
-    assert isinstance(document.to_markdown(), str)
+    assert isinstance(document.to_markdown(canonical=True), str)
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -467,8 +467,8 @@ def test_a_stock_tiptap_document_converts_under_content():
     )
     expected = "[a](https://example.com)\n\n![](https://example.com/x.png)\n\n1. x"
 
-    assert tm.from_dict(stock, strict="content").to_markdown() == expected
-    assert tm.from_dict(stock).to_markdown() == expected
+    assert tm.from_dict(stock, strict="content").to_markdown(canonical=True) == expected
+    assert tm.from_dict(stock).to_markdown(canonical=True) == expected
     assert code_for(stock, strict="exact") == "unrepresentable"
 
 
@@ -542,7 +542,7 @@ def test_an_image_with_no_source_is_refused(attrs, level):
 def test_an_empty_destination_is_supplied_not_missing(level):
     # "" is what the parser itself emits for "[a]()", and it round-trips exactly, so strict
     # has nothing to refuse. Rejecting an empty destination is the URI policy's job.
-    assert tm.from_dict(link(href=""), strict=level).to_markdown() == "[x]()"
+    assert tm.from_dict(link(href=""), strict=level).to_markdown(canonical=True) == "[x]()"
     assert code_for(image(src=""), strict=level) is None
     assert code_for(link(href=""), strict=level, link_relative="reject") == "disallowed_relative_url"
 
@@ -555,8 +555,8 @@ def test_a_missing_destination_is_reported_before_the_uri_policy(level):
 
 
 def test_a_missing_destination_is_still_converted_when_strict_is_off():
-    assert tm.from_dict(link()).to_markdown() == "[x]()"
-    assert tm.from_dict(image()).to_markdown() == "![]()"
+    assert tm.from_dict(link()).to_markdown(canonical=True) == "[x]()"
+    assert tm.from_dict(image()).to_markdown(canonical=True) == "![]()"
 
 
 # ── None: an attr Tiptap serialized but never set ────────────────────────────
@@ -594,7 +594,7 @@ def test_none_on_an_optional_attr_is_unset_not_a_wrong_type(ast, level):
 def test_a_null_attr_converts_exactly_like_an_absent_one(with_null, without, level):
     # Why accepting it is not a loosening:
     # strict admits no markdown here it was not already admitting from the absent-key form.
-    assert tm.from_dict(with_null, strict=level).to_markdown() == tm.from_dict(without, strict=level).to_markdown()
+    assert tm.from_dict(with_null, strict=level).to_markdown(canonical=True) == tm.from_dict(without, strict=level).to_markdown(canonical=True)
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -647,15 +647,15 @@ def test_a_null_html_attr_is_unset_and_still_reported(level):
     nulled = doc({"type": "htmlBlock", "attrs": {"html": None}, "content": [text("<div>hi</div>")]})
     absent = doc({"type": "htmlBlock", "content": [text("<div>hi</div>")]})
 
-    assert tm.from_dict(nulled).to_markdown() == tm.from_dict(absent).to_markdown() == "<div>hi</div>"
+    assert tm.from_dict(nulled).to_markdown(canonical=True) == tm.from_dict(absent).to_markdown(canonical=True) == "<div>hi</div>"
     assert code_for(nulled, strict=level) == "invalid_attr_value"
 
 
 def test_a_null_alt_falls_back_to_the_child_text_like_an_absent_one():
     # An alt of "" is the caption, an unset alt is not, and a null lands on the second.
-    assert tm.from_dict(captioned_image(src="a.png", alt=None)).to_markdown() == "![cap](a.png)"
-    assert tm.from_dict(captioned_image(src="a.png")).to_markdown() == "![cap](a.png)"
-    assert tm.from_dict(captioned_image(src="a.png", alt="")).to_markdown() == "![](a.png)"
+    assert tm.from_dict(captioned_image(src="a.png", alt=None)).to_markdown(canonical=True) == "![cap](a.png)"
+    assert tm.from_dict(captioned_image(src="a.png")).to_markdown(canonical=True) == "![cap](a.png)"
+    assert tm.from_dict(captioned_image(src="a.png", alt="")).to_markdown(canonical=True) == "![](a.png)"
 
 
 # ── accepted at every level: the structure already carries it ────────────────
@@ -715,7 +715,7 @@ def test_strict_accepts_what_the_parser_produces(markdown, level):
     # If strict rejected marktip's own output, that path would break on rows that were
     # written successfully — the failure mode that is hardest to notice.
     parsed = tm.from_markdown(markdown)
-    assert tm.from_dict(parsed.to_dict(), strict=level).to_markdown() == parsed.to_markdown()
+    assert tm.from_dict(parsed.to_dict(), strict=level).to_markdown(canonical=True) == parsed.to_markdown(canonical=True)
 
 
 # ── surface ──────────────────────────────────────────────────────────────────

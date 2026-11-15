@@ -20,7 +20,7 @@ def paragraph(value=None):
 def test_an_empty_container_fills_its_required_paragraph(html):
     schema = tm.Schema(nodes=[tm.NodeSpec("callout", "block", content="paragraph+")])
     ast = document({"type": "callout", "content": [paragraph()]})
-    markdown = tm.from_dict(ast, schema=schema).to_markdown()
+    markdown = tm.from_dict(ast, schema=schema).to_markdown(canonical=True)
     assert markdown == "<callout>\n\n</callout>"
     assert tm.from_markdown(markdown, schema=schema, html=html).to_dict() == ast
 
@@ -37,7 +37,7 @@ def test_fill_inserts_missing_children_without_replacing_existing_ones():
     ]})
     doc = tm.from_markdown(markdown, schema=schema)
     assert doc.to_dict() == expected
-    assert tm.from_markdown(doc.to_markdown(), schema=schema).to_dict() == expected
+    assert tm.from_markdown(doc.to_markdown(canonical=True), schema=schema).to_dict() == expected
 
 
 def test_fill_can_insert_between_existing_children():

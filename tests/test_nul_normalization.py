@@ -47,11 +47,11 @@ def test_markdown_code_blocks_replace_nul_once_and_stay_stable(markdown):
     assert parsed.to_dict()["content"][0]["content"][0]["text"] == expected
     assert_no_nul(parsed.to_dict())
 
-    canonical = parsed.to_markdown()
+    canonical = parsed.to_markdown(canonical=True)
     for _ in range(3):
         reparsed = tm.from_markdown(canonical)
         assert reparsed.to_dict()["content"][0]["content"][0]["text"] == expected
-        assert reparsed.to_markdown() == canonical
+        assert reparsed.to_markdown(canonical=True) == canonical
         assert_no_nul(reparsed.to_dict())
 
 
@@ -75,8 +75,8 @@ def test_markdown_html_nodes_replace_nul_and_pass_strict_roundtrip(level):
 
     block_strict = tm.from_dict(block_value, strict=level)
     inline_strict = tm.from_dict(inline_value, strict=level)
-    assert block_strict.to_markdown() == block.to_markdown()
-    assert inline_strict.to_markdown() == inline.to_markdown()
+    assert block_strict.to_markdown(canonical=True) == block.to_markdown(canonical=True)
+    assert inline_strict.to_markdown(canonical=True) == inline.to_markdown(canonical=True)
 
 
 def test_nul_is_replaced_in_text_and_code_block_content():
@@ -102,9 +102,9 @@ def test_nul_is_replaced_in_text_and_code_block_content():
     }
     assert value["content"][1]["content"][0]["text"] == f"c{REPLACEMENT}d"
 
-    markdown = converted.to_markdown()
+    markdown = converted.to_markdown(canonical=True)
     assert "\0" not in markdown
-    assert tm.from_markdown(markdown).to_markdown() == markdown
+    assert tm.from_markdown(markdown).to_markdown(canonical=True) == markdown
 
 
 def test_nul_is_replaced_in_non_uri_string_attrs():

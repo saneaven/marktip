@@ -56,10 +56,10 @@ def core_schema():
 
 def roundtrip(ast, schema, html=True):
     source = tm.from_dict(ast, schema=schema, strict="exact")
-    written = source.to_markdown()
+    written = source.to_markdown(canonical=True)
     parsed = tm.from_markdown(written, schema=schema, html=html)
     assert parsed.to_dict() == source.to_dict()
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
     return written
 
 
@@ -139,7 +139,7 @@ def test_li_checked_presence_selects_task_item_even_when_the_value_is_false(html
                         attrs={"tight": True}))
     parsed = tm.from_markdown(markup, schema=schema, html=html)
     assert parsed.to_dict() == expected
-    written = parsed.to_markdown()
+    written = parsed.to_markdown(canonical=True)
     assert written == ("- [x] work" if value else "- [ ] work")
     assert tm.from_markdown(written, schema=schema, html=html).to_dict() == expected
 
@@ -166,11 +166,11 @@ def test_unchecked_li_attrs_are_decoded_before_task_list_normalization(html):
 def test_a_tag_form_task_item_always_writes_its_checked_attr():
     schema = tm.Schema(core_attrs={"taskList": {"label": tm.Attr(str)}})
     ast = doc(node("taskList", node("taskItem", p(text("work"))), attrs={"tight": True, "label": "tasks"}))
-    written = tm.from_dict(ast, schema=schema, strict="exact").to_markdown()
+    written = tm.from_dict(ast, schema=schema, strict="exact").to_markdown(canonical=True)
     assert '<li checked="false">' in written
     parsed = tm.from_markdown(written, schema=schema)
     assert parsed.to_dict()["content"][0]["content"][0]["attrs"] == {"checked": False}
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -182,10 +182,10 @@ def test_one_checked_li_normalizes_the_other_ul_items_to_unchecked_task_items(ht
                         node("taskItem", p(text("two")), attrs={"checked": False}), attrs={"tight": True}))
     parsed = tm.from_markdown(markup, schema=schema, html=html)
     assert parsed.to_dict() == expected
-    written = parsed.to_markdown()
+    written = parsed.to_markdown(canonical=True)
     assert '<li checked="false">' in written
     assert tm.from_markdown(written, schema=schema, html=html).to_dict() == expected
-    assert tm.from_markdown(written, schema=schema, html=html).to_markdown() == written
+    assert tm.from_markdown(written, schema=schema, html=html).to_markdown(canonical=True) == written
 
 
 @pytest.mark.parametrize("type_", LIST_TYPES)
@@ -195,7 +195,7 @@ def test_any_list_type_activates_the_ul_ol_and_li_tag_family(type_):
     expected = doc(node("orderedList", node("listItem", p(text("one"))), attrs={"start": 3, "tight": True}))
     parsed = tm.from_markdown(markup, schema=schema)
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == "3. one"
+    assert parsed.to_markdown(canonical=True) == "3. one"
     ul = tm.from_markdown('<ul tight="true">\n\n<li checked="false">\n\ntwo\n\n</li>\n\n</ul>', schema=schema)
     assert ul.to_dict() == doc(node("taskList", node("taskItem", p(text("two")), attrs={"checked": False}),
                                    attrs={"tight": True}))
@@ -267,7 +267,7 @@ def test_undeclared_unit_cell_spans_stay_stored_but_are_not_written_in_tag_forms
                     node("tableRow", node("tableCell", p(text("value")), attrs=spans)), attrs={"label": "grid"}))
     source = tm.from_dict(ast, schema=schema, strict="exact")
     assert source.to_dict() == ast
-    written = source.to_markdown()
+    written = source.to_markdown(canonical=True)
     assert "<th>" in written
     assert "<td>" in written
     assert "colspan" not in written
@@ -276,7 +276,7 @@ def test_undeclared_unit_cell_spans_stay_stored_but_are_not_written_in_tag_forms
                          node("tableRow", node("tableCell", p(text("value")))), attrs={"label": "grid"}))
     parsed = tm.from_markdown(written, schema=schema, html=html)
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -304,14 +304,14 @@ def test_any_table_type_activates_the_whole_table_tag_family(type_):
                          node("tableRow", node("tableCell", p(text("value"))))))
     parsed = tm.from_markdown(markup, schema=schema)
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == "| heading |\n| --- |\n| value |"
+    assert parsed.to_markdown(canonical=True) == "| heading |\n| --- |\n| value |"
 
 
 def test_an_empty_ul_tag_reads_as_a_bullet_list():
     schema = tm.Schema(core_attrs={"taskList": {}})
     parsed = tm.from_markdown('<ul tight="true">\n\n</ul>', schema=schema)
     assert parsed.to_dict() == doc(node("bulletList", attrs={"tight": True}))
-    assert parsed.to_markdown() == tm.from_dict(doc(node("bulletList", attrs={"tight": True}))).to_markdown()
+    assert parsed.to_markdown(canonical=True) == tm.from_dict(doc(node("bulletList", attrs={"tight": True}))).to_markdown(canonical=True)
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -324,9 +324,9 @@ def test_empty_lists_and_tables_with_unset_overlays_keep_no_schema_behavior(html
     baseline = tm.from_dict(ast, strict="exact")
     document = tm.from_dict(ast, schema=schema, strict="exact")
     assert document.to_dict() == baseline.to_dict()
-    assert document.to_markdown() == baseline.to_markdown()
-    assert tm.from_markdown(document.to_markdown(), schema=schema, html=html).to_dict() == tm.from_markdown(
-        baseline.to_markdown(), html=html,
+    assert document.to_markdown(canonical=True) == baseline.to_markdown(canonical=True)
+    assert tm.from_markdown(document.to_markdown(canonical=True), schema=schema, html=html).to_dict() == tm.from_markdown(
+        baseline.to_markdown(canonical=True), html=html,
     ).to_dict()
 
 
@@ -341,6 +341,6 @@ def test_native_markdown_with_unset_family_overlays_keeps_its_ast_and_written_by
     baseline = tm.from_markdown(markdown, html=html)
     parsed = tm.from_markdown(markdown, schema=schema, html=html)
     assert parsed.to_dict() == baseline.to_dict()
-    assert parsed.to_markdown() == baseline.to_markdown()
+    assert parsed.to_markdown(canonical=True) == baseline.to_markdown(canonical=True)
     copied = tm.from_dict(baseline.to_dict(), schema=schema, strict="exact")
-    assert copied.to_markdown() == baseline.to_markdown()
+    assert copied.to_markdown(canonical=True) == baseline.to_markdown(canonical=True)

@@ -92,7 +92,7 @@ def test_readable_body_elides_the_declared_default(carrier, source):
     formula = {"type": "formula"}
     blocks = [{"type": "paragraph", "content": [formula]}] if carrier == "inline" else [formula]
     assert parsed.to_dict() == {"type": "doc", "content": blocks}
-    assert parsed.to_markdown() == "<formula/>"
+    assert parsed.to_markdown(canonical=True) == "<formula/>"
 
 
 def test_inline_math_body_is_subject_to_the_declared_uri_policy():

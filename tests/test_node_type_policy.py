@@ -66,12 +66,12 @@ def test_from_markdown_applies_the_same_node_policy(markdown, path):
 
 def test_html_false_turns_html_into_allowed_literal_text():
     converted = tm.from_markdown("a <u>x</u> b", html=False, reject_node_types=HTML_NODES)
-    assert converted.to_markdown() == "a \\<u>x\\</u> b"
+    assert converted.to_markdown(canonical=True) == "a \\<u>x\\</u> b"
 
 
 def test_no_node_types_are_rejected_by_default():
-    assert tm.from_dict(html_document()).to_markdown()
-    assert tm.from_markdown("<div>x</div>").to_markdown() == "<div>x</div>"
+    assert tm.from_dict(html_document()).to_markdown(canonical=True)
+    assert tm.from_markdown("<div>x</div>").to_markdown(canonical=True) == "<div>x</div>"
 
 
 def test_any_iterable_and_duplicate_entries_are_accepted():

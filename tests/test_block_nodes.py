@@ -68,10 +68,10 @@ def carrier(shape, *, tag=None, attrs=""):
 
 def roundtrip(ast, schema, markdown, html, level, expected=None, **options):
     source = tm.from_dict(ast, schema=schema, strict=level, **options)
-    assert source.to_markdown() == markdown
+    assert source.to_markdown(canonical=True) == markdown
     parsed = tm.from_markdown(markdown, schema=schema, html=html, **options)
     assert parsed.to_dict() == (source.to_dict() if expected is None else expected)
-    assert parsed.to_markdown() == markdown
+    assert parsed.to_markdown(canonical=True) == markdown
     return parsed
 
 
@@ -290,7 +290,7 @@ def test_reading_an_empty_required_container_fills_one_empty_paragraph(html):
     schema = tm.Schema(nodes=[tm.NodeSpec("callout", kind="block", content="paragraph+")])
     parsed = tm.from_markdown("<callout>\n\n</callout>", schema=schema, html=html)
     assert parsed.to_dict() == doc(node("callout", node("paragraph")))
-    assert parsed.to_markdown() == "<callout>\n\n</callout>"
+    assert parsed.to_markdown(canonical=True) == "<callout>\n\n</callout>"
 
 
 def details_schema():

@@ -51,10 +51,10 @@ def loose_list(*blocks):
 
 def roundtrip(ast, declarations, markdown, html, level):
     source = tm.from_dict(ast, schema=declarations, strict=level)
-    assert source.to_markdown() == markdown
+    assert source.to_markdown(canonical=True) == markdown
     parsed = tm.from_markdown(markdown, schema=declarations, html=html)
     assert parsed.to_dict() == source.to_dict()
-    assert parsed.to_markdown() == markdown
+    assert parsed.to_markdown(canonical=True) == markdown
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -119,4 +119,4 @@ def test_filled_empty_paragraph_inside_a_list_container_keeps_the_list_tight(htm
 def test_direct_empty_list_item_paragraph_bytes_are_unchanged(level, declared, children, markdown):
     ast = doc(node("bulletList", node("listItem", *children), attrs={"tight": False}))
     source = tm.from_dict(ast, schema=schema() if declared else None, strict=level)
-    assert source.to_markdown() == markdown
+    assert source.to_markdown(canonical=True) == markdown

@@ -41,10 +41,10 @@ def underline_schema():
 
 def roundtrip(ast, schema, markdown, html, level, expected=None, **options):
     source = tm.from_dict(ast, schema=schema, strict=level, **options)
-    assert source.to_markdown() == markdown
+    assert source.to_markdown(canonical=True) == markdown
     parsed = tm.from_markdown(markdown, schema=schema, html=html, **options)
     assert parsed.to_dict() == (source.to_dict() if expected is None else expected)
-    assert parsed.to_markdown() == markdown
+    assert parsed.to_markdown(canonical=True) == markdown
     return parsed
 
 
@@ -201,7 +201,7 @@ def test_reading_default_attrs_elides_instead_of_materializing_them(html, type_,
     assert tm.from_markdown(f'<note value="{encoded}">x</note>', schema=schema, html=html).to_dict() == expected
     parsed = tm.from_markdown("<note>x</note>", schema=schema, html=html)
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == "<note>x</note>"
+    assert parsed.to_markdown(canonical=True) == "<note>x</note>"
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -211,7 +211,7 @@ def test_reader_accepts_quoted_unquoted_and_valueless_declared_attrs(html):
     })])
     parsed = tm.from_markdown("<note label=red enabled count='-12'>x</note>", schema=schema, html=html)
     assert parsed.to_dict() == doc(p(text("x", mark("note", enabled=True, count=-12, label="red"))))
-    assert parsed.to_markdown() == '<note enabled="true" count="-12" label="red">x</note>'
+    assert parsed.to_markdown(canonical=True) == '<note enabled="true" count="-12" label="red">x</note>'
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -220,7 +220,7 @@ def test_self_exclusive_nested_tags_replace_then_restore_the_outer_mark(html):
     parsed = tm.from_markdown('<note color="red">a<note color="blue">b</note>c</note>', schema=schema, html=html)
     assert parsed.to_dict() == doc(p(text("a", mark("note", color="red")),
                                      text("b", mark("note", color="blue")), text("c", mark("note", color="red"))))
-    assert parsed.to_markdown() == ('<note color="red">a</note><note color="blue">b</note>'
+    assert parsed.to_markdown(canonical=True) == ('<note color="red">a</note><note color="blue">b</note>'
                                     '<note color="red">c</note>')
     folded = tm.from_markdown('<note color="red">a<note color="red">b</note>c</note>', schema=schema, html=html)
     assert folded.to_dict() == doc(p(text("abc", mark("note", color="red"))))
@@ -247,7 +247,7 @@ def test_declared_marks_may_cross_other_tag_and_core_mark_boundaries(html):
 @pytest.mark.parametrize("markdown", ("<u></u>", "<u><u></u></u>"))
 def test_empty_tag_marks_do_not_leave_a_mark(html, markdown):
     parsed = tm.from_markdown(markdown, schema=underline_schema(), html=html)
-    assert parsed.to_markdown() == ""
+    assert parsed.to_markdown(canonical=True) == ""
     assert all("marks" not in node for block in parsed.to_dict()["content"] for node in block.get("content", []))
 
 
@@ -266,7 +266,7 @@ def test_empty_tag_marks_do_not_split_undeclared_html(html, outer):
         node = text("<span></span>", *marks)
     parsed = tm.from_markdown(markup, schema=underline_schema(), html=html)
     assert parsed.to_dict() == doc(p(node))
-    assert tm.from_markdown(parsed.to_markdown(), schema=underline_schema(), html=html).to_dict() == parsed.to_dict()
+    assert tm.from_markdown(parsed.to_markdown(canonical=True), schema=underline_schema(), html=html).to_dict() == parsed.to_dict()
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -499,7 +499,7 @@ def test_attr_order_variants_merge_adjacent_text_after_decoding(html):
     markup = '<note a="x" b="1">a</note><note b="1" a="x">b</note>'
     parsed = tm.from_markdown(markup, schema=schema, html=html)
     assert parsed.to_dict() == doc(p(text("ab", mark("note", a="x", b=1))))
-    assert parsed.to_markdown() == '<note a="x" b="1">ab</note>'
+    assert parsed.to_markdown(canonical=True) == '<note a="x" b="1">ab</note>'
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -508,7 +508,7 @@ def test_declared_open_order_variants_merge_after_mark_ordering(html):
     markup = "<first><second>a</second></first><second><first>b</first></second>"
     parsed = tm.from_markdown(markup, schema=schema, html=html)
     assert parsed.to_dict() == doc(p(text("ab", mark("first"), mark("second"))))
-    assert parsed.to_markdown() == "<first><second>ab</second></first>"
+    assert parsed.to_markdown(canonical=True) == "<first><second>ab</second></first>"
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -532,7 +532,7 @@ def test_declared_int_attrs_accept_the_entire_signed_decimal_value(html, literal
     schema = tm.Schema(marks=[tm.MarkSpec("note", attrs={"count": tm.Attr(int)})])
     parsed = tm.from_markdown(f'<note count="{literal}">x</note>', schema=schema, html=html)
     assert parsed.to_dict() == doc(p(text("x", mark("note", count=value))))
-    assert parsed.to_markdown() == f'<note count="{value}">x</note>'
+    assert parsed.to_markdown(canonical=True) == f'<note count="{value}">x</note>'
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -625,14 +625,14 @@ def assert_tag_boundary_whitespace_normalizes_once(emphasis, delimiter, html):
     assert first.to_dict() == doc(p(text("a ", mark(emphasis)),
                                     text("b", mark(emphasis), mark("underline"))))
     normalized = f"{delimiter}a{delimiter} <u>{delimiter}b{delimiter}</u>"
-    assert first.to_markdown() == normalized
+    assert first.to_markdown(canonical=True) == normalized
     second = tm.from_markdown(normalized, schema=schema, html=html)
     assert second.to_dict() == doc(p(text("a", mark(emphasis)), text(" "),
                                      text("b", mark(emphasis), mark("underline"))))
-    assert second.to_markdown() == normalized
-    third = tm.from_markdown(second.to_markdown(), schema=schema, html=html)
+    assert second.to_markdown(canonical=True) == normalized
+    third = tm.from_markdown(second.to_markdown(canonical=True), schema=schema, html=html)
     assert third.to_dict() == second.to_dict()
-    assert third.to_markdown() == normalized
+    assert third.to_markdown(canonical=True) == normalized
 
 
 @pytest.mark.parametrize("html", HTML)

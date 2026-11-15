@@ -123,8 +123,8 @@ def main() -> None:
     _, peak_bytes = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
-    serialized = doc.to_markdown()
-    serialize_seconds = best_seconds(doc.to_markdown, args.repetitions)
+    serialized = doc.to_markdown(canonical=True)
+    serialize_seconds = best_seconds(lambda: doc.to_markdown(canonical=True), args.repetitions)
     output_bytes = len(serialized.encode("utf-8"))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as pool:

@@ -54,10 +54,10 @@ def inline_schema(*, marks=()):
 
 def roundtrip(ast, schema, markdown, html, level, expected=None, **options):
     source = tm.from_dict(ast, schema=schema, strict=level, **options)
-    assert source.to_markdown() == markdown
+    assert source.to_markdown(canonical=True) == markdown
     parsed = tm.from_markdown(markdown, schema=schema, html=html, **options)
     assert parsed.to_dict() == (source.to_dict() if expected is None else expected)
-    assert parsed.to_markdown() == markdown
+    assert parsed.to_markdown(canonical=True) == markdown
     return parsed
 
 
@@ -192,7 +192,7 @@ def test_flat_mark_pairing_can_cross_inline_container_boundaries(html, markup, e
     schema = inline_schema(marks=[tm.MarkSpec("underline", tag="u")])
     parsed = tm.from_markdown(markup, schema=schema, html=html)
     assert parsed.to_dict() == expected
-    assert parsed.to_markdown() == written
+    assert parsed.to_markdown(canonical=True) == written
     assert tm.from_markdown(written, schema=schema, html=html).to_dict() == expected
 
 
@@ -315,7 +315,7 @@ def test_two_thousand_nested_inline_containers_parse_without_a_deep_python_expec
     parsed = tm.from_markdown(markdown, schema=schema, html=html)
     elapsed = time.perf_counter() - start
     assert elapsed < 1.0, f"2000 nested inline containers took {elapsed:.3f}s"
-    assert parsed.to_markdown() == markdown
+    assert parsed.to_markdown(canonical=True) == markdown
     child = parsed.to_dict()["content"][0]
     for _ in range(depth):
         assert child["type"] in ("paragraph", "wrap")
@@ -348,7 +348,7 @@ def test_twenty_thousand_sibling_inline_atoms_stay_separate_in_under_one_second(
     children = parsed.to_dict()["content"][0]["content"]
     assert len(children) == count
     assert all(child == node("mention") for child in children)
-    assert parsed.to_markdown() == markdown
+    assert parsed.to_markdown(canonical=True) == markdown
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -367,4 +367,4 @@ def test_group_less_inline_nodes_require_a_parent_that_names_them(html, containe
     assert excinfo.value.path == "content[0].content[0]"
     parsed = tm.from_markdown(f"<host>{carrier}</host>", schema=schema, html=html)
     assert parsed.to_dict() == doc(p(node("host", child)))
-    assert parsed.to_markdown() == f"<host>{carrier}</host>"
+    assert parsed.to_markdown(canonical=True) == f"<host>{carrier}</host>"

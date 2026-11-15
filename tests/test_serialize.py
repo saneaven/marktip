@@ -31,7 +31,7 @@ def test_serialize_hand_written_tiptap_doc():
         ],
     }
 
-    assert tm.from_dict(ast).to_markdown() == "## API\n\n*Fast* **parser** at [home](https://example.com)  \n![Logo](logo.png)"
+    assert tm.from_dict(ast).to_markdown(canonical=True) == "## API\n\n*Fast* **parser** at [home](https://example.com)  \n![Logo](logo.png)"
 
 
 def test_serialize_lists_code_and_table():
@@ -68,7 +68,7 @@ def test_serialize_lists_code_and_table():
         ],
     }
 
-    assert tm.from_dict(ast).to_markdown() == (
+    assert tm.from_dict(ast).to_markdown(canonical=True) == (
         "- [x] ship\n"
         "- [ ] write tests\n\n"
         "```cpp\n"
@@ -93,7 +93,7 @@ def test_serialize_escapes_raw_html_and_entities_in_text():
         ],
     }
 
-    assert tm.from_markdown(tm.from_dict(ast).to_markdown()).to_dict() == ast
+    assert tm.from_markdown(tm.from_dict(ast).to_markdown(canonical=True)).to_dict() == ast
 
 
 def test_serialize_hard_break_in_table_cell_as_br():
@@ -130,7 +130,7 @@ def test_serialize_hard_break_in_table_cell_as_br():
         ],
     }
 
-    markdown = tm.from_dict(ast).to_markdown()
+    markdown = tm.from_dict(ast).to_markdown(canonical=True)
     assert markdown.splitlines()[-1] == "| line1<br>line2 |"
 
     reparsed_cell = tm.from_markdown(markdown).to_dict()["content"][0]["content"][1]["content"][0]
@@ -142,7 +142,7 @@ def test_serialize_hard_break_in_table_cell_as_br():
 
 
 def doc_with(node):
-    return tm.from_dict({"type": "doc", "content": [node]}).to_markdown()
+    return tm.from_dict({"type": "doc", "content": [node]}).to_markdown(canonical=True)
 
 
 def test_html_nodes_fall_back_to_content_when_attr_is_absent():
