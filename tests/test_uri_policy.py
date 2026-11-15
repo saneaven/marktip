@@ -224,14 +224,15 @@ def test_entity_encoded_control_characters_are_rejected(href):
 
 
 @pytest.mark.parametrize("padding", [0, 4, 40, 400])
-def test_zero_padded_numeric_references_are_decoded_at_any_length(padding):
-    # A numeric reference has no length limit,
-    # so the terminator cannot be looked for inside a fixed window —
-    # a browser reads all of these as 'j'.
+def test_zero_padded_numeric_references_follow_markdown_digit_limits(padding):
+    # Markdown renderers leave overlong numeric references literal,
+    # so those destinations are relative instead of acquiring a decoded scheme or control character.
     zeros = "0" * padding
-    assert code_for(doc(link(f"&#{zeros}106;avascript:x")), link_schemes=("https",)) == "disallowed_scheme"
-    assert code_for(doc(link(f"&#x{zeros}6a;avascript:x")), link_schemes=("https",)) == "disallowed_scheme"
-    assert code_for(doc(link(f"java&#{zeros}9;script:x")), link_schemes=("https",)) == "invalid_uri_char"
+    scheme_error = "disallowed_scheme" if padding <= 4 else None
+    control_error = "invalid_uri_char" if padding <= 4 else None
+    assert code_for(doc(link(f"&#{zeros}106;avascript:x")), link_schemes=("https",)) == scheme_error
+    assert code_for(doc(link(f"&#x{zeros}6a;avascript:x")), link_schemes=("https",)) == scheme_error
+    assert code_for(doc(link(f"java&#{zeros}9;script:x")), link_schemes=("https",)) == control_error
 
 
 def test_a_long_query_string_without_semicolons_stays_cheap():

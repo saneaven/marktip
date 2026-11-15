@@ -96,10 +96,8 @@ bool append_named_entity(std::string_view entity, std::string& out) {
 // rather than by searching ahead for a ';':
 // a query string full of separators and no semicolon at all ("?a=1&b=2&c=3...")
 // would otherwise rescan the tail for every '&'.
-// A fixed-size window would do that too,
-// but numeric references have no length limit —
-// "&#0000000000000000000000000106;" is still 'j' to a browser —
-// so only the named branch can be capped.
+// Numeric references follow MD4C's limits of seven decimal or six hexadecimal digits,
+// so a renderer leaves a longer reference literal rather than turning it into a scheme character.
 std::size_t entity_semicolon(std::string_view value) {
     auto is_digit = [](char c) { return c >= '0' && c <= '9'; };
     auto is_hex = [&](char c) { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); };
@@ -109,11 +107,13 @@ std::size_t entity_semicolon(std::string_view value) {
         ++i;
         if (i < value.size() && (value[i] == 'x' || value[i] == 'X')) {
             ++i;
-            while (i < value.size() && is_hex(value[i])) {
+            std::size_t stop = std::min(value.size(), i + 6);
+            while (i < stop && is_hex(value[i])) {
                 ++i;
             }
         } else {
-            while (i < value.size() && is_digit(value[i])) {
+            std::size_t stop = std::min(value.size(), i + 7);
+            while (i < stop && is_digit(value[i])) {
                 ++i;
             }
         }
