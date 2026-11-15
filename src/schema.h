@@ -169,6 +169,8 @@ public:
     bool has_list_tags() const;
     bool has_table_tags() const;
     bool block_image() const;
+    const std::string& fingerprint() const;
+    void set_fingerprint(std::string fingerprint);
     bool has_inline_containers() const;
     bool has_fences() const;
     const NodeSpec* fence(std::string_view word) const;
@@ -207,6 +209,8 @@ private:
     bool list_tags_ = false;
     bool table_tags_ = false;
     bool block_image_ = false;
+    // SHA-256 of canonical JSON for the empty declaration, {"marks":[]}.
+    std::string fingerprint_ = "9ae37bfe3cc0d2ed80d57ac7a4a1cac75a0da4ac2a2d8f64fe6c63a07859937b";
 };
 
 }  // namespace marktip

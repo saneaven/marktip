@@ -200,9 +200,6 @@ PYBIND11_MODULE(_core, module) {
     module.doc() = "Fast MD4C-backed Markdown conversion with a C++ Document AST";
     module.attr("__version__") = MARKTIP_VERSION;
 
-    // Temporary internal observation until dump() exposes spelling in checkpoint 4.
-    module.def("_parse_segments", &marktip::parse_segments_py, py::arg("markdown"), py::arg("html") = true);
-
     // Every marktip error derives from MarktipError,
     // so a caller can express "the input is malformed" as a single except clause.
     // Each instance carries structured fields (.code, .path, .detail, plus subclass-specific ones),
@@ -271,10 +268,12 @@ PYBIND11_MODULE(_core, module) {
             return marktip::SchemaBuilder::build(mark_declarations_from_py(marks), node_declarations_from_py(nodes),
                                                  core_attr_declarations_from_py(core_attrs), block_image);
         }), py::kw_only(), py::arg("marks") = py::tuple(), py::arg("nodes") = py::tuple(),
-            py::arg("core_attrs") = py::dict(), py::arg("block_image") = false);
+            py::arg("core_attrs") = py::dict(), py::arg("block_image") = false)
+        .def("_set_fingerprint", &marktip::Schema::set_fingerprint);
 
     py::class_<marktip::Document>(module, "Document")
         .def("to_dict", &marktip::to_dict_py, "Convert the document AST to a Tiptap-style JSON dict.")
+        .def("dump", &marktip::dump_py, "Return JSON-serializable content, spelling, schema and parser options.")
         .def("to_markdown",
              [](const marktip::Document& document, bool canonical) {
                  return marktip::to_markdown(document, canonical);
@@ -323,7 +322,7 @@ PYBIND11_MODULE(_core, module) {
         "Build a Document from a Tiptap-style JSON dict."
         " Pass base=Document to reuse spelling of equal blocks from that document."
         " Matched blocks inherit attrs whose keys are absent; a key set to None is cleared."
-        " Spelling reuse requires the same Schema instance as the base."
+        " Spelling reuse requires the same schema declaration as the base."
         " Pass schema=Schema(...) to use declared marks and nodes, fence and math carriers,"
         " and attrs added to core types through core_attrs;"
         " None (the default) uses the built-in GFM schema." +
@@ -364,4 +363,11 @@ PYBIND11_MODULE(_core, module) {
                py::arg("image_relative") = "allow", py::arg("reject_node_types") = py::none(),
                py::arg("strict") = "off", py::arg("schema") = py::none(), py::arg("base") = py::none(),
                from_dict_doc.c_str());
+    module.def("load", &marktip::load_py, py::arg("data"), py::kw_only(), py::arg("cjk_friendly") = false,
+               py::arg("html") = true, py::arg("schema") = py::none(),
+               "Load a Document saved by dump()."
+               " Restore spelling when the schema declaration and parser options match."
+               " Otherwise only content is loaded. Defaults match from_markdown."
+               " Stored spelling is not reparsed or checked against content."
+               " An unknown marktip version raises ValueError.");
 }

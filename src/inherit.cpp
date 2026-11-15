@@ -182,6 +182,9 @@ void inherit_spelling(Document& document, const Document& base, const InputAttrK
         comparison.fill(children[i], original_children[candidate]);
     }
 
+    if (!base.spelling()) {
+        return;
+    }
     const Spelling& source = *base.spelling();
     std::vector<const SpellingPiece*> blocks;
     blocks.reserve(original_children.size());
@@ -202,6 +205,8 @@ void inherit_spelling(Document& document, const Document& base, const InputAttrK
     document.spelling().emplace(source.source);
     Spelling& spelling = *document.spelling();
     spelling.head = source.head;
+    spelling.html = source.html;
+    spelling.cjk_friendly = source.cjk_friendly;
     spelling.items.reserve(source.items.size() + children.size());
     spelling.items.insert(spelling.items.end(), trailing[0].begin(), trailing[0].end());
     for (std::size_t i = 0; i < children.size(); ++i) {

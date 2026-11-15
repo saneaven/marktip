@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 
 from ._core import IntList, Schema as _CompiledSchema
@@ -105,6 +107,8 @@ class Schema(_CompiledSchema):
             tuple((name, _attrs_key(attrs)) for name, attrs in self._core_attrs.items()),
             self._block_image,
         )
+        declaration = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        self._set_fingerprint(hashlib.sha256(declaration.encode("utf-8")).hexdigest())
 
     @property
     def marks(self) -> tuple[MarkSpec, ...]:

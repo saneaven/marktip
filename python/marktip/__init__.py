@@ -10,6 +10,7 @@ try:
         __version__,
         from_dict,
         from_markdown,
+        load,
     )
 except ImportError:  # pragma: no cover - development-only CMake build fallback
     import importlib.util
@@ -36,6 +37,7 @@ except ImportError:  # pragma: no cover - development-only CMake build fallback
     ParseError = _module.ParseError
     from_dict = _module.from_dict
     from_markdown = _module.from_markdown
+    load = _module.load
 
 from .schema import Attr, IntList, MarkSpec, NodeSpec, Schema
 from .presets import (
@@ -88,4 +90,5 @@ __all__ = [
     "ParseError",
     "from_markdown",
     "from_dict",
+    "load",
 ]

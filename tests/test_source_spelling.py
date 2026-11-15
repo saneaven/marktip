@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 import marktip as tm
-from test_source_segments import EXAMPLES
+from spec_examples import EXAMPLES
 
 
 @pytest.mark.parametrize("html", (True, False))

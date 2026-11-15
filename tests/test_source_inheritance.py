@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import marktip as tm
-from test_source_segments import EXAMPLES
+from spec_examples import EXAMPLES
 from test_source_spelling import block_schema
 
 
@@ -49,6 +49,11 @@ def assert_canonical_readback(document, *, schema=None, html=True):
     assert tm.from_markdown(written, schema=schema, html=html).to_markdown(canonical=True) == (
         document.to_markdown(canonical=True)
     )
+    stored = json.loads(json.dumps(document.dump()))
+    restored = tm.load(stored, schema=schema, html=html)
+    assert restored.to_dict() == document.to_dict()
+    assert restored.to_markdown() == written
+    assert restored.dump() == stored
 
 
 def paragraph(value):
@@ -73,6 +78,11 @@ def test_spec_editor_roundtrip_keeps_source_spelling(markdown, html, simulated):
     document = tm.from_dict(submitted, base=base)
     assert document.to_markdown() == markdown
     assert without_editor_presentation(document.to_dict()) == without_editor_presentation(original)
+    stored = json.loads(json.dumps(document.dump()))
+    restored = tm.load(stored, html=html)
+    assert restored.to_dict() == document.to_dict()
+    assert restored.to_markdown() == markdown
+    assert restored.dump() == stored
 
 
 @pytest.mark.parametrize("html", (True, False))
@@ -204,6 +214,23 @@ def test_a_new_bullet_list_between_two_kept_markers_remains_a_third_list(html):
 
 
 @pytest.mark.parametrize("html", (True, False))
+@pytest.mark.parametrize("left_marker, right_marker", ((".", ")"), (")", ".")))
+def test_a_new_ordered_list_between_both_original_orientations_stays_separate(html, left_marker, right_marker):
+    left = f"1{left_marker} __left__"
+    right = f"1{right_marker} *right*"
+    base = tm.from_markdown(left + "\n\n" + right + "\n", html=html)
+    submitted = base.to_dict()
+    submitted["content"].insert(1, list_block("middle", ordered=True))
+    document = tm.from_dict(submitted, base=base)
+    written = document.to_markdown()
+    assert written.startswith(left + "\n\n")
+    assert [node["type"] for node in tm.from_markdown(written, html=html).to_dict()["content"]] == [
+        "orderedList", "orderedList", "orderedList",
+    ]
+    assert_canonical_readback(document, html=html)
+
+
+@pytest.mark.parametrize("html", (True, False))
 @pytest.mark.parametrize("ordered", (False, True), ids=("bullet", "ordered"))
 @pytest.mark.parametrize("action", ("delete", "empty", "move"))
 def test_original_lists_that_become_neighbours_use_different_markers(html, ordered, action):
@@ -282,13 +309,24 @@ def test_equal_blocks_prefer_order_before_reusing_a_moved_block():
 
 
 @pytest.mark.parametrize("base", (None, "without_spelling"))
-def test_a_base_without_spelling_behaves_like_no_base(base):
-    submitted = tm.from_markdown("\nTitle\n=====\n\n* one\n").to_dict()
+def test_a_base_without_spelling_lends_absent_attrs_but_no_text(base):
+    markdown = "\nTitle\n=====\n\n* first\n\n* second\n"
+    original = tm.from_markdown(markdown).to_dict()
+    selected = tm.from_dict(original) if base is not None else None
+    submitted = copy.deepcopy(original)
+    submitted["content"][1]["attrs"].pop("tight")
     ordinary = tm.from_dict(submitted)
-    selected = tm.from_dict(submitted) if base is not None else None
     document = tm.from_dict(submitted, base=selected)
-    assert document.to_dict() == ordinary.to_dict()
-    assert document.to_markdown() == ordinary.to_markdown()
+    if selected is None:
+        assert document.to_dict() == ordinary.to_dict()
+        assert document.to_markdown() == ordinary.to_markdown()
+    else:
+        assert document.to_dict() == original
+        assert document.to_dict()["content"][1]["attrs"]["tight"] is False
+        assert document.to_dict() != ordinary.to_dict()
+        assert document.to_markdown() == selected.to_markdown()
+    assert document.to_markdown() != markdown
+    assert "source" not in document.dump()
 
 
 def test_base_requires_a_document():

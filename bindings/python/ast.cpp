@@ -2,6 +2,7 @@
 
 #include "inherit.h"
 #include "schema.h"
+#include "serializer.h"
 
 namespace py = pybind11;
 
@@ -424,7 +425,7 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
             throw py::type_error("base must be a Document or None");
         }
         const Document& candidate = py::cast<const Document&>(base);
-        if (candidate.spelling() && &candidate.schema() == selected_schema.get()) {
+        if (candidate.schema().fingerprint() == selected_schema->fingerprint()) {
             inheritance_base = &candidate;
         }
     }
@@ -444,6 +445,81 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
         fill_node_from_py(document, 0, root, "root node", 0, mode, path);
     }
     finalize_document(document, node_policy, policy);
+    return document;
+}
+
+py::dict dump_py(const Document& document) {
+    py::dict result;
+    result["marktip"] = 1;
+    result["schema"] = document.schema().fingerprint();
+    const auto& spelling = document.spelling();
+    py::dict options;
+    options["html"] = spelling ? spelling->html : true;
+    options["cjk_friendly"] = spelling ? spelling->cjk_friendly : false;
+    result["options"] = std::move(options);
+    result["doc"] = to_dict_py(document);
+    std::optional<StoredSpelling> stored = dump_spelling(document);
+    if (stored) {
+        py::dict source;
+        source["head"] = std::move(stored->head);
+        py::list items;
+        for (StoredPiece& piece : stored->items) {
+            py::dict item;
+            if (piece.text) {
+                item["text"] = std::move(*piece.text);
+            }
+            item["sep"] = std::move(piece.sep);
+            if (!piece.has_node) {
+                item["node"] = false;
+            }
+            items.append(std::move(item));
+        }
+        source["items"] = std::move(items);
+        result["source"] = std::move(source);
+    }
+    return result;
+}
+
+Document load_py(py::dict data, bool cjk_friendly, bool html, py::object schema) {
+    py::object version = dict_get(data, "marktip");
+    if (!py::isinstance<py::int_>(version) || py::cast<long long>(version) != 1) {
+        throw py::value_error("unsupported marktip version");
+    }
+    PathStack path;
+    py::dict content = expect_dict(dict_get(data, "doc"), "stored document", "doc", path);
+    Document document = from_dict_py(content, py::none(), py::none(), py::str("allow"), py::str("allow"),
+                                     py::none(), py::str("off"), std::move(schema), py::none());
+    if (!dict_contains(data, "source")) {
+        return document;
+    }
+    py::dict options = expect_dict(dict_get(data, "options"), "stored options", "options", path);
+    if (py::cast<std::string>(dict_get(data, "schema")) != document.schema().fingerprint() ||
+        py::cast<bool>(dict_get(options, "html")) != html ||
+        py::cast<bool>(dict_get(options, "cjk_friendly")) != cjk_friendly) {
+        return document;
+    }
+    py::dict source = expect_dict(dict_get(data, "source"), "stored source", "source", path);
+    StoredSpelling stored;
+    stored.head = py::cast<std::string>(dict_get(source, "head"));
+    py::list items = expect_list(dict_get(source, "items"), "stored items", "items", path);
+    stored.items.reserve(items.size());
+    std::size_t blocks = 0;
+    for (py::handle value : items) {
+        py::dict item = expect_dict(value, "stored item", "items", path);
+        StoredPiece piece;
+        if (dict_contains(item, "text")) {
+            piece.text = py::cast<std::string>(dict_get(item, "text"));
+        }
+        piece.sep = py::cast<std::string>(dict_get(item, "sep"));
+        piece.has_node = !dict_contains(item, "node") || py::cast<bool>(dict_get(item, "node"));
+        blocks += piece.has_node;
+        stored.items.push_back(std::move(piece));
+    }
+    if (blocks == document.root().content.size()) {
+        document.spelling() = restore_spelling(stored);
+        document.spelling()->html = html;
+        document.spelling()->cjk_friendly = cjk_friendly;
+    }
     return document;
 }
 

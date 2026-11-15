@@ -1,6 +1,7 @@
 #include "schema.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace marktip {
 
@@ -100,6 +101,14 @@ Schema::Schema() {
 const std::shared_ptr<const Schema>& Schema::gfm() {
     static const std::shared_ptr<const Schema> schema(new Schema);
     return schema;
+}
+
+const std::string& Schema::fingerprint() const {
+    return fingerprint_;
+}
+
+void Schema::set_fingerprint(std::string fingerprint) {
+    fingerprint_ = std::move(fingerprint);
 }
 
 const NodeSpec* Schema::node(std::string_view type) const {

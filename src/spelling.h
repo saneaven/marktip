@@ -20,6 +20,17 @@ struct SpellingPiece {
     bool has_node = true;
 };
 
+struct StoredPiece {
+    std::optional<std::string> text;
+    std::string sep;
+    bool has_node = true;
+};
+
+struct StoredSpelling {
+    std::string head;
+    std::vector<StoredPiece> items;
+};
+
 // Ranges keep the original positions when pieces lose text or change order.
 // Sharing the immutable source lets another Document inherit pieces without copying their bytes.
 struct Spelling {
@@ -29,9 +40,13 @@ struct Spelling {
     std::shared_ptr<const std::string> source;
     SourceRange head;
     std::vector<SpellingPiece> items;
+    bool html = true;
+    bool cjk_friendly = false;
 
     std::string_view view(SourceRange range) const;
     void append_segment(std::size_t begin, std::size_t end, bool has_node);
 };
+
+Spelling restore_spelling(const StoredSpelling& stored);
 
 }  // namespace marktip

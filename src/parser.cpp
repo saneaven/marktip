@@ -466,18 +466,7 @@ public:
         return 0;
     }
 
-    Document into_document(ParseObservation* observation) && {
-        if (observation != nullptr) {
-            const auto& items = document_.spelling()->items;
-            observation->segments.reserve(items.size());
-            std::size_t root_child = 0;
-            for (const SpellingPiece& item : items) {
-                observation->segments.push_back({item.text->begin,
-                                                item.has_node ? std::optional<std::size_t>(root_child++)
-                                                              : std::nullopt});
-            }
-            observation->root_child_count = document_.root().content.size();
-        }
+    Document into_document() && {
         return std::move(document_);
     }
 
@@ -783,7 +772,7 @@ int source_segments_callback(const MD_SOURCE_SEGMENT* segments, MD_SIZE count, v
 }  // namespace
 
 Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
-                           std::shared_ptr<const Schema> schema, ParseObservation* observation) {
+                           std::shared_ptr<const Schema> schema) {
     replace_nul(markdown);
     std::vector<MD_TYPED_TAG> typed_tags;
     if (schema->has_tags()) {
@@ -820,7 +809,9 @@ Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
         }
         throw ParseError("parse_failed", "MD4C failed to parse markdown");
     }
-    Document document = std::move(builder).into_document(observation);
+    Document document = std::move(builder).into_document();
+    document.spelling()->html = html;
+    document.spelling()->cjk_friendly = cjk_friendly;
     if (document.schema().has_tags() || document.schema().block_image()) {
         lift(document, html);
     }

@@ -272,7 +272,7 @@ enum class InlineContext { Default, TableCell, Heading };
 
 // Adjacent lists of the same family would merge on reparse if they used the same marker,
 // so sibling loops alternate the marker between consecutive same-family lists.
-// Spelled roots also use "+" when both other bullet markers are occupied by remembered neighbours.
+// Spelled roots also use "+" when both other bullet markers are occupied by neighbours.
 enum class ListFamily { None, Bullet, Ordered };
 
 enum class BlockKind {
@@ -292,6 +292,11 @@ struct BlockPiece {
 struct BlockOrigin {
     const SpellingPiece* source;
     bool remembered;
+};
+
+struct SpelledBlocks {
+    std::vector<BlockPiece> pieces;
+    std::vector<BlockOrigin> origins;
 };
 
 ListFamily list_family(const std::string& type) {
@@ -354,6 +359,17 @@ bool gap_has_blank_line(std::string_view gap) {
         }
     }
     return false;
+}
+
+std::string_view spelled_gap(const Spelling& spelling, const BlockOrigin& previous, const BlockOrigin* next) {
+    std::string_view gap = spelling.view(previous.source->gap);
+    if (next == nullptr) {
+        return previous.remembered ? gap : std::string_view {};
+    }
+    bool original_neighbours = previous.remembered && next->remembered &&
+                               previous.source->gap.end == next->source->text->begin;
+    return previous.source != next->source && (gap_has_blank_line(gap) || original_neighbours)
+               ? gap : std::string_view("\n\n");
 }
 
 bool is_emphasis_mark(const Mark& mark) {
@@ -522,6 +538,32 @@ public:
         return rendered;
     }
 
+    std::optional<StoredSpelling> dump_spelling() {
+        if (!document_.spelling()) {
+            return std::nullopt;
+        }
+        const Spelling& spelling = *document_.spelling();
+        SpelledBlocks blocks = spelled_blocks(document_.root(), spelling);
+        StoredSpelling stored;
+        stored.head = spelling.view(spelling.head);
+        stored.items.reserve(spelling.items.size());
+        for (const SpellingPiece& source : spelling.items) {
+            stored.items.push_back({std::nullopt, {}, source.has_node});
+        }
+        for (std::size_t i = 0; i < blocks.pieces.size(); ++i) {
+            const BlockOrigin& origin = blocks.origins[i];
+            StoredPiece& item = stored.items[origin.source - spelling.items.data()];
+            if (origin.remembered) {
+                item.text = std::move(blocks.pieces[i].text);
+            }
+            const BlockOrigin* next = i + 1 < blocks.origins.size() ? &blocks.origins[i + 1] : nullptr;
+            if (next == nullptr || next->source != origin.source) {
+                item.sep = spelled_gap(spelling, origin, next);
+            }
+        }
+        return stored;
+    }
+
 private:
     const Document& document_;
     const Schema& schema_;
@@ -593,15 +635,21 @@ private:
         return out;
     }
 
+    SpelledBlocks spelled_blocks(const Node& node, const Spelling& spelling) {
+        SpelledBlocks blocks;
+        blocks.origins.reserve(spelling.items.size());
+        int prev_variant = 0;
+        collect_block_children(node, nullptr, 0, false, blocks.pieces, prev_variant, &spelling, &blocks.origins);
+        return blocks;
+    }
+
     std::string render_doc(const Node& node, const Spelling* spelling = nullptr) {
         if (spelling == nullptr) {
             return render_blocks(node, 0);
         }
-        std::vector<BlockPiece> pieces;
-        std::vector<BlockOrigin> origins;
-        origins.reserve(spelling->items.size());
-        int prev_variant = 0;
-        collect_block_children(node, nullptr, 0, false, pieces, prev_variant, spelling, &origins);
+        SpelledBlocks blocks = spelled_blocks(node, *spelling);
+        std::vector<BlockPiece>& pieces = blocks.pieces;
+        const std::vector<BlockOrigin>& origins = blocks.origins;
         if (pieces.empty()) {
             return std::string(spelling->view(spelling->head));
         }
@@ -614,21 +662,10 @@ private:
         size += 2 * (pieces.size() - 1);
         out.reserve(size);
         for (std::size_t i = 1; i < pieces.size(); ++i) {
-            const SpellingPiece& previous = *origins[i - 1].source;
-            const SpellingPiece& next = *origins[i].source;
-            std::string_view gap = spelling->view(previous.gap);
-            bool original_neighbours = origins[i - 1].remembered && origins[i].remembered &&
-                                       previous.gap.end == next.text->begin;
-            if (&previous != &next && (gap_has_blank_line(gap) || original_neighbours)) {
-                out += gap;
-            } else {
-                out.append("\n\n");
-            }
+            out += spelled_gap(*spelling, origins[i - 1], &origins[i]);
             out += pieces[i].text;
         }
-        if (origins.back().remembered) {
-            out += spelling->view(origins.back().source->gap);
-        }
+        out += spelled_gap(*spelling, origins.back(), nullptr);
         return out;
     }
 
@@ -748,8 +785,10 @@ private:
                 return;
             }
             if (family != ListFamily::None && spelling != nullptr) {
-                generated_list = &child;
                 pending_replacement = available_list_variant(family, follows_list ? prev_variant : -1, variant);
+                if (pending_replacement != variant && (!follows_list || pending_replacement != prev_variant)) {
+                    generated_list = &child;
+                }
             }
             pieces.emplace_back(std::move(rendered), list_item ? block_kind(child, spec) : BlockKind::Other, family);
             prev_variant = variant;
@@ -757,7 +796,6 @@ private:
         if (spelling != nullptr) {
             std::size_t child_index = 0;
             const Node* pending_list = nullptr;
-            std::size_t pending_piece = 0;
             for (const SpellingPiece& source : spelling->items) {
                 const Node* child = source.has_node ? &document_.node(node.content[child_index++]) : nullptr;
                 std::size_t begin = pieces.size();
@@ -770,10 +808,9 @@ private:
                     // The next remembered marker decides the pending generated list's right constraint.
                     if (pending_list != nullptr && pieces.back().family == family && variant >= 0 &&
                         variant == prev_variant) {
-                        pieces[pending_piece].text = render_block(*pending_list, indent, nullptr,
-                                                                 pending_replacement, InlineContext::Default,
-                                                                 list_item);
-                        rstrip_newlines(pieces[pending_piece].text);
+                        pieces.back().text = render_block(*pending_list, indent, nullptr, pending_replacement,
+                                                          InlineContext::Default, list_item);
+                        rstrip_newlines(pieces.back().text);
                         prev_variant = pending_replacement;
                     }
                     pending_list = nullptr;
@@ -796,9 +833,6 @@ private:
                     continue;
                 }
                 pending_list = generated_list;
-                if (pending_list != nullptr) {
-                    pending_piece = begin;
-                }
             }
         } else {
             for_each_child(node, collect_child);
@@ -1383,6 +1417,11 @@ private:
 std::string to_markdown(const Document& document, bool canonical) {
     MarkdownWriter writer(document);
     return writer.render(canonical);
+}
+
+std::optional<StoredSpelling> dump_spelling(const Document& document) {
+    MarkdownWriter writer(document);
+    return writer.dump_spelling();
 }
 
 }  // namespace marktip

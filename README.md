@@ -42,14 +42,156 @@ Underscores retain CommonMark's additional restriction on emphasis inside words.
 Pass `html=False` to parse undeclared HTML as literal text instead of `htmlBlock`/`htmlInline` nodes.
 Declared tags are recognized with either setting when exposed as tag constructs.
 With `html=True`, an undeclared HTML block or comment remains raw as a whole, including declared-looking tags inside it.
-Content is preserved (the serializer escapes it), and `<br>` inside table cells still maps to `hardBreak` so marktip's own table output round-trips:
+Content is preserved in the node tree, and the canonical writer escapes it.
+`<br>` inside table cells still maps to `hardBreak` so marktip's own table output round-trips:
 
 ```python
 doc = tm.from_markdown("a <u>x</u> b", html=False)
 # paragraph with the literal text "a <u>x</u> b"
 ```
 
-marktip targets GFM core syntax and canonical Markdown output rather than byte-identical source preservation.
+Parsed documents remember source spelling at the top level.
+`to_markdown()` returns the remembered text of unchanged blocks, while `to_markdown(canonical=True)` writes the whole document in marktip's spelling.
+
+### Remembering source spelling
+
+A `Document` holds the Tiptap node tree and, when available, the Markdown spelling of its top-level blocks.
+The remembered text includes list markers, emphasis delimiters, tag attr order, reference links, whitespace, and line endings:
+
+```python
+source = "\nTitle\n=====\n\n* first\n* second\n"
+doc = tm.from_markdown(source)
+assert doc.to_markdown() == source
+assert doc.to_markdown(canonical=True) == "# Title\n\n- first\n- second"
+
+stored = doc.dump()
+base = tm.load(stored)
+edited = tm.from_dict(base.to_dict(), base=base)
+assert edited.to_markdown() == source
+```
+
+`from_markdown` creates the spelling.
+`from_dict(editor_json, base=stored_document)` borrows it for matching blocks, and `load` restores it from stored data.
+`from_dict` without a base has no spelling and writes the same canonical Markdown as before.
+A base without spelling lends no text or gaps.
+With a matching schema declaration, it still fills absent attrs on matched blocks.
+The base only lends spelling and absent attrs; it does not merge changes from two writers.
+
+Blocks match when type, text, children, and Markdown-carried attrs agree throughout their subtrees.
+Marks are compared without regard to order.
+Attrs carried by a declared tag count too; presentation and free-form attrs that Markdown does not carry do not count.
+Among equal base blocks, matching first prefers an unused block that keeps the base order, then an unused moved block.
+
+An attr key absent from the editor's JSON means the editor does not model it.
+On a matched block, the value comes from the node or mark at the corresponding position in the base.
+This preserves attrs such as `tight`, `colCount`, `info`, and an old editor's cell `align` without a special list of names.
+A key present with `null` was cleared and is not inherited.
+An unmatched block inherits no attrs.
+Strict validation still judges the editor's input, with or without a base; an absent required attr is an error under strict even if a base could supply it.
+
+Top-level reference-definition paragraphs are remembered as source-only pieces.
+They follow their preceding matched base block when it moves; if that base block is not matched, they follow the nearest earlier surviving match or stay at the front.
+
+The writer applies three rules:
+
+1. A piece with remembered text writes that text; a block without it uses marktip's writer.
+2. Pieces use their remembered trailing gaps.
+   A gap without a blank line is kept only between two pieces that both retain text and were neighbours in the source; otherwise the writer inserts one blank line.
+   A final gap is kept only when the last emitted piece retains its text.
+   A block that writes nothing drops together with its gap.
+3. Adjacent Markdown lists use different markers, including lists that keep their text.
+   Newly written lists take account of both neighbours' actual markers.
+   When two original lists become neighbours with the same marker, the later one is written anew.
+   If a new ordered list cannot use a marker different from both original neighbours, the colliding right-hand list is written anew instead.
+
+### Storing and restoring a document
+
+Store one `dump()` result per document.
+It is JSON-serializable, and its `doc` field equals `to_dict()`:
+
+```python
+import json
+
+stored = json.loads(json.dumps(doc.dump()))
+restored = tm.load(stored)
+assert restored.to_dict() == doc.to_dict()
+assert restored.to_markdown() == doc.to_markdown()
+```
+
+The stored form has this shape, with the fingerprint and `doc.content` abbreviated:
+
+```json
+{
+  "marktip": 1,
+  "schema": "9f2c…",
+  "options": {"html": true, "cjk_friendly": false},
+  "doc": {"type": "doc", "content": [...]},
+  "source": {
+    "head": "",
+    "items": [
+      {"text": "Title\n=====", "sep": "\n\n"},
+      {"sep": "\n\n"},
+      {"text": "* first\n* second", "sep": "\n\n"},
+      {"text": "[ref]: https://example.com", "sep": "\n", "node": false}
+    ]
+  }
+}
+```
+
+Items without `"node": false` correspond in order to the children of `doc.content`.
+An item without `text` has no remembered spelling; `sep` is its trailing gap.
+`head` holds text before the first piece.
+`dump` stores the gaps the writer would actually use, so loading an inherited or edited document does not invent original adjacency.
+A document without spelling omits `source` entirely and still round-trips through `dump` and `load`.
+
+The schema is compared by a stable fingerprint of its declaration, so separately constructed equal schemas can reuse spelling through both `base=` and `load`.
+`load(data, schema=S, html=True, cjk_friendly=False)` reads the stored content and restores spelling only when the declaration fingerprint and parser options match.
+The content must be readable under the supplied schema.
+A different declaration or different options drops the spelling, so readable content is written in marktip's spelling.
+If `from_markdown` used non-default parser options, pass those same options to `load`:
+
+```python
+doc = tm.from_markdown("<span>literal</span>\n", html=False, cjk_friendly=True)
+stored = doc.dump()
+restored = tm.load(stored, html=False, cjk_friendly=True)
+assert restored.to_markdown() == doc.to_markdown()
+```
+
+`load` trusts that the stored spelling denotes the stored content; it does not reparse the text to check it.
+An unknown `marktip` version raises `ValueError`.
+If the source's block-piece count does not match the root's child count, the spelling is dropped.
+
+For the default schema and options, the caller's flow is:
+
+| Action | Code | Conversion |
+| --- | --- | --- |
+| Agent writes | `from_markdown(md).dump()` | Parse once |
+| Frontend renders or opens the editor | Read the stored `doc` | None |
+| Editor saves | `from_dict(editor_json, base=load(stored)).dump()` | Read JSON twice and compare blocks |
+| Agent reads | `load(stored).to_markdown()` | Read JSON once and join pieces |
+
+Pass the application's schema and matching parser options when restoring a configured document.
+The frontend can render the stored `doc` without running marktip.
+
+### Source-spelling limits
+
+- The unit is one top-level block.
+  When a list, table, quote, or declared container needs rewriting, that whole block is written again and its internal source spelling is lost.
+- When identical blocks occur together and one is deleted, which original spelling the survivor inherits is unspecified.
+- Adding a block after an original unclosed code fence or an HTML block such as an unclosed `<script>` can put the added block inside it on readback.
+- An original block beginning with spaces can be absorbed into a list if it is moved directly after that list or if the block between them is deleted.
+- Reference definitions inside a quote, list, or the start of a paragraph disappear when that containing block is rewritten.
+  Other unchanged blocks using those definitions can then re-read their reference links as literal text.
+- If the editor omits `tight`, an edited loose list is written tight.
+- If the editor coalesces adjacent text nodes whose only difference was mark order, that paragraph is treated as changed and loses its spelling.
+- With `block_image=True`, a top-level paragraph replaced by exactly one node keeps its text.
+  A paragraph that really splits into several nodes loses its text; unchanged blocks around it keep theirs.
+- A source-preserving dump stores both node content and remembered Markdown, so remembered text increases the stored size.
+  The stored `doc` is marktip's normalized conversion result, not an untouched copy of the editor's submitted JSON.
+- Rewritten blocks use `\n`, so an original CRLF document can acquire mixed line endings.
+  Markdown NUL characters are replaced with U+FFFD before their spelling is remembered.
+- Concurrent agent and editor writes are outside this feature.
+  The caller must use revision checks to reject an editor save based on an outdated document.
 
 ### Restricting link and image URIs
 
@@ -251,7 +393,7 @@ schema = tm.Schema(
 
 source = '<callout tone="warning">\n\n<u>Read this</u>.\n\n</callout>'
 doc = tm.from_markdown(source, schema=schema)
-written = doc.to_markdown()
+written = doc.to_markdown(canonical=True)
 assert tm.from_dict(doc.to_dict(), schema=schema, strict="exact").to_markdown() == written
 assert tm.from_markdown(written, schema=schema).to_dict() == doc.to_dict()
 ```
@@ -585,7 +727,8 @@ It deliberately does **not** validate, unless `strict` asks it to:
   A `heading` without `level` or a `codeBlock` without `language` is accepted; the serializer substitutes a default rather than failing.
   For core types `strict` requires a link's `href` and an image's `src`, because an empty destination would read back as a real link.
   Declarations can require additional attrs on declared types.
-  `{"src": None}` and no `src` key at all are the same thing to every part of the library, the URI policy included.
+  `{"src": None}` and no `src` key at all are both missing values for validation and the URI policy.
+  Inheritance distinguishes them: an absent key can borrow a matched base value, while `None` cannot.
 - **Mark sets.**
   With strict validation disabled, two marks of the same type may appear on one node and are serialized independently.
   Both strict levels enforce the selected schema's exclusions and reject equal type-and-attr duplicates.
@@ -621,6 +764,7 @@ except tm.InvalidNodeError as e:
 
 Markdown cannot represent every Tiptap document exactly.
 marktip applies the following deterministic normalizations during parsing and serialization.
+These describe the node tree and canonical or regenerated Markdown; remembered blocks bypass the writer's normalizations.
 The tag-boundary whitespace case reaches its stable form after the first write/read cycle.
 
 - **NUL in content strings** — U+0000 in text or a non-URI string attr (`alt`, `title`, `language`, `html`, etc.) becomes U+FFFD. Markdown input is replaced once before tokenization, including inline/fenced/indented code and raw HTML, so reparsing cannot retain a NUL or accumulate replacement characters. On dict input, core and declared URI attrs are excluded and retain their unconditional `invalid_uri_char` rejection.
@@ -637,7 +781,8 @@ The tag-boundary whitespace case reaches its stable form after the first write/r
   A `language` is truncated at the first newline; one containing a backtick switches the fence to `~~~`.
 - **Nested same-type marks** — Markdown spans that map to the same self-exclusive mark are collapsed (`*outer _inner_ outer*` becomes one continuous `italic` mark) rather than producing an invalid ProseMirror mark set.
 - **Emphasis boundary whitespace** — whitespace touching an emphasis delimiter has no valid markdown form and is expelled outside the marks (`bold("굵게 ")` → `**굵게** `), cf. prosemirror-markdown's `expelEnclosingWhitespace`.
-- **Adjacent same-family lists** — consecutive lists of the same family alternate markers (`-`/`*`, `1.`/`1)`) so they stay separate lists on reparse instead of merging (which would renumber ordered items or spread task checkboxes).
+- **Adjacent same-family lists** — the canonical writer alternates markers (`-`/`*`, `1.`/`1)`) so they stay separate lists on reparse instead of merging (which would renumber ordered items or spread task checkboxes).
+  Source-preserving output reads the actual markers of its neighbours and can use `+` for a new bullet list between two different original markers.
 - **Declared defaults** — `None` and a value equal to a declared default are omitted at every strict level and are never materialized on read.
 - **Stored mark order** — core marks keep their given order, followed by declared marks in declaration order.
   A link that takes tag form follows the other core marks and precedes declared marks; a Markdown-form link keeps its given position.
