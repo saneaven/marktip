@@ -346,6 +346,14 @@ typedef struct MD_TYPED_TAG {
     int block_line;
 } MD_TYPED_TAG;
 
+/* MARKTIP LOCAL PATCH: Top-level source segments in physical source order.
+ * A definitions-only paragraph keeps its segment with has_block set to zero.
+ */
+typedef struct MD_SOURCE_SEGMENT {
+    MD_OFFSET beg;
+    int has_block;
+} MD_SOURCE_SEGMENT;
+
 /* Parser structure.
  */
 typedef struct MD_PARSER {
@@ -364,6 +372,12 @@ typedef struct MD_PARSER {
      */
     const MD_TYPED_TAG* typed_tags;
     unsigned n_typed_tags;
+
+    /* MARKTIP LOCAL PATCH: Called once after pass 1, before top-level child callbacks.
+     * The array is valid only during this callback; NULL disables recording.
+     * Return nonzero to abort parsing, as with the rendering callbacks.
+     */
+    int (*source_segments)(const MD_SOURCE_SEGMENT* segments, MD_SIZE count, void* userdata);
 
     /* Caller-provided rendering callbacks.
      *

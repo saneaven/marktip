@@ -248,6 +248,15 @@ struct MD_CTX_tag {
     int n_block_bytes;
     int alloc_block_bytes;
 
+    /* MARKTIP LOCAL PATCH: Bind each top-level segment to its block-buffer offset at creation.
+     * The offset survives reallocations and identifies a deleted reference paragraph even after a container push.
+     */
+    MD_SOURCE_SEGMENT* source_segments;
+    MD_SIZE n_source_segments;
+    MD_SIZE alloc_source_segments;
+    int source_block_byte_off;
+    OFF source_line_beg;
+
     /* For container block analysis. */
     MD_CONTAINER* containers;
     int n_containers;
@@ -5104,6 +5113,34 @@ md_push_block_bytes(MD_CTX* ctx, int n_bytes)
     return ptr;
 }
 
+/* MARKTIP LOCAL PATCH: Record the physical line start with the newly created top-level record. */
+static int
+md_add_source_segment(MD_CTX* ctx, int block_byte_off)
+{
+    MD_SOURCE_SEGMENT* segment;
+
+    if(ctx->parser.source_segments == NULL)
+        return 0;
+
+    if(ctx->n_source_segments == ctx->alloc_source_segments) {
+        MD_SIZE capacity = (ctx->alloc_source_segments > 0
+                ? ctx->alloc_source_segments + ctx->alloc_source_segments / 2 : 32);
+        MD_SOURCE_SEGMENT* segments = realloc(ctx->source_segments, capacity * sizeof(MD_SOURCE_SEGMENT));
+        if(segments == NULL) {
+            MD_LOG("realloc() failed.");
+            return -1;
+        }
+        ctx->source_segments = segments;
+        ctx->alloc_source_segments = capacity;
+    }
+
+    segment = &ctx->source_segments[ctx->n_source_segments++];
+    segment->beg = ctx->source_line_beg;
+    segment->has_block = TRUE;
+    ctx->source_block_byte_off = block_byte_off;
+    return 0;
+}
+
 static int
 md_start_new_block(MD_CTX* ctx, const MD_LINE_ANALYSIS* line)
 {
@@ -5151,6 +5188,9 @@ md_start_new_block(MD_CTX* ctx, const MD_LINE_ANALYSIS* line)
     block->n_lines = 0;
 
     ctx->current_block = block;
+    /* MARKTIP LOCAL PATCH: Leaf depth is still the pass-1 container depth at creation. */
+    if(ctx->n_containers == 0)
+        return md_add_source_segment(ctx, (int)((char*)block - (char*)ctx->block_bytes));
     return 0;
 }
 
@@ -5190,6 +5230,12 @@ md_consume_link_reference_definitions(MD_CTX* ctx)
      * its lines from the block, or perhaps even the whole block. */
     if(n > 0) {
         if(n == n_lines) {
+            /* MARKTIP LOCAL PATCH: Keep a top-level definitions-only segment in its source position.
+             * Container depth may already include incoming containers, so compare the bound record offset.
+             */
+            if(ctx->n_source_segments > 0  &&
+               (int)((char*)ctx->current_block - (char*)ctx->block_bytes) == ctx->source_block_byte_off)
+                ctx->source_segments[ctx->n_source_segments-1].has_block = FALSE;
             /* Remove complete block. */
             ctx->n_block_bytes -= n * sizeof(MD_LINE);
             ctx->n_block_bytes -= sizeof(MD_BLOCK);
@@ -5821,6 +5867,9 @@ md_enter_child_containers(MD_CTX* ctx, int n_children)
                 MD_CHECK(md_push_container_bytes(ctx,
                                 (is_ordered_list ? MD_BLOCK_OL : MD_BLOCK_UL),
                                 c->start, c->ch, MD_BLOCK_CONTAINER_OPENER));
+                /* MARKTIP LOCAL PATCH: i is the container depth before its push, including for nested marks on one line. */
+                if(i == 0)
+                    MD_CHECK(md_add_source_segment(ctx, c->block_byte_off));
                 MD_CHECK(md_push_container_bytes(ctx, MD_BLOCK_LI,
                                 c->task_mark_off,
                                 (c->is_task ? CH(c->task_mark_off) : 0),
@@ -5831,6 +5880,9 @@ md_enter_child_containers(MD_CTX* ctx, int n_children)
 
             case _T('>'):
                 MD_CHECK(md_push_container_bytes(ctx, MD_BLOCK_QUOTE, 0, 0, MD_BLOCK_CONTAINER_OPENER));
+                /* MARKTIP LOCAL PATCH: Bind the segment after finalizing the preceding leaf. */
+                if(i == 0)
+                    MD_CHECK(md_add_source_segment(ctx, ctx->n_block_bytes - sizeof(MD_BLOCK)));
                 break;
 
             default:
@@ -6525,6 +6577,8 @@ md_process_doc(MD_CTX *ctx)
         if(line == pivot_line)
             line = (line == &line_buf[0] ? &line_buf[1] : &line_buf[0]);
 
+        /* MARKTIP LOCAL PATCH: Only this pass retains the physical line start, before indentation and markers. */
+        ctx->source_line_beg = off;
         MD_CHECK(md_analyze_line(ctx, off, &off, pivot_line, line));
         MD_CHECK(md_process_line(ctx, &pivot_line, line));
     }
@@ -6535,6 +6589,12 @@ md_process_doc(MD_CTX *ctx)
 
     /* Process all blocks. */
     MD_CHECK(md_leave_child_containers(ctx, 0));
+    /* MARKTIP LOCAL PATCH: Deliver the complete list before pass 2 emits the corresponding root children. */
+    if(ctx->parser.source_segments != NULL) {
+        ret = ctx->parser.source_segments(ctx->source_segments, ctx->n_source_segments, ctx->userdata);
+        if(ret != 0)
+            goto abort;
+    }
     MD_CHECK(md_process_all_blocks(ctx));
 
     MD_LEAVE_BLOCK(MD_BLOCK_DOC, NULL);
@@ -6613,6 +6673,8 @@ md_parse(const MD_CHAR* text, MD_SIZE size, const MD_PARSER* parser, void* userd
     free(ctx.buffer);
     free(ctx.marks);
     free(ctx.block_bytes);
+    /* MARKTIP LOCAL PATCH: Source segment storage belongs to the parse context. */
+    free(ctx.source_segments);
     free(ctx.containers);
 
     return ret;

@@ -22,6 +22,11 @@ An upstream bump therefore has to re-check that `const ENTITY* entity_lookup(con
 
 ## Local patches (deviations from upstream)
 
+- Top-level source segments (md4c.h, md4c.c): `MD_PARSER::source_segments` receives one ordered `MD_SOURCE_SEGMENT` array after pass 1 and before pass 2's root-child callbacks.
+  Each segment starts at its opening physical line and is bound to the leaf or container record when created.
+  Definitions-only top-level paragraphs retain a segment with `has_block = 0` when their record is removed.
+  A null callback disables recording, and the callback array is valid only during the call.
+  Patched hunks use `MARKTIP LOCAL PATCH` comments; the vendored version remains 0.5.3.
 - Task markers after blockquotes (md4c.c): the checkbox test uses the incoming item's container,
   rather than the innermost old container that may still be a blockquote.
   This preserves the next sibling's checked state and removes its checkbox from the text.

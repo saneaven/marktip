@@ -9,6 +9,7 @@
 namespace marktip {
 
 pybind11::dict to_dict_py(const Document& document);
+pybind11::dict parse_segments_py(std::string markdown, bool html);
 
 // Requires the GIL.
 // Malformed option values are a caller bug rather than a malformed document,

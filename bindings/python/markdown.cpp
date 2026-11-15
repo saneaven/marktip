@@ -11,6 +11,26 @@ namespace py = pybind11;
 
 namespace marktip {
 
+py::dict parse_segments_py(std::string markdown, bool html) {
+    ParseObservation observation;
+    std::shared_ptr<const Schema> schema = schema_from_py(py::none());
+    {
+        py::gil_scoped_release release;
+        parse_to_document(std::move(markdown), false, html, std::move(schema), &observation);
+    }
+    py::list segments;
+    for (const ParseSegment& segment : observation.segments) {
+        py::dict item;
+        item["start"] = segment.start;
+        item["node"] = segment.root_child ? py::cast(*segment.root_child) : py::none();
+        segments.append(std::move(item));
+    }
+    py::dict result;
+    result["segments"] = std::move(segments);
+    result["root_child_count"] = observation.root_child_count;
+    return result;
+}
+
 Document from_markdown_py(py::object markdown, bool cjk_friendly, bool html, py::object link_schemes,
                           py::object image_schemes, py::object link_relative, py::object image_relative,
                           py::object reject_node_types, py::object schema) {

@@ -450,12 +450,27 @@ public:
         return error_code_;
     }
 
-    Document into_document() && {
+    int source_segments(const MD_SOURCE_SEGMENT* segments, MD_SIZE count) {
+        segments_.reserve(count);
+        std::size_t root_child = 0;
+        for (MD_SIZE i = 0; i < count; ++i) {
+            segments_.push_back({segments[i].beg,
+                                 segments[i].has_block ? std::optional<std::size_t>(root_child++) : std::nullopt});
+        }
+        return 0;
+    }
+
+    Document into_document(ParseObservation* observation) && {
+        if (observation != nullptr) {
+            observation->segments = std::move(segments_);
+            observation->root_child_count = document_.root().content.size();
+        }
         return std::move(document_);
     }
 
 private:
     Document document_;
+    std::vector<ParseSegment> segments_;
     std::vector<std::size_t> stack_;
     std::vector<Mark> active_marks_;
     std::vector<std::size_t> active_mark_depths_;
@@ -749,10 +764,14 @@ int text_callback(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* use
     return run_callback(userdata, [&](AstBuilder& builder) { return builder.text(type, text, size); });
 }
 
+int source_segments_callback(const MD_SOURCE_SEGMENT* segments, MD_SIZE count, void* userdata) noexcept {
+    return run_callback(userdata, [&](AstBuilder& builder) { return builder.source_segments(segments, count); });
+}
+
 }  // namespace
 
 Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
-                           std::shared_ptr<const Schema> schema) {
+                           std::shared_ptr<const Schema> schema, ParseObservation* observation) {
     replace_nul(markdown);
     std::vector<MD_TYPED_TAG> typed_tags;
     if (schema->has_tags()) {
@@ -766,6 +785,7 @@ Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
     parser.abi_version = 0;
     parser.typed_tags = typed_tags.data();
     parser.n_typed_tags = static_cast<unsigned>(typed_tags.size());
+    parser.source_segments = source_segments_callback;
     // With html=false, block-level raw HTML degrades to paragraph text via MD_FLAG_NOHTMLBLOCKS.
     // Inline HTML spans stay recognized (no MD_FLAG_NOHTMLSPANS),
     // so the <br>-in-cell hardBreak mapping keeps working.
@@ -787,7 +807,7 @@ Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
         }
         throw ParseError("parse_failed", "MD4C failed to parse markdown");
     }
-    Document document = std::move(builder).into_document();
+    Document document = std::move(builder).into_document(observation);
     if (document.schema().has_tags() || document.schema().block_image()) {
         lift(document, html);
     }

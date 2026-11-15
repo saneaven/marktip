@@ -200,6 +200,9 @@ PYBIND11_MODULE(_core, module) {
     module.doc() = "Fast MD4C-backed Markdown conversion with a C++ Document AST";
     module.attr("__version__") = MARKTIP_VERSION;
 
+    // Temporary internal observation until dump() exposes spelling in checkpoint 4.
+    module.def("_parse_segments", &marktip::parse_segments_py, py::arg("markdown"), py::arg("html") = true);
+
     // Every marktip error derives from MarktipError,
     // so a caller can express "the input is malformed" as a single except clause.
     // Each instance carries structured fields (.code, .path, .detail, plus subclass-specific ones),
