@@ -12,6 +12,7 @@
 #include "errors.h"
 #include "form.h"
 #include "path.h"
+#include "parser.h"
 #include "schema.h"
 #include "tags.h"
 #include "validate.h"
@@ -194,9 +195,8 @@ void check_lift_depth(std::size_t depth) {
 
 void complete_content(Document& document, std::size_t index, const NodeSpec& spec, PathStack& path);
 
-void build_containers(Document& document, std::size_t index, const NodeSpec& parent_spec,
-                       const std::vector<InlinePiece>& pieces, std::vector<std::size_t> content,
-                       PathStack& path);
+void build_containers(Document& document, InlineParent current, const std::vector<InlinePiece>& pieces,
+                       bool partial, PathStack& path);
 
 bool html_whitespace(std::string_view value) {
     return std::all_of(value.begin(), value.end(), [](char ch) {
@@ -250,7 +250,7 @@ AttrList decode_opening(const Document& document, std::size_t opening, const Nod
 
 // Block carriers are siblings before they are containers, so pair them before descending into their children.
 MARKTIP_NOINLINE void process_blocks(Document& document, std::size_t index, const NodeSpec& parent_spec,
-                                     PathStack& path, std::size_t& paired_from) {
+                                     bool partial, PathStack& path, std::size_t& paired_from) {
     std::vector<std::size_t> original = std::move(document.node(index).content);
     std::vector<InlinePiece> pieces;
     pieces.reserve(original.size());
@@ -345,7 +345,7 @@ MARKTIP_NOINLINE void process_blocks(Document& document, std::size_t index, cons
                                                               : InlinePieceKind::OpenContainer;
         pieces.push_back({kind, node_index, &spec, spec.core ? std::optional<std::size_t>(child) : std::nullopt});
     }
-    build_containers(document, index, parent_spec, pieces, std::move(original), path);
+    build_containers(document, {index, &parent_spec, std::move(original)}, pieces, partial, path);
     // A container written as tag lines is one piece from its opening tag line through its closing one.
     if (index == 0 && document.spelling()) {
         Spelling& spelling = *document.spelling();
@@ -376,16 +376,20 @@ MARKTIP_NOINLINE void process_blocks(Document& document, std::size_t index, cons
                 }
             }
         }
+        if (depth != 0) {
+            merged.back().text->end = spelling.items.back().text->end;
+            merged.back().gap = spelling.items.back().gap;
+        }
         spelling.items = std::move(merged);
     }
 }
 
 const NodeSpec& peel_textblock(Document& document, std::size_t index, const NodeSpec& parent_spec,
-                               const PathStack& path) {
+                               bool partial, const PathStack& path) {
     const std::vector<std::size_t>& content = document.node(index).content;
     if (parent_spec.name != "paragraph" || content.empty() ||
         document.node(content.front()).type != "htmlInline" ||
-        document.node(content.back()).type != "htmlInline") {
+        (!partial && document.node(content.back()).type != "htmlInline")) {
         return parent_spec;
     }
     std::size_t first = content.front();
@@ -395,14 +399,20 @@ const NodeSpec& peel_textblock(Document& document, std::size_t index, const Node
     std::vector<HtmlConstruct> first_tokens = tokenize_html(first_payload);
     std::vector<HtmlConstruct> last_tokens = tokenize_html(last_payload);
     const HtmlConstruct& opening = first_tokens.front();
-    const HtmlConstruct& closing = last_tokens.back();
     const TagEntry* tag = document.schema().tag(opening.name);
     if (tag == nullptr || tag->is_mark || document.schema().node(tag->spec).shape != Shape::TextBlock ||
-        opening.closing || opening.self_closing || !closing.closing || closing.self_closing ||
-        closing.name != opening.name || opening.raw.data() != first_payload.data() ||
-        closing.raw.data() + closing.raw.size() != last_payload.data() + last_payload.size()) {
+        opening.closing || opening.self_closing || opening.raw.data() != first_payload.data()) {
         return parent_spec;
     }
+    bool closed = document.node(last).type == "htmlInline" &&
+                  last_tokens.back().closing && !last_tokens.back().self_closing &&
+                  last_tokens.back().name == opening.name &&
+                  last_tokens.back().raw.data() + last_tokens.back().raw.size() ==
+                      last_payload.data() + last_payload.size();
+    if (!closed && !partial) {
+        return parent_spec;
+    }
+    std::size_t closing_size = closed ? last_tokens.back().raw.size() : 0;
     const NodeSpec& spec = document.schema().node(tag->spec);
     AttrList attrs = decode_tag_attrs(opening, spec.attrs, spec.name, "node", path);
     if (spec.name == "heading") {
@@ -411,13 +421,15 @@ const NodeSpec& peel_textblock(Document& document, std::size_t index, const Node
     document.node(index).type = spec.name;
     document.node(index).attrs = std::move(attrs);
     if (first == last) {
-        std::size_t length = first_payload.size() - opening.raw.size() - closing.raw.size();
+        std::size_t length = first_payload.size() - opening.raw.size() - closing_size;
         set_attr(document.node(first).attrs, "html",
                  AttrValue::string(first_payload.substr(opening.raw.size(), length)));
     } else {
         set_attr(document.node(first).attrs, "html", AttrValue::string(first_payload.substr(opening.raw.size())));
-        set_attr(document.node(last).attrs, "html",
-                 AttrValue::string(last_payload.substr(0, last_payload.size() - closing.raw.size())));
+        if (closed) {
+            set_attr(document.node(last).attrs, "html",
+                     AttrValue::string(last_payload.substr(0, last_payload.size() - closing_size)));
+        }
     }
     return spec;
 }
@@ -457,12 +469,24 @@ void finish_parent(Document& document, InlineParent& parent, PathStack& path, st
     }
 }
 
-void build_containers(Document& document, std::size_t index, const NodeSpec& parent_spec,
-                       const std::vector<InlinePiece>& pieces, std::vector<std::size_t> content,
-                       PathStack& path) {
+void close_container(Document& document, InlineParent& current, std::vector<InlineParent>& parents,
+                       PathStack& path, std::size_t parent_depth) {
+    std::size_t node = current.node;
+    finish_parent(document, current, path, parent_depth);
+    const NodeSpec* spec = current.spec;
+    current = std::move(parents.back());
+    parents.pop_back();
+    if (current.spec->dfa < 0) {
+        current.placed.push_back({spec, current.content.size()});
+    }
+    append_inline(document, current.content, node);
+    path.pop_back();
+}
+
+void build_containers(Document& document, InlineParent current, const std::vector<InlinePiece>& pieces,
+                       bool partial, PathStack& path) {
     // Reuse the parsed child storage instead of allocating another list for the inline parent.
-    content.clear();
-    InlineParent current {index, &parent_spec, std::move(content)};
+    current.content.clear();
     std::vector<InlineParent> parents;
     std::size_t parent_depth = path.size();
     for (const InlinePiece& piece : pieces) {
@@ -471,16 +495,7 @@ void build_containers(Document& document, std::size_t index, const NodeSpec& par
                 path.resize(parent_depth);
                 invalid_tag("closing tag '</" + piece.spec->tag + ">' has no matching opening container", path);
             }
-            std::size_t node = current.node;
-            finish_parent(document, current, path, parent_depth);
-            const NodeSpec* spec = current.spec;
-            current = std::move(parents.back());
-            parents.pop_back();
-            if (current.spec->dfa < 0) {
-                current.placed.push_back({spec, current.content.size()});
-            }
-            append_inline(document, current.content, node);
-            path.pop_back();
+            close_container(document, current, parents, path, parent_depth);
             continue;
         }
 
@@ -500,19 +515,24 @@ void build_containers(Document& document, std::size_t index, const NodeSpec& par
         append_inline(document, current.content, piece.node);
     }
     if (!parents.empty()) {
-        const NodeSpec& opening = *(parents.size() == 1 ? current.spec : parents[1].spec);
-        path.resize(parent_depth);
-        invalid_tag("opening tag '<" + opening.tag + ">' has no matching closing container", path);
+        if (!partial) {
+            const NodeSpec& opening = *(parents.size() == 1 ? current.spec : parents[1].spec);
+            path.resize(parent_depth);
+            invalid_tag("opening tag '<" + opening.tag + ">' has no matching closing container", path);
+        }
+        do {
+            close_container(document, current, parents, path, parent_depth);
+        } while (!parents.empty());
     }
     finish_parent(document, current, path, parent_depth);
 }
 
 // Clang otherwise inlines this state into lift_node, exhausting small worker stacks on deep documents.
 MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t index, const NodeSpec& parent_spec,
-                                               bool html, PathStack& path) {
+                                               const ParseOptions& options, PathStack& path) {
     const Schema& schema = document.schema();
     const NodeSpec& content_spec = schema.has_textblock_tags()
-                                      ? peel_textblock(document, index, parent_spec, path)
+                                      ? peel_textblock(document, index, parent_spec, options.partial, path)
                                       : parent_spec;
     std::vector<std::size_t> original = std::move(document.node(index).content);
     std::vector<InlinePiece> pieces;
@@ -555,7 +575,7 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
                 raw.append(token.raw.data(), token.raw.size());
                 continue;
             }
-            append_raw(document, pieces, std::move(raw), core, effective, html, path);
+            append_raw(document, pieces, std::move(raw), core, effective, options.html, path);
             raw.clear();
 
             if (!tag->is_mark) {
@@ -635,14 +655,14 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
                 }
             }
         }
-        append_raw(document, pieces, std::move(raw), core, effective, html, path);
+        append_raw(document, pieces, std::move(raw), core, effective, options.html, path);
     }
-    if (!open.empty()) {
+    if (!open.empty() && !options.partial) {
         invalid_tag("opening tag '<" + open.front().spec->tag + ">' has no matching closing tag", path);
     }
     // Mark pairs are resolved over the flat sequence before containers add structure.
     // Heap-backed parent frames also let excessive tag nesting fail before recursive traversal.
-    build_containers(document, index, content_spec, pieces, std::move(original), path);
+    build_containers(document, {index, &content_spec, std::move(original)}, pieces, options.partial, path);
     if (block_image && content_spec.name != "paragraph") {
         for (std::size_t position = 0; position < document.node(index).content.size(); ++position) {
             const Node& child = document.node(document.node(index).content[position]);
@@ -781,23 +801,23 @@ MARKTIP_NOINLINE void split_block_images(Document& document, std::size_t index, 
     document.node(index).content = std::move(children);
 }
 
-const NodeSpec& lift_node(Document& document, std::size_t index, bool html, bool block_forms, PathStack& path,
-                          std::size_t& paired_from) {
+const NodeSpec& lift_node(Document& document, std::size_t index, const ParseOptions& options, bool block_forms,
+                          PathStack& path, std::size_t& paired_from) {
     if (block_forms) {
         check_lift_depth(path.size());
     }
     const NodeSpec& spec = *document.schema().node(document.node(index).type);
     if (spec.allow == ContentModel::Inlines) {
-        return process_inline(document, index, spec, html, path);
+        return process_inline(document, index, spec, options, path);
     }
     // Appended core containers were paired already; parser-built nodes have lower arena indices.
     if (block_forms && spec.core && spec.allow == ContentModel::Blocks && index < paired_from) {
-        process_blocks(document, index, spec, path, paired_from);
+        process_blocks(document, index, spec, options.partial, path, paired_from);
     }
     for (std::size_t i = 0; i < document.node(index).content.size(); ++i) {
         path.push_back({"content", i});
         std::size_t child = document.node(index).content[i];
-        const NodeSpec& child_spec = lift_node(document, child, html, block_forms, path, paired_from);
+        const NodeSpec& child_spec = lift_node(document, child, options, block_forms, path, paired_from);
         if (!child_spec.core && child_spec.shape == Shape::TextBlock) {
             check_child_content(document, spec, child_spec, document.node(child),
                                 document.node(index).content.size(), path);
@@ -946,13 +966,13 @@ void complete_content(Document& document, std::size_t index, const NodeSpec& spe
 
 }  // namespace
 
-void lift(Document& document, bool html) {
+void lift(Document& document, const ParseOptions& options) {
     PathStack path;
     path.reserve(32);
     bool block_forms = std::any_of(document.schema().tags().begin(), document.schema().tags().end(),
                                     [](const TagEntry& tag) { return tag.block_line; });
     std::size_t paired_from = std::numeric_limits<std::size_t>::max();
-    lift_node(document, 0, html, block_forms, path, paired_from);
+    lift_node(document, 0, options, block_forms, path, paired_from);
 }
 
 }  // namespace marktip

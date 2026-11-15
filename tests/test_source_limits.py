@@ -60,6 +60,23 @@ def test_a_new_block_after_unclosed_source_can_be_absorbed(source, expected_type
     assert "added" in json.dumps(reread)
 
 
+def test_open_declared_source_needs_partial_to_read_back_after_appending():
+    schema = tm.Schema(nodes=[tm.NodeSpec("callout", "block", content="block+")])
+    base = tm.from_markdown("<callout>\n\nbody", schema=schema, partial=True)
+    submitted = base.to_dict()
+    submitted["content"].append(paragraph("added"))
+    document = tm.from_dict(submitted, schema=schema, base=base)
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_markdown(document.to_markdown(), schema=schema)
+    assert excinfo.value.code == "invalid_tag"
+    assert tm.from_markdown(document.to_markdown(), schema=schema, partial=True).to_dict() == {
+        "type": "doc", "content": [
+            {"type": "callout", "content": [paragraph("body"), paragraph("added")]},
+        ],
+    }
+    assert tm.from_markdown(document.to_markdown(canonical=True), schema=schema).to_dict() == document.to_dict()
+
+
 @pytest.mark.parametrize("action", ("move", "delete_separator"))
 def test_original_indentation_after_a_list_can_be_absorbed(action):
     base = tm.from_markdown("- item\n\nseparator\n\n  paragraph\n")

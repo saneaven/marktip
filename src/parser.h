@@ -6,7 +6,14 @@
 
 namespace marktip {
 
-Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
+struct ParseOptions {
+    bool cjk_friendly = false;
+    bool html = true;
+    bool partial = false;
+    bool keep_source = true;
+};
+
+Document parse_to_document(std::string markdown, const ParseOptions& options,
                            std::shared_ptr<const Schema> schema);
 
 }  // namespace marktip

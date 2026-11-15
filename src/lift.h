@@ -3,7 +3,8 @@
 namespace marktip {
 
 class Document;
+struct ParseOptions;
 
-void lift(Document& document, bool html);
+void lift(Document& document, const ParseOptions& options);
 
 }  // namespace marktip

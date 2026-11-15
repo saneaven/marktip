@@ -170,14 +170,19 @@ std::string align_to_string(MD_ALIGN align) {
 
 class AstBuilder {
 public:
-    AstBuilder(std::string markdown, bool html, std::shared_ptr<const Schema> schema)
+    AstBuilder(std::string& markdown, bool html, bool keep_source, std::shared_ptr<const Schema> schema)
         : document_(std::move(schema), std::max<std::size_t>(32, markdown.size() / 24)), html_(html) {
-        document_.spelling().emplace(std::move(markdown));
+        if (keep_source) {
+            document_.spelling().emplace(std::move(markdown));
+            source_ = *document_.spelling()->source;
+        } else {
+            source_ = markdown;
+        }
         stack_.push_back(0);
     }
 
     std::string_view source() const {
-        return *document_.spelling()->source;
+        return source_;
     }
 
     int enter_block(MD_BLOCKTYPE type, void* detail) {
@@ -472,6 +477,7 @@ public:
 
 private:
     Document document_;
+    std::string_view source_;
     std::vector<std::size_t> stack_;
     std::vector<Mark> active_marks_;
     std::vector<std::size_t> active_mark_depths_;
@@ -771,7 +777,7 @@ int source_segments_callback(const MD_SOURCE_SEGMENT* segments, MD_SIZE count, v
 
 }  // namespace
 
-Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
+Document parse_to_document(std::string markdown, const ParseOptions& options,
                            std::shared_ptr<const Schema> schema) {
     replace_nul(markdown);
     std::vector<MD_TYPED_TAG> typed_tags;
@@ -781,18 +787,18 @@ Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
         }
     }
     unsigned math_flag = schema->has_math() ? MD_FLAG_LATEXMATHSPANS : 0;
-    AstBuilder builder(std::move(markdown), html, std::move(schema));
+    AstBuilder builder(markdown, options.html, options.keep_source, std::move(schema));
     MD_PARSER parser {};
     parser.abi_version = 0;
     parser.typed_tags = typed_tags.data();
     parser.n_typed_tags = static_cast<unsigned>(typed_tags.size());
-    parser.source_segments = source_segments_callback;
+    parser.source_segments = options.keep_source ? source_segments_callback : nullptr;
     // With html=false, block-level raw HTML degrades to paragraph text via MD_FLAG_NOHTMLBLOCKS.
     // Inline HTML spans stay recognized (no MD_FLAG_NOHTMLSPANS),
     // so the <br>-in-cell hardBreak mapping keeps working.
     // AstBuilder handles literal conversion without declared tags; lift handles it otherwise.
-    parser.flags = MD_DIALECT_GITHUB | (cjk_friendly ? MD_FLAG_CJKFRIENDLYEMPHASIS : 0) |
-                   (html ? 0 : MD_FLAG_NOHTMLBLOCKS) | math_flag;
+    parser.flags = MD_DIALECT_GITHUB | (options.cjk_friendly ? MD_FLAG_CJKFRIENDLYEMPHASIS : 0) |
+                   (options.html ? 0 : MD_FLAG_NOHTMLBLOCKS) | math_flag;
     parser.enter_block = enter_block_callback;
     parser.leave_block = leave_block_callback;
     parser.enter_span = enter_span_callback;
@@ -811,7 +817,7 @@ Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
     }
     Document document = std::move(builder).into_document();
     if (document.schema().has_tags() || document.schema().block_image()) {
-        lift(document, html);
+        lift(document, options);
     }
     return document;
 }

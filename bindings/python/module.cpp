@@ -314,7 +314,12 @@ PYBIND11_MODULE(_core, module) {
         " (non-standard extension; the default follows GFM/CommonMark exactly)."
         " Set html=False to parse raw HTML as literal text instead of htmlBlock/htmlInline nodes;"
         " <br> inside table cells still maps to hardBreak."
-        " Declared tags are recognized even when html=False." +
+        " Declared tags are recognized even when html=False."
+        " Set partial=True to read open declared tags as closed where their parent ends;"
+        " unmatched closing tags, invalid attrs and content-model violations still raise errors."
+        " Set keep_source=False to skip source spelling;"
+        " to_markdown() then writes canonical Markdown and dump() omits source."
+        " These keyword-only options default to partial=False and keep_source=True and are independent." +
         uri_policy_doc + node_policy_doc;
     // strict has no from_markdown counterpart on purpose: the parser only ever emits
     // declared fields, valid content relationships and attrs it understands.
@@ -355,7 +360,7 @@ PYBIND11_MODULE(_core, module) {
                py::arg("html") = true, py::kw_only(), py::arg("link_schemes") = py::none(),
                py::arg("image_schemes") = py::none(), py::arg("link_relative") = "allow",
                py::arg("image_relative") = "allow", py::arg("reject_node_types") = py::none(),
-               py::arg("schema") = py::none(),
+               py::arg("schema") = py::none(), py::arg("partial") = false, py::arg("keep_source") = true,
                from_markdown_doc.c_str());
     module.def("from_dict", &marktip::from_dict_py, py::arg("ast"), py::kw_only(),
                py::arg("link_schemes") = py::none(), py::arg("image_schemes") = py::none(),

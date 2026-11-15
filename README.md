@@ -50,8 +50,18 @@ doc = tm.from_markdown("a <u>x</u> b", html=False)
 # paragraph with the literal text "a <u>x</u> b"
 ```
 
-Parsed documents remember source spelling at the top level.
+Pass `partial=True` to read an open declared tag as closed where its parent ends.
+The resulting tree is the same as if its closing tag were there, including the usual completion of missing content.
+Closing tags without an opening tag, attr errors inside complete tags, and content-model violations still raise errors.
+`partial` is keyword-only and defaults to `False`.
+Incomplete tags such as `<callout tone="no`, `</call`, and `<mention id="1"` are read as text even with `partial=True`, like `**bo`.
+Where that text does not fit its parent's content model, the input raises `invalid_content` until the tag is complete; this affects tag-form tables and lists and containers with narrow content models.
+
+Parsed documents remember source spelling at the top level by default.
 `to_markdown()` returns the remembered text of unchanged blocks, while `to_markdown(canonical=True)` writes the whole document in marktip's spelling.
+Pass `keep_source=False` to skip remembering source spelling without changing the node tree.
+Then `to_markdown()` equals `to_markdown(canonical=True)`, and `dump()` has no `source` field.
+`keep_source` is keyword-only and defaults to `True`; it is independent of `partial`.
 
 ### Remembering source spelling
 
@@ -70,7 +80,7 @@ edited = tm.from_dict(base.to_dict(), base=base)
 assert edited.to_markdown() == source
 ```
 
-`from_markdown` creates the spelling.
+`from_markdown` creates the spelling unless `keep_source=False`.
 `from_dict(editor_json, base=stored_document)` borrows it for matching blocks, and `load` restores it from stored data.
 `from_dict` without a base has no spelling and writes the same canonical Markdown as before.
 A base without spelling lends no text or gaps.
@@ -171,6 +181,8 @@ The frontend can render the stored `doc` without running marktip.
   When a list, table, quote, or declared container needs rewriting, that whole block is written again and its internal source spelling is lost.
 - When identical blocks occur together and one is deleted, which original spelling the survivor inherits is unspecified.
 - Adding a block after an original unclosed code fence or an HTML block such as an unclosed `<script>` can put the added block inside it on readback.
+- The remembered text of a document read with `partial=True` can contain open declared tags.
+  That text needs `partial=True` to be read again; `to_markdown(canonical=True)` writes the closing tags.
 - An original block beginning with spaces can be absorbed into a list if it is moved directly after that list or if the block between them is deleted; two original indented code blocks that become neighbours after deletion or movement can read back as one code block.
 - Reference definitions inside a quote, list, or the start of a paragraph disappear when that containing block is rewritten.
   Other unchanged blocks using those definitions can then re-read their reference links as literal text.

@@ -13,7 +13,7 @@ namespace marktip {
 
 Document from_markdown_py(py::object markdown, bool cjk_friendly, bool html, py::object link_schemes,
                           py::object image_schemes, py::object link_relative, py::object image_relative,
-                          py::object reject_node_types, py::object schema) {
+                          py::object reject_node_types, py::object schema, bool partial, bool keep_source) {
     std::string input;
     if (py::isinstance<py::str>(markdown) || py::isinstance<py::bytes>(markdown)) {
         input = py::cast<std::string>(markdown);
@@ -34,7 +34,8 @@ Document from_markdown_py(py::object markdown, bool cjk_friendly, bool html, py:
         // After the assignment, not before:
         // parse_to_document replaces the whole Document,
         // so anything checked earlier would be thrown away.
-        document = parse_to_document(std::move(input), cjk_friendly, html, std::move(selected_schema));
+        document = parse_to_document(std::move(input), {cjk_friendly, html, partial, keep_source},
+                                     std::move(selected_schema));
         finalize_document(document, node_policy, policy);
     }
     return document;
