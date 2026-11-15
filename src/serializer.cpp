@@ -275,7 +275,10 @@ enum class InlineContext { Default, TableCell, Heading };
 // consecutive same-family lists: "-" vs "*", "1. " vs "1) ".
 enum class ListFamily { None, Bullet, Ordered };
 
-enum class BlockKind { Paragraph, TextBlock, Inline, TagLine, Html, Blockquote, Table, Other };
+enum class BlockKind {
+    Paragraph, TextBlock, Inline, TagLine, Html, Blockquote, Table, Heading, FencedCode,
+    NonInterruptingList, Other
+};
 
 struct BlockPiece {
     BlockPiece(std::string&& text, BlockKind kind, ListFamily family)
@@ -572,6 +575,15 @@ private:
         if (type == "table") {
             return BlockKind::Table;
         }
+        if (type == "heading") {
+            return BlockKind::Heading;
+        }
+        if (type == "codeBlock") {
+            return BlockKind::FencedCode;
+        }
+        if (type == "orderedList" && attr_int(node.attrs, "start", 1) != 1) {
+            return BlockKind::NonInterruptingList;
+        }
         return BlockKind::Other;
     }
 
@@ -627,7 +639,7 @@ private:
             ListFamily family = list_family(child.type);
             int variant = (family != ListFamily::None && !pieces.empty() && pieces.back().family == family)
                               ? 1 - prev_variant : 0;
-            std::string rendered = render_block(child, indent, spec, variant);
+            std::string rendered = render_block(child, indent, spec, variant, InlineContext::Default, list_item);
             if (!list_item) {
                 rstrip_newlines(rendered);
             }
@@ -686,7 +698,7 @@ private:
     }
 
     std::string render_block(const Node& node, int indent, const NodeSpec* spec, int list_variant = 0,
-                             InlineContext ctx = InlineContext::Default) {
+                             InlineContext ctx = InlineContext::Default, bool list_item = false) {
         if (spec != nullptr) {
             return render_declared(node, *spec, indent, ctx);
         }
@@ -722,7 +734,8 @@ private:
             return add_indent(render_code_block(node), indent);
         }
         if (type == "horizontalRule") {
-            return add_indent("---", indent);
+            // Underscores cannot become a setext underline or combine with a bullet marker into one rule.
+            return add_indent(list_item ? "___" : "---", indent);
         }
         if (type == "table") {
             return add_indent(render_table(node), indent);
@@ -787,13 +800,18 @@ private:
         if (prev == BlockKind::TextBlock || next == BlockKind::TextBlock) {
             return true;
         }
-        if (prev == BlockKind::Html || (prev == BlockKind::Table && next == BlockKind::TagLine)) {
+        if (prev == BlockKind::Html ||
+            (prev == BlockKind::Table &&
+             (next == BlockKind::Heading || next == BlockKind::FencedCode || next == BlockKind::TagLine))) {
             return true;
         }
         if (prev == BlockKind::TagLine || next == BlockKind::TagLine) {
             return false;
         }
         if (next == BlockKind::Paragraph || next == BlockKind::Table || next == BlockKind::Html) {
+            return true;
+        }
+        if (prev == BlockKind::Paragraph && next == BlockKind::NonInterruptingList) {
             return true;
         }
         return prev == BlockKind::Blockquote && next == BlockKind::Blockquote;

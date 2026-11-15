@@ -612,6 +612,8 @@ The tag-boundary whitespace case reaches its stable form after the first write/r
   Missing required children can be filled on Markdown input, but extra empty paragraphs are not recovered.
 - **Task items** — continuation lines use the list marker's indent, without the checkbox width.
   A non-paragraph first block starts after a checkbox-only line; in a loose list that line reads as an empty leading paragraph, while in a tight list it does not.
+- **List-item block separation** — a heading, code fence or block-tag line after a table and a non-1 ordered sublist after a paragraph need a blank line to remain separate blocks.
+  These blank lines make a tight list loose; horizontal rules use underscores inside list items so they stay rules without loosening the list.
 - **Task-list tags** — an LI with `checked` is a task item, even when the value is false.
   A UL containing any task item becomes a task list and its unchecked items become unchecked task items; an empty UL becomes a bullet list.
   Each LI's attrs are decoded against its own checked-selected type before that list normalization.
