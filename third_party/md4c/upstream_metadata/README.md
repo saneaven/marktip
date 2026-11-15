@@ -22,6 +22,11 @@ An upstream bump therefore has to re-check that `const ENTITY* entity_lookup(con
 
 ## Local patches (deviations from upstream)
 
+- Initial list-item blank lines (md4c.c): backported only this rule's handling from [upstream master f9e5eb232b95b737373ae706648cb75bd259ed1a](https://github.com/mity/md4c/blob/f9e5eb232b95b737373ae706648cb75bd259ed1a/src/md4c.c).
+  The container records its LI opener's end and whether it has held content,
+  and line analysis counts consecutive blank lines instead of reading the last block-buffer bytes as a header.
+  This keeps a block following a fenced code block inside its list item.
+  Patched hunks use `MARKTIP LOCAL PATCH` comments; the vendored version remains 0.5.3.
 - Declared tags (md4c.h, md4c.c): `MD_PARSER::typed_tags` and `n_typed_tags` supply `MD_TYPED_TAG` entries in lexicographic name order.
   Names are NUL-terminated ASCII, and each entry carries a `block_line` boolean for block atoms and containers.
   Opening and closing names match case-sensitively.

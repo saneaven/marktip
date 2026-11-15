@@ -260,7 +260,8 @@ struct MD_CTX_tag {
     SZ code_fence_length;   /* For checking closing fence length. */
     int html_block_type;    /* For checking closing raw HTML condition. */
     int last_line_has_list_loosening_effect;
-    int last_list_item_starts_with_two_blank_lines;
+    /* MARKTIP LOCAL PATCH: upstream blank-line counting, without reading leaf records as headers. */
+    int consecutive_blank_lines;
 };
 
 enum MD_LINETYPE_tag {
@@ -4776,6 +4777,9 @@ struct MD_CONTAINER_tag {
     unsigned mark_indent;
     unsigned contents_indent;
     OFF block_byte_off;
+    /* MARKTIP LOCAL PATCH: track the current LI opener and whether the item has held content. */
+    int li_block_byte_end;
+    unsigned li_has_content : 1;
     OFF task_mark_off;
 };
 
@@ -5821,6 +5825,8 @@ md_enter_child_containers(MD_CTX* ctx, int n_children)
                                 c->task_mark_off,
                                 (c->is_task ? CH(c->task_mark_off) : 0),
                                 MD_BLOCK_CONTAINER_OPENER));
+                /* MARKTIP LOCAL PATCH: upstream's end position of the LI opener. */
+                c->li_block_byte_end = ctx->n_block_bytes;
                 break;
 
             case _T('>'):
@@ -6086,58 +6092,31 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
                 ctx->last_line_has_list_loosening_effect = FALSE;
             } else {
                 line->type = MD_LINE_BLANK;
+                /* MARKTIP LOCAL PATCH: count the initial blank lines as upstream master does. */
+                ctx->consecutive_blank_lines++;
                 ctx->last_line_has_list_loosening_effect = (n_parents > 0  &&
                         n_brothers + n_children == 0  &&
                         ctx->containers[n_parents-1].ch != _T('>'));
 
-    #if 1
-                /* See https://github.com/mity/md4c/issues/6
-                 *
-                 * This ugly checking tests we are in (yet empty) list item but
-                 * not its very first line (i.e. not the line with the list
-                 * item mark).
-                 *
-                 * If we are such a blank line, then any following non-blank
-                 * line which would be part of the list item actually has to
-                 * end the list because according to the specification, "a list
-                 * item can begin with at most one blank line."
-                 */
-                if(n_parents > 0  &&  ctx->containers[n_parents-1].ch != _T('>')  &&
-                   n_brothers + n_children == 0  &&  ctx->current_block == NULL  &&
-                   ctx->n_block_bytes > (int) sizeof(MD_BLOCK))
-                {
-                    MD_BLOCK* top_block = (MD_BLOCK*) ((char*)ctx->block_bytes + ctx->n_block_bytes - sizeof(MD_BLOCK));
-                    if(top_block->type == MD_BLOCK_LI)
-                        ctx->last_list_item_starts_with_two_blank_lines = TRUE;
-                }
-    #endif
             }
             break;
         } else {
-    #if 1
-            /* This is the 2nd half of the hack. If the flag is set (i.e. there
-             * was a 2nd blank line at the beginning of the list item) and if
-             * we would otherwise still belong to the list item, we enforce
-             * the end of the list. */
-            if(ctx->last_list_item_starts_with_two_blank_lines) {
+            /* MARKTIP LOCAL PATCH: upstream master's handling of CommonMark's initial-blank-line limit.
+             * See https://github.com/mity/md4c/issues/6.
+             */
+            if(ctx->consecutive_blank_lines >= 2) {
                 if(n_parents > 0  &&  n_parents == ctx->n_containers  &&
                    ctx->containers[n_parents-1].ch != _T('>')  &&
                    n_brothers + n_children == 0  &&  ctx->current_block == NULL  &&
-                   ctx->n_block_bytes > (int) sizeof(MD_BLOCK))
+                   ctx->n_block_bytes == ctx->containers[n_parents-1].li_block_byte_end  &&
+                   !ctx->containers[n_parents-1].li_has_content)
                 {
-                    MD_BLOCK* top_block = (MD_BLOCK*) ((char*)ctx->block_bytes + ctx->n_block_bytes - sizeof(MD_BLOCK));
-                    if(top_block->type == MD_BLOCK_LI) {
-                        n_parents--;
-
-                        line->indent = total_indent;
-                        if(n_parents > 0)
-                            line->indent -= MIN(line->indent, ctx->containers[n_parents-1].contents_indent);
-                    }
+                    line->indent += ctx->containers[n_parents-1].contents_indent;
+                    n_parents--;
                 }
-
-                ctx->last_list_item_starts_with_two_blank_lines = FALSE;
             }
-    #endif
+            ctx->consecutive_blank_lines = 0;
+
             ctx->last_line_has_list_loosening_effect = FALSE;
         }
 
@@ -6436,12 +6415,20 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
                     container.task_mark_off,
                     (container.is_task ? CH(container.task_mark_off) : 0),
                     MD_BLOCK_CONTAINER_OPENER));
+        /* MARKTIP LOCAL PATCH: upstream resets the blank-line state for the new item. */
+        ctx->containers[n_parents].li_block_byte_end = ctx->n_block_bytes;
+        ctx->containers[n_parents].li_has_content = FALSE;
         ctx->containers[n_parents].is_task = container.is_task;
         ctx->containers[n_parents].task_mark_off = container.task_mark_off;
     }
 
     if(n_children > 0)
         MD_CHECK(md_enter_child_containers(ctx, n_children));
+
+    /* MARKTIP LOCAL PATCH: upstream preserves content removed as reference definitions. */
+    if(line->type != MD_LINE_BLANK  &&  line->beg < line->end  &&
+       ctx->n_containers > 0  &&  ctx->containers[ctx->n_containers-1].ch != _T('>'))
+        ctx->containers[ctx->n_containers-1].li_has_content = TRUE;
 
 abort:
     return ret;
