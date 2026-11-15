@@ -34,16 +34,7 @@ struct NodeTypePolicy {
     std::vector<std::string> rejected;
 };
 
-// Rejects ASCII control characters in link href, image src, and declared URI attrs unconditionally,
-// then enforces `policy` on top.
-// Reads nothing but Node/Mark, which hold no pybind11 objects,
-// so this is safe to call with the GIL released (from_markdown does).
-void enforce_uri_policy(const Document& document, const UriPolicy& policy);
-
-// Rejects any node whose type appears in `policy`, with a path into the built
-// document. Plain C++ data only, so from_markdown may call it with the GIL
-// released.
-void enforce_node_type_policy(const Document& document, const NodeTypePolicy& policy);
+// Applies node-type and URI policies before ordering marks, preserving the input positions in policy errors.
 void finalize_document(Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy);
 
 RelativePolicy relative_policy_from_string(std::string_view value, const char* arg_name);

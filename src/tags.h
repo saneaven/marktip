@@ -24,6 +24,11 @@ struct HtmlConstruct {
     std::vector<HtmlAttr> attrs = {};
 };
 
+bool tag_name_start(char ch);
+bool tag_name_char(char ch);
+bool attr_name_start(char ch);
+bool attr_name_char(char ch);
+
 std::vector<HtmlConstruct> tokenize_html(std::string_view html);
 bool contains_declared_tag(std::string_view html, const Schema& schema);
 bool starts_declared_tag(std::string_view html, const Schema& schema);

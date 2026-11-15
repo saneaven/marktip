@@ -176,9 +176,9 @@ MARKTIP_NOINLINE void check_uri_attr(const AttrList& attrs, const char* key, con
 template <typename DescribeOwner>
 void enforce_declared_uri(const std::vector<AttrSpec>& specs, const AttrList& attrs,
                           const DescribeOwner& describe_owner, const UriPolicy& policy, const PathStack& path,
-                          bool overlays_only) {
+                          bool core) {
     for (const AttrSpec& attr : specs) {
-        if (attr.uri == UriKind::None || (overlays_only && attr.form != MarkdownForm::Tag)) {
+        if (!is_declared_uri_attr(attr, core)) {
             continue;
         }
         const UriRule& rule = attr.uri == UriKind::Link ? policy.link : policy.image;
@@ -206,10 +206,10 @@ void enforce_declared_node_uri(const Node& node, const Schema& schema, const Uri
 // Keep node/mark URI checking out of enforce_node's recursive frame for the smaller Windows worker stack.
 MARKTIP_NOINLINE void enforce_fields_uri(const Node& node, const Schema& schema, const UriPolicy& policy,
                                         PathStack& path) {
-    if (schema.has_declared_nodes() || schema.has_core_attrs()) {
+    bool has_uri_attrs = schema.has_uri_attrs();
+    if (has_uri_attrs) {
         enforce_declared_node_uri(node, schema, policy, path);
     }
-    bool extended = schema.has_declared_marks();
     // Frame order mirrors fill_node_from_py — marks, then content —
     // so the same violation reports the same .path whichever entry point built the tree.
     for (std::size_t i = 0; i < node.marks.size(); ++i) {
@@ -221,7 +221,7 @@ MARKTIP_NOINLINE void enforce_fields_uri(const Node& node, const Schema& schema,
                 enforce_mark_uri(node.marks[i], schema, policy, path);
             }
             path.pop_back();
-        } else if (extended) {
+        } else if (has_uri_attrs) {
             path.push_back({"marks", i});
             enforce_mark_uri(node.marks[i], schema, policy, path);
             path.pop_back();
@@ -236,7 +236,7 @@ void enforce_node(const Document& document, std::size_t index, const UriPolicy& 
         check_uri_attr(node.attrs, "src", policy.image, [] { return std::string("image src"); }, path,
                        document.schema().has_core_attrs() && !document.schema().node("image")->tag.empty());
     }
-    if (!node.marks.empty() || document.schema().has_declared_nodes() || document.schema().has_core_attrs()) {
+    if (!node.marks.empty() || document.schema().has_uri_attrs()) {
         enforce_fields_uri(node, document.schema(), policy, path);
     }
 
@@ -299,6 +299,8 @@ void add_rejected_node_type(NodeTypePolicy& policy, std::string type, const Sche
     }
 }
 
+namespace {
+
 void enforce_uri_policy(const Document& document, const UriPolicy& policy) {
     PathStack path;
     path.reserve(32);
@@ -314,11 +316,13 @@ void enforce_node_type_policy(const Document& document, const NodeTypePolicy& po
     enforce_rejected_node_types(document, 0, policy, path);
 }
 
+}  // namespace
+
 void finalize_document(Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy) {
     enforce_node_type_policy(document, node_policy);
     enforce_uri_policy(document, uri_policy);
     // URI errors must retain the input mark indices, so marks are ordered after policy checks.
-    if (document.schema().has_declared_marks() || document.schema().has_core_attrs()) {
+    if (document.schema().has_declared_marks() || document.schema().has_link_tag()) {
         document.order_marks();
     }
 }

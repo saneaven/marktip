@@ -40,6 +40,7 @@ struct Mark {
 };
 
 std::string normalize_content_string(std::string value);
+std::optional<long long> parse_decimal_int(std::string_view value);
 std::optional<std::vector<long long>> parse_int_list(std::string_view value);
 
 void set_attr(AttrList& attrs, std::string key, AttrValue value);

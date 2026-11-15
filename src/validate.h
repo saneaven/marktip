@@ -51,6 +51,7 @@ const AttrSpec* check_attr_name(const std::vector<AttrSpec>& specs, const std::s
                                 const PathStack& path, bool tag_form = false);
 bool attr_reads_string(const AttrSpec& spec);
 bool attr_reads_int_list(const AttrSpec& spec);
+bool attr_stores_int_list(const std::vector<AttrSpec>& specs, std::string_view name);
 void check_attr_value(const AttrInput& value, const AttrSpec& spec, const PathStack& path);
 void check_required_attrs(const AttrList& attrs, const std::vector<AttrSpec>& specs,
                           std::string_view owner_type, const char* kind, const PathStack& path);

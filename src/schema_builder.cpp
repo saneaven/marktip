@@ -7,34 +7,23 @@
 #include <unordered_set>
 #include <utility>
 
+#include "tags.h"
+
 namespace marktip {
 namespace {
 
-bool ascii_letter(char value) {
-    return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
-}
-
-bool ascii_digit(char value) {
-    return value >= '0' && value <= '9';
-}
-
 bool tag_name(std::string_view name) {
-    if (name.empty() || !ascii_letter(name.front())) {
+    if (name.empty() || !tag_name_start(name.front())) {
         return false;
     }
-    return std::all_of(name.begin() + 1, name.end(), [](char value) {
-        return ascii_letter(value) || ascii_digit(value) || value == '-';
-    });
+    return std::all_of(name.begin() + 1, name.end(), tag_name_char);
 }
 
 bool attr_name(std::string_view name) {
-    auto initial = [](char value) { return ascii_letter(value) || value == '_' || value == ':'; };
-    if (name.empty() || !initial(name.front())) {
+    if (name.empty() || !attr_name_start(name.front())) {
         return false;
     }
-    return std::all_of(name.begin() + 1, name.end(), [&](char value) {
-        return initial(value) || ascii_digit(value) || value == '.' || value == '-';
-    });
+    return std::all_of(name.begin() + 1, name.end(), attr_name_char);
 }
 
 std::string ascii_lower(std::string value) {
@@ -216,8 +205,8 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
             merge_core_attrs(mark->attrs, mark->tag_attrs, declaration);
             mark->tag = "a";
             schema->link_tag_ = true;
-            schema->link_uri_ = std::any_of(mark->attrs.begin(), mark->attrs.end(), [](const AttrSpec& attr) {
-                return attr.form == MarkdownForm::Tag && attr.uri != UriKind::None;
+            schema->link_uri_ = std::any_of(mark->attrs.begin(), mark->attrs.end(), [&](const AttrSpec& attr) {
+                return is_declared_uri_attr(attr, mark->core);
             });
         } else if (declaration.type == "paragraph" || declaration.type == "heading" || declaration.type == "image" ||
                    declaration.type == "blockquote" || list_owner(declaration.type) || table_owner(declaration.type)) {
@@ -417,6 +406,7 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
             }
         }
     }
+    schema->declared_marks_ = !marks.empty();
     schema->declared_nodes_ = !nodes.empty();
     std::sort(schema->nodes_.begin(), schema->nodes_.end(),
               [](const NodeSpec& left, const NodeSpec& right) { return left.name < right.name; });
@@ -434,6 +424,10 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
             const NodeSpec& child = *schema->node(type);
             if (!child.implicit) {
                 continue;
+            }
+            if (node.implicit) {
+                throw std::invalid_argument("implicit node '" + node.name + "' must not contain implicit node '" +
+                                            type + "'");
             }
             if (!parent.required_once(type)) {
                 throw std::invalid_argument("implicit node '" + type + "' must occur exactly once without "
@@ -555,12 +549,22 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
               [](const MarkSpec& left, const MarkSpec& right) { return left.name < right.name; });
     for (std::size_t i = 0; i < schema->marks_.size(); ++i) {
         const MarkSpec& mark = schema->marks_[i];
+        schema->uri_attrs_ = schema->uri_attrs_ ||
+                             std::any_of(mark.attrs.begin(), mark.attrs.end(), [&](const AttrSpec& attr) {
+                                 return is_declared_uri_attr(attr, mark.core);
+                             });
         if (!mark.tag.empty()) {
             schema->tags_.push_back({mark.tag, true, false, i});
         }
     }
     for (std::size_t i = 0; i < schema->nodes_.size(); ++i) {
         const NodeSpec& node = schema->nodes_[i];
+        schema->uri_attrs_ = schema->uri_attrs_ ||
+                             std::any_of(node.attrs.begin(), node.attrs.end(), [&](const AttrSpec& attr) {
+                                 return is_declared_uri_attr(attr, node.core);
+                             });
+        schema->textblock_tags_ = schema->textblock_tags_ ||
+                                  (!node.tag.empty() && node.shape == Shape::TextBlock);
         if (!node.tag.empty() && !(node.core && (node.name == "taskList" || node.name == "taskItem"))) {
             if (node.name == "heading" && node.core) {
                 for (char level = '1'; level <= '6'; ++level) {

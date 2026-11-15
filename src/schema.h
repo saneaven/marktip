@@ -96,6 +96,8 @@ struct AttrSpec {
     UriKind uri = UriKind::None;
 };
 
+bool is_declared_uri_attr(const AttrSpec& attr, bool core);
+
 enum class Shape { InlineAtom, InlineContainer, BlockAtom, BlockContainer, TextBlock };
 enum class MathMode { None, Inline, Display };
 
@@ -161,6 +163,8 @@ public:
     bool has_core_attrs() const;
     bool has_link_tag() const;
     bool has_link_uri() const;
+    bool has_uri_attrs() const;
+    bool has_textblock_tags() const;
     bool has_list_tags() const;
     bool has_table_tags() const;
     bool has_inline_containers() const;
@@ -187,6 +191,7 @@ private:
     std::vector<std::optional<std::vector<std::string>>> minimum_;
     std::vector<std::string> creatable_;
     std::vector<TagEntry> tags_;
+    bool declared_marks_ = false;
     bool declared_nodes_ = false;
     bool core_attrs_ = false;
     bool inline_containers_ = false;
@@ -195,6 +200,8 @@ private:
     int display_math_ = -1;
     bool link_tag_ = false;
     bool link_uri_ = false;
+    bool uri_attrs_ = false;
+    bool textblock_tags_ = false;
     bool list_tags_ = false;
     bool table_tags_ = false;
 };

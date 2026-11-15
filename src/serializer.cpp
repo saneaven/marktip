@@ -238,7 +238,7 @@ std::string apply_marks(std::string rendered, const std::vector<Mark>& marks, co
         } else if (it->type == "code") {
             rendered = code_span(rendered);
         } else if (it->type == "link") {
-            if (schema.has_core_attrs() && uses_tag_form(*it, *schema.mark(it->type))) {
+            if (schema.has_link_tag() && uses_tag_form(*it, *schema.mark(it->type))) {
                 rendered = open_tag(schema, *it) + rendered + close_tag(schema, *it);
                 continue;
             }
@@ -275,7 +275,7 @@ enum class InlineContext { Default, TableCell, Heading };
 // consecutive same-family lists: "-" vs "*", "1. " vs "1) ".
 enum class ListFamily { None, Bullet, Ordered };
 
-enum class BlockKind { Paragraph, TextBlock, Inline, TagLine, Html, Blockquote, Table, List, Other };
+enum class BlockKind { Paragraph, TextBlock, Inline, TagLine, Html, Blockquote, Table, Other };
 
 struct BlockPiece {
     BlockPiece(std::string&& text, BlockKind kind, ListFamily family)
@@ -329,7 +329,7 @@ std::string open_delimiter(const Mark& mark, const Schema& schema) {
         return "~~";
     }
     if (mark.type == "link") {
-        if (schema.has_core_attrs() && uses_tag_form(mark, *schema.mark(mark.type))) {
+        if (schema.has_link_tag() && uses_tag_form(mark, *schema.mark(mark.type))) {
             return open_tag(schema, mark);
         }
         return "[";
@@ -348,7 +348,7 @@ std::string close_delimiter(const Mark& mark, const Schema& schema) {
         return "~~";
     }
     if (mark.type == "link") {
-        if (schema.has_core_attrs() && uses_tag_form(mark, *schema.mark(mark.type))) {
+        if (schema.has_link_tag() && uses_tag_form(mark, *schema.mark(mark.type))) {
             return close_tag(schema, mark);
         }
         std::string href = mark_attr_string(mark, "href");
@@ -445,7 +445,7 @@ class MarkdownWriter {
 public:
     explicit MarkdownWriter(const Document& document)
         : document_(document), schema_(document.schema()),
-          extended_(schema_.has_declared_marks() || schema_.has_core_attrs()),
+          extended_(schema_.has_declared_marks() || schema_.has_link_tag()),
           node_forms_(schema_.has_declared_nodes() || schema_.has_core_attrs()),
           inline_containers_(schema_.has_inline_containers()),
           math_(schema_.has_math()) {}
@@ -571,9 +571,6 @@ private:
         }
         if (type == "table") {
             return BlockKind::Table;
-        }
-        if (type == "bulletList" || type == "orderedList" || type == "taskList") {
-            return BlockKind::List;
         }
         return BlockKind::Other;
     }

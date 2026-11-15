@@ -82,7 +82,7 @@ void order_marks(std::vector<Mark>& marks, const Schema& schema) {
         if (left.core != right.core) {
             return left.core;
         }
-        if (left.core && schema.has_core_attrs()) {
+        if (left.core && schema.has_link_tag()) {
             // A tag link encloses the delimiter marks, so their original nesting order is not carried.
             return !uses_tag_form(a, left) && uses_tag_form(b, right);
         }

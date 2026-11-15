@@ -121,7 +121,7 @@ AttrList attrs_from_py(py::dict attrs, const std::vector<AttrSpec>& specs) {
         bool is_bool = py::isinstance<py::bool_>(value);
         bool is_int = !is_bool && py::isinstance<py::int_>(value);
         if (!is_bool && !is_int && !py::isinstance<py::str>(value)) {
-            if (py::isinstance<py::list>(value)) {
+            if (py::isinstance<py::list>(value) && attr_stores_int_list(specs, name)) {
                 auto numbers = int_list_from_py(py::reinterpret_borrow<py::list>(value));
                 if (numbers) {
                     store_attr(out, std::move(name), AttrValue::int_list(std::move(*numbers)), specs);

@@ -302,7 +302,8 @@ PYBIND11_MODULE(_core, module) {
     // pybind11 takes the doc as a bare const char* and only copies it while def() runs.
     const std::string from_markdown_doc =
         "Parse Markdown into a Document."
-        " Pass schema=Schema(...) to recognize declared tag marks and inline nodes;"
+        " Pass schema=Schema(...) to use declared marks and nodes, fence and math carriers,"
+        " and attrs added to core types through core_attrs;"
         " None (the default) uses the built-in GFM schema."
         " Declared tag attrs, mark sets and content expressions are validated while reading."
         " Malformed declared tags raise InvalidNodeError with .code 'invalid_tag' and a document path."
@@ -316,16 +317,17 @@ PYBIND11_MODULE(_core, module) {
     // declared fields, valid content relationships and attrs it understands.
     const std::string from_dict_doc =
         "Build a Document from a Tiptap-style JSON dict."
-        " Pass schema=Schema(...) to include declared marks and inline nodes;"
+        " Pass schema=Schema(...) to use declared marks and nodes, fence and math carriers,"
+        " and attrs added to core types through core_attrs;"
         " None (the default) uses the built-in GFM schema." +
         uri_policy_doc + node_policy_doc +
         " strict names what the conversion may not lose, rather than converting around everything:"
         " 'off' (the default) checks no attrs at all,"
         " 'content' keeps content and structure and drops presentation only,"
-        " 'exact' keeps every attr the JSON carries."
-        " The two differ over the attrs an editor stamps on that markdown has no form for"
-        " (link target/rel/class, image width/height, orderedList type, tableCell colwidth):"
-        " 'content' type-checks them and drops them, 'exact' refuses them."
+        " 'exact' keeps every attr the JSON carries, except declared defaults that mean unset."
+        " With the default schema, the two levels differ over presentation attrs."
+        " These are link target/rel/class, image width/height, orderedList type and tableCell colwidth."
+        " 'content' type-checks them and drops them; 'exact' refuses them."
         " Violations raise InvalidNodeError with .field set to the attr name and .code one of"
         " 'unknown_attr' (a name outside both dialects), 'invalid_attr_value' (wrong type or out of range),"
         " 'unrepresentable' (well-formed, but GFM cannot carry it, e.g. colspan=2)"

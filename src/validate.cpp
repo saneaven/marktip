@@ -228,6 +228,11 @@ bool attr_reads_int_list(const AttrSpec& spec) {
     return spec.rule == AttrRule::ColWidth;
 }
 
+bool attr_stores_int_list(const std::vector<AttrSpec>& specs, std::string_view name) {
+    const AttrSpec* spec = find_attr_spec(specs, name);
+    return spec != nullptr && spec->rule == AttrRule::ColWidth && spec->form != MarkdownForm::Dropped;
+}
+
 void check_attr_value(const AttrInput& value, const AttrSpec& spec, const PathStack& path) {
     auto expected = [&](const char* what) {
         throw InvalidNodeError("invalid_attr_value", spec.name, "attr '" + spec.name + "' must be " + what,
@@ -346,11 +351,10 @@ void check_required_attrs(const AttrList& attrs, const std::vector<AttrSpec>& sp
 }
 
 void store_attr(AttrList& attrs, std::string&& name, AttrValue&& value, const std::vector<AttrSpec>& specs) {
-    const AttrSpec* spec = find_attr_spec(specs, name);
-    if (value.kind == AttrValue::Kind::IntList &&
-        (spec == nullptr || spec->rule != AttrRule::ColWidth || spec->form == MarkdownForm::Dropped)) {
+    if (value.kind == AttrValue::Kind::IntList && !attr_stores_int_list(specs, name)) {
         return;
     }
+    const AttrSpec* spec = find_attr_spec(specs, name);
     if (value.kind == AttrValue::Kind::String && (spec == nullptr || spec->uri == UriKind::None)) {
         value.string_value = normalize_content_string(std::move(value.string_value));
     }

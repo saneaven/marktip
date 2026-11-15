@@ -61,6 +61,21 @@ AttrValue AttrValue::int_list(std::vector<long long> value) {
     return attr;
 }
 
+std::optional<long long> parse_decimal_int(std::string_view value) {
+    if (!value.empty() && value.front() == '+') {
+        value.remove_prefix(1);
+        if (value.empty() || value.front() < '0' || value.front() > '9') {
+            return std::nullopt;
+        }
+    }
+    long long number;
+    auto result = std::from_chars(value.data(), value.data() + value.size(), number);
+    if (result.ec != std::errc {} || result.ptr != value.data() + value.size()) {
+        return std::nullopt;
+    }
+    return number;
+}
+
 std::optional<std::vector<long long>> parse_int_list(std::string_view value) {
     std::vector<long long> numbers;
     if (value.empty()) {
@@ -69,19 +84,11 @@ std::optional<std::vector<long long>> parse_int_list(std::string_view value) {
     std::size_t begin = 0;
     while (true) {
         std::size_t end = value.find(',', begin);
-        std::string_view digits = value.substr(begin, end - begin);
-        if (!digits.empty() && digits.front() == '+') {
-            digits.remove_prefix(1);
-            if (digits.empty() || digits.front() < '0' || digits.front() > '9') {
-                return std::nullopt;
-            }
-        }
-        long long number;
-        auto result = std::from_chars(digits.data(), digits.data() + digits.size(), number);
-        if (result.ec != std::errc {} || result.ptr != digits.data() + digits.size()) {
+        std::optional<long long> number = parse_decimal_int(value.substr(begin, end - begin));
+        if (!number) {
             return std::nullopt;
         }
-        numbers.push_back(number);
+        numbers.push_back(*number);
         if (end == std::string_view::npos) {
             return numbers;
         }

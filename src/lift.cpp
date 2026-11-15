@@ -1,7 +1,6 @@
 #include "lift.h"
 
 #include <algorithm>
-#include <charconv>
 #include <limits>
 #include <string>
 #include <utility>
@@ -42,19 +41,8 @@ AttrInput decode_attr_input(const HtmlAttr& attr, const AttrSpec& spec) {
         return numbers ? AttrInput(std::move(*numbers)) : AttrInput(OtherValue {});
     }
 
-    std::string_view digits = value;
-    if (!digits.empty() && digits.front() == '+') {
-        digits.remove_prefix(1);
-        if (digits.empty() || !(digits.front() >= '0' && digits.front() <= '9')) {
-            return OtherValue {};
-        }
-    }
-    long long number;
-    auto result = std::from_chars(digits.data(), digits.data() + digits.size(), number);
-    if (result.ec != std::errc {} || result.ptr != digits.data() + digits.size()) {
-        return OtherValue {};
-    }
-    return number;
+    std::optional<long long> number = parse_decimal_int(value);
+    return number ? AttrInput(*number) : AttrInput(OtherValue {});
 }
 
 AttrList decode_tag_attrs(const HtmlConstruct& tag, const std::vector<AttrSpec>& specs,
@@ -361,9 +349,6 @@ const NodeSpec& peel_textblock(Document& document, std::size_t index, const Node
     std::string last_payload = first == last ? first_payload : attr_string(document.node(last).attrs, "html");
     std::vector<HtmlConstruct> first_tokens = tokenize_html(first_payload);
     std::vector<HtmlConstruct> last_tokens = tokenize_html(last_payload);
-    if (first_tokens.empty() || last_tokens.empty()) {
-        return parent_spec;
-    }
     const HtmlConstruct& opening = first_tokens.front();
     const HtmlConstruct& closing = last_tokens.back();
     const TagEntry* tag = document.schema().tag(opening.name);
@@ -463,14 +448,9 @@ void build_containers(Document& document, std::size_t index, const NodeSpec& par
             continue;
         }
         if (piece.kind == InlinePieceKind::Atom) {
-            if (!parents.empty()) {
-                check_lift_depth(path.size() + 1);
-            }
             if (current.spec->dfa < 0) {
                 current.placed.push_back({piece.spec, current.content.size()});
             }
-        } else if (!parents.empty()) {
-            check_lift_depth(path.size() + 1);
         }
         append_inline(document, current.content, piece.node);
     }
@@ -486,7 +466,7 @@ void build_containers(Document& document, std::size_t index, const NodeSpec& par
 MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t index, const NodeSpec& parent_spec,
                                                bool html, PathStack& path) {
     const Schema& schema = document.schema();
-    const NodeSpec& content_spec = schema.has_declared_nodes() || schema.has_core_attrs()
+    const NodeSpec& content_spec = schema.has_textblock_tags()
                                       ? peel_textblock(document, index, parent_spec, path)
                                       : parent_spec;
     std::vector<std::size_t> original = std::move(document.node(index).content);
@@ -629,7 +609,7 @@ const NodeSpec& lift_node(Document& document, std::size_t index, bool html, bool
         path.push_back({"content", i});
         std::size_t child = document.node(index).content[i];
         const NodeSpec& child_spec = lift_node(document, child, html, block_forms, path, paired_from);
-        if (child_spec.shape == Shape::TextBlock) {
+        if (!child_spec.core && child_spec.shape == Shape::TextBlock) {
             check_child_content(document, spec, child_spec, document.node(child),
                                 document.node(index).content.size(), path);
             complete_content(document, child, child_spec, path);
@@ -724,11 +704,9 @@ void wrap_implicit_children(Document& document, std::size_t index, const Content
     }
 }
 
-void complete_one_content(Document& document, std::size_t index, const NodeSpec& spec, const PathStack& path,
-                           std::vector<std::size_t>& created) {
+void complete_one_content(Document& document, std::size_t index, const NodeSpec& spec, const PathStack& path) {
     const Schema& schema = document.schema();
     const ContentDFA& content = schema.content(spec.dfa);
-    wrap_implicit_children(document, index, content, path, created);
     std::vector<std::string_view> types;
     types.reserve(document.node(index).content.size());
     for (std::size_t child : document.node(index).content) {
@@ -755,45 +733,21 @@ void complete_one_content(Document& document, std::size_t index, const NodeSpec&
     }
 }
 
-struct CompletionFrame {
-    std::size_t node;
-    std::vector<std::size_t> created;
-    std::size_t next;
-};
-
 void complete_content(Document& document, std::size_t index, const NodeSpec& spec, PathStack& path) {
     if (spec.dfa < 0) {
         return;
     }
     std::vector<std::size_t> created;
-    complete_one_content(document, index, spec, path, created);
-    if (created.empty()) {
-        return;
-    }
-    std::vector<CompletionFrame> pending;
-    pending.push_back({index, std::move(created), 0});
-    while (!pending.empty()) {
-        CompletionFrame& frame = pending.back();
-        if (frame.next == frame.created.size()) {
-            pending.pop_back();
-            if (!pending.empty()) {
-                path.pop_back();
-            }
-            continue;
-        }
-        std::size_t child = frame.created[frame.next++];
-        const std::vector<std::size_t>& children = document.node(frame.node).content;
+    wrap_implicit_children(document, index, document.schema().content(spec.dfa), path, created);
+    complete_one_content(document, index, spec, path);
+    for (std::size_t child : created) {
+        const std::vector<std::size_t>& children = document.node(index).content;
         std::size_t position = static_cast<std::size_t>(std::find(children.begin(), children.end(), child) -
                                                         children.begin());
         path.push_back({"content", position});
         const NodeSpec& child_spec = *document.schema().node(document.node(child).type);
-        std::vector<std::size_t> nested;
-        complete_one_content(document, child, child_spec, path, nested);
-        if (nested.empty()) {
-            path.pop_back();
-        } else {
-            pending.push_back({child, std::move(nested), 0});
-        }
+        complete_one_content(document, child, child_spec, path);
+        path.pop_back();
     }
 }
 

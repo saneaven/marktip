@@ -17,6 +17,12 @@ bool ascii_digit(char ch) {
     return ch >= '0' && ch <= '9';
 }
 
+}  // namespace
+
+bool tag_name_start(char ch) {
+    return ascii_letter(ch);
+}
+
 bool tag_name_char(char ch) {
     return ascii_letter(ch) || ascii_digit(ch) || ch == '-';
 }
@@ -28,6 +34,8 @@ bool attr_name_start(char ch) {
 bool attr_name_char(char ch) {
     return attr_name_start(ch) || ascii_digit(ch) || ch == '.' || ch == '-';
 }
+
+namespace {
 
 bool html_space(char ch) {
     return ch == ' ' || ch == '\t' || ch == '\v' || ch == '\f' || ch == '\r' || ch == '\n';
@@ -44,7 +52,7 @@ bool parse_html_tag(std::string_view html, std::size_t begin, HtmlConstruct& tag
         tag.closing = true;
         ++off;
     }
-    if (off >= html.size() || !ascii_letter(html[off])) {
+    if (off >= html.size() || !tag_name_start(html[off])) {
         return false;
     }
     std::size_t name_begin = off++;

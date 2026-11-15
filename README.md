@@ -320,6 +320,7 @@ Fill preserves the content grammar, not empty paragraphs that Markdown omitted.
 An implicit wrapper is a block node declared with `implicit=True` and `group=""`.
 It writes only its children; the reader wraps a run the parent does not accept directly.
 It must have block content, no attrs and no tag.
+Its content may not name another implicit node.
 Each parent expression must name it exactly once, without optionality or repetition.
 Its accepted child types must be disjoint from the parent's direct types and from the contents of any other implicit child of that parent.
 The `DETAILS` preset uses this for Tiptap's `detailsContent` node.

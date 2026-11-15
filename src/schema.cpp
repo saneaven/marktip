@@ -4,6 +4,10 @@
 
 namespace marktip {
 
+bool is_declared_uri_attr(const AttrSpec& attr, bool core) {
+    return attr.uri != UriKind::None && (!core || attr.form == MarkdownForm::Tag);
+}
+
 Schema::Schema() {
     // The sentences Exact reports for a Dropped attr, shared by the specs that mean the same thing.
     const char* no_link_presentation = "a markdown link carries only a destination and a title";
@@ -117,7 +121,7 @@ const MarkSpec* Schema::mark(std::string_view type) const {
 }
 
 bool Schema::has_declared_marks() const {
-    return marks_.size() != gfm()->marks_.size();
+    return declared_marks_;
 }
 
 bool Schema::has_declared_nodes() const {
@@ -134,6 +138,14 @@ bool Schema::has_link_tag() const {
 
 bool Schema::has_link_uri() const {
     return link_uri_;
+}
+
+bool Schema::has_uri_attrs() const {
+    return uri_attrs_;
+}
+
+bool Schema::has_textblock_tags() const {
+    return textblock_tags_;
 }
 
 bool Schema::has_list_tags() const {
