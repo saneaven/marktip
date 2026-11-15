@@ -1,5 +1,6 @@
 build/
 build-wasm/
+js/presets.json
 dist/
 *.egg-info/
 *.whl

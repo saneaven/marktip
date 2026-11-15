@@ -1,4 +1,4 @@
-"""Write native document results for the wasm parity test."""
+"""Write native document and schema results for the wasm parity test."""
 
 import argparse
 import json
@@ -60,6 +60,125 @@ def error_result(call):
                 result[key] = getattr(error, key)
         return result
     raise AssertionError("an error fixture succeeded")
+
+
+def declaration_error_result(call):
+    try:
+        call()
+    except (TypeError, ValueError) as error:
+        return {"name": "TypeError" if isinstance(error, TypeError) else "RangeError", "message": str(error)}
+    raise AssertionError("a declaration error fixture succeeded")
+
+
+def schema_results(payload):
+    mark_names = ("UNDERLINE", "HIGHLIGHT", "SUBSCRIPT", "SUPERSCRIPT", "TEXT_STYLE")
+    node_names = ("MENTION", "INLINE_MATH", "BLOCK_MATH")
+    core_names = ("TEXT_ALIGN", "LINK_ATTRS", "IMAGE_SIZE", "TABLE_SPANS")
+    payload["presets"] = []
+    for name in mark_names:
+        value = tm.Schema(marks=[getattr(tm, name)]).to_dict()["marks"][0]
+        payload["presets"].append({"name": name, "expected": value})
+    for name in node_names:
+        value = tm.Schema(nodes=[getattr(tm, name)]).to_dict()["nodes"][0]
+        payload["presets"].append({"name": name, "expected": value})
+    payload["presets"].append({"name": "DETAILS", "expected": tm.Schema(nodes=tm.DETAILS).to_dict()["nodes"]})
+    for name in core_names:
+        value = tm.Schema(core_attrs=getattr(tm, name)).to_dict()["core_attrs"]
+        payload["presets"].append({"name": name, "expected": value})
+
+    payload["presetFunctions"] = []
+    factory_cases = [
+        ("textStyle", {}, {}),
+        ("textStyle", {"background_color": False, "font_size": False},
+         {"backgroundColor": False, "fontSize": False}),
+        ("textStyle", {"background_color": False, "color": False, "font_family": False,
+                       "font_size": False, "line_height": False},
+         {"backgroundColor": False, "color": False, "fontFamily": False, "fontSize": False, "lineHeight": False}),
+        ("textAlign", {}, {}),
+        ("textAlign", {"types": ("paragraph",), "alignments": ("left", "right"), "default_alignment": "right"},
+         {"types": ["paragraph"], "alignments": ["left", "right"], "defaultAlignment": "right"}),
+        ("textAlign", {"types": ("heading", "paragraph"), "alignments": ("center",), "default_alignment": None},
+         {"types": ["heading", "paragraph"], "alignments": ["center"], "defaultAlignment": None}),
+        ("linkAttrs", {}, {}),
+        ("linkAttrs", {"target": "_self", "rel": "nofollow", "class_": "reference"},
+         {"target": "_self", "rel": "nofollow", "class": "reference"}),
+        ("linkAttrs", {"target": None, "rel": None, "class_": None},
+         {"target": None, "rel": None, "class": None}),
+    ]
+    factories = {"textStyle": tm.text_style, "textAlign": tm.text_align, "linkAttrs": tm.link_attrs}
+    for index, (name, python_options, options) in enumerate(factory_cases):
+        value = factories[name](**python_options)
+        if name == "textStyle":
+            expected = tm.Schema(marks=[value]).to_dict()["marks"][0]
+        else:
+            expected = tm.Schema(core_attrs=value).to_dict()["core_attrs"]
+        payload["presetFunctions"].append({"id": f"{name}-{index}", "function": name,
+                                           "options": options, "expected": expected})
+
+    all_presets = tm.Schema(
+        marks=[getattr(tm, name) for name in mark_names],
+        nodes=[tm.MENTION, *tm.DETAILS, tm.INLINE_MATH, tm.BLOCK_MATH],
+        core_attrs={**tm.TEXT_ALIGN, **tm.LINK_ATTRS, **tm.IMAGE_SIZE, **tm.TABLE_SPANS},
+    )
+    declarations = [
+        ("empty", {"marks": []}),
+        ("defaults", {"marks": [{"name": "note", "attrs": {"tone": {"type": "str"}}}],
+                      "nodes": [{"name": "mention", "kind": "inline", "attrs": {"id": {"type": "str"}}}]}),
+        ("all-attr-types", pinned_schema().to_dict()),
+        ("all-presets", all_presets.to_dict()),
+        ("block-image", {"marks": [], "block_image": True}),
+        ("empty-core-owner", {"marks": [], "core_attrs": {"paragraph": {}}}),
+    ]
+    payload["schemaCases"] = []
+    for name, declaration in declarations:
+        schema = tm.Schema.from_dict(declaration)
+        payload["schemaCases"].append({
+            "id": name, "declaration": declaration, "expected": schema.to_dict(),
+            "fingerprint": tm.from_markdown("", schema=schema).dump()["schema"],
+        })
+
+    base = tm.Schema(marks=[tm.UNDERLINE], nodes=[tm.MENTION], core_attrs=tm.LINK_ATTRS, block_image=True)
+    additions = tm.Schema(marks=[tm.HIGHLIGHT], nodes=[tm.BLOCK_MATH], core_attrs=tm.IMAGE_SIZE)
+    same_owner = tm.Schema(core_attrs={"link": {"download": tm.Attr(bool, default=False)}})
+    extension_cases = [
+        ("inherit-block-image", base, additions, None),
+        ("replace-block-image", base, same_owner, False),
+        ("enable-block-image", tm.Schema(), tm.Schema(), True),
+        ("no-additions", base, tm.Schema(), None),
+    ]
+    payload["extensions"] = []
+    for name, original, extra, block_image in extension_cases:
+        extended = original.extend(marks=extra.marks, nodes=extra.nodes, core_attrs=extra.core_attrs,
+                                   block_image=block_image)
+        options = extra.to_dict()
+        if block_image is not None:
+            options["block_image"] = block_image
+        payload["extensions"].append({
+            "id": name, "base": original.to_dict(), "addition": options, "expected": extended.to_dict(),
+            "fingerprint": tm.from_markdown("", schema=extended).dump()["schema"],
+        })
+
+    invalid_declarations = [
+        ("duplicate-mark", {"marks": [{"name": "note"}, {"name": "note", "tag": "other"}]}),
+        ("reserved-type", {"marks": [{"name": "paragraph", "tag": "custom"}]}),
+        ("bad-tag", {"marks": [{"name": "note", "tag": "bad tag"}]}),
+        ("bad-exclusion", {"marks": [{"name": "note", "excludes": ["missing"]}]}),
+        ("bad-attr-type", {"marks": [{"name": "note", "attrs": {"tone": {"type": "float"}}}]}),
+        ("bad-default", {"marks": [{"name": "note", "attrs": {"tone": {"type": "int", "default": "x"}}}]}),
+        ("bad-required-type", {"marks": [{"name": "note", "attrs": {"tone": {"type": "str", "required": 1}}}]}),
+        ("bad-node-kind", {"marks": [], "nodes": [{"name": "custom", "kind": "other"}]}),
+        ("bad-content", {"marks": [], "nodes": [{"name": "custom", "kind": "block", "content": "missing+"}]}),
+        ("unknown-core-owner", {"marks": [], "core_attrs": {"missing": {"tone": {"type": "str"}}}}),
+    ]
+    payload["schemaErrors"] = [
+        {"id": name, "declaration": declaration,
+         "expected": declaration_error_result(lambda: tm.Schema.from_dict(declaration))}
+        for name, declaration in invalid_declarations
+    ]
+    payload["duplicateCoreAttr"] = {
+        "base": base.to_dict(), "addition": tm.Schema(core_attrs=tm.LINK_ATTRS).to_dict(),
+        "expected": declaration_error_result(lambda: base.extend(core_attrs=tm.LINK_ATTRS)),
+    }
 
 
 def generate():
@@ -162,6 +281,7 @@ def generate():
             "id": name, "operation": operation, "value": value, "schema": schema_name,
             "options": js_options(options), "expected": expected,
         })
+    schema_results(payload)
     return payload
 
 
@@ -173,7 +293,10 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"Wrote {len(payload['documents'])} documents, {len(payload['partial'])} partial inputs, "
-          f"{len(payload['errors'])} errors and {len(payload['fingerprints'])} fingerprints to {args.output}")
+          f"{len(payload['errors'])} errors, {len(payload['fingerprints'])} fingerprints, "
+          f"{len(payload['presets'])} presets, {len(payload['presetFunctions'])} preset functions, "
+          f"{len(payload['schemaCases'])} schemas, {len(payload['extensions'])} extensions and "
+          f"{len(payload['schemaErrors'])} schema errors to {args.output}")
 
 
 if __name__ == "__main__":

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, test } from "node:test";
 
-import createModule from "../build-wasm/marktip.mjs";
-import * as tm from "./marktip.ts";
+import createModule from "./dist/marktip.mjs";
+import * as tm from "./dist/marktip.js";
 
 const fixtures = JSON.parse(readFileSync(new URL("../build-wasm/parity.json", import.meta.url), "utf8"));
 await tm.init();

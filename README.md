@@ -814,6 +814,145 @@ The tag-boundary whitespace case reaches its stable form after the first write/r
   A fragment whose line starts an HTML block, such as `<div class="caption">Caption</div>`, re-reads as `htmlBlock` even when it contains text; that form is stable after the first cycle.
   A line such as `<span></span>` does not start an HTML block and remains a paragraph.
 
+## JavaScript package
+
+The `marktip` ES module runs the same C++ core through WebAssembly.
+It provides the Python document and schema APIs, with TypeScript declarations.
+Tiptap JSON, stored documents and schema dicts have the same shape in both languages, so either language can read what the other stores.
+The package is built for bundlers and direct ES module use.
+Unbundled use needs a runtime that can import JSON modules with `with { type: "json" }`.
+The automated tests run on Node; browser and worker execution has not been tested.
+
+### Building the package
+
+From the repository root, with CMake, Ninja, Emscripten 6.0.13, Python, Node 26 and TypeScript 6.0.3 (`tsc`) installed:
+
+```bash
+EM_CACHE="$PWD/build-wasm/cache" emcmake cmake -S . -B build-wasm -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DMARKTIP_BUILD_PYTHON=OFF -DMARKTIP_BUILD_WASM=ON
+EM_CACHE="$PWD/build-wasm/cache" cmake --build build-wasm
+python js/build.py
+```
+
+`EM_CACHE` keeps Emscripten's generated system libraries inside the build directory when its default cache is not writable.
+The first build may take a few minutes while those libraries compile.
+The package build uses the global TypeScript compiler and needs no npm dependencies.
+It produces `js/dist/` with JavaScript, declarations, the Emscripten module and `.wasm`, presets and licence texts.
+The preset data comes from the same `python/marktip/presets.json` used by Python.
+
+The examples below use the package entry point `marktip`.
+For a local build, import `./js/dist/marktip.js` from the repository root.
+
+### Parsing a stream
+
+Call `await tm.init()` once before constructing schemas or documents.
+Every subsequent conversion is synchronous.
+Pass the complete text received so far on each update; marktip reparses it on each call.
+
+```ts
+import * as tm from "marktip";
+await tm.init();
+
+const schema = new tm.Schema({
+  marks: [tm.UNDERLINE],
+  nodes: [{
+    name: "callout", kind: "block", content: "block+",
+    attrs: { tone: { type: "str" } },
+  }],
+});
+
+const text = '<callout tone="note">\n\nHello';
+const doc = tm.fromMarkdown(text, { schema, partial: true, keepSource: false });
+render(doc.toDict());
+doc.free();
+```
+
+`partial` has the [same limits as in Python](#usage): incomplete tags are text and can temporarily violate a narrow content model.
+A streaming caller can keep its last successful result while `invalid_content` lasts.
+
+### Storage and editing
+
+Keep the remembered spelling in `dump()`, then supply a loaded document as `base` when accepting edited Tiptap JSON:
+
+```ts
+const original = tm.fromMarkdown("Title\n=====\n\n* first\n", { schema });
+const stored = original.dump();
+original.free();
+
+const base = tm.load(stored, { schema });
+const editorJson = base.toDict();
+const edited = tm.fromDict(editorJson, { schema, base, strict: "exact" });
+const saved = edited.dump();
+const markdown = edited.toMarkdown();
+const canonical = edited.toMarkdown({ canonical: true });
+base.free();
+edited.free();
+schema.free();
+```
+
+`toDict()` and `dump()` return ordinary values for `JSON.stringify` or editor input.
+`fromDict()` and `load()` accept ordinary JSON-compatible values.
+A document keeps its schema alive even after the schema's handle is freed.
+
+### API correspondence
+
+Defaults and conversion rules match Python's.
+Unknown option names raise `TypeError`, including snake_case names passed to camelCase options.
+`Schema.fromDict()` reads the stored dict form, where `core_attrs` and `block_image` retain their snake_case spelling.
+
+| Python | JavaScript |
+| --- | --- |
+| `from_markdown(md, cjk_friendly=, html=, partial=, keep_source=, schema=)` | `fromMarkdown(md, { cjkFriendly, html, partial, keepSource, schema })` |
+| URI and node options: `link_schemes`, `image_schemes`, `link_relative`, `image_relative`, `reject_node_types` | `{ linkSchemes, imageSchemes, linkRelative, imageRelative, rejectNodeTypes }` on `fromMarkdown` or `fromDict` |
+| `from_dict(ast, ..., strict=, schema=, base=)` | `fromDict(ast, { ..., strict, schema, base })` |
+| `load(data, schema=)` | `load(data, { schema })` |
+| `doc.to_dict()`, `doc.dump()`, `doc.to_markdown(canonical=)` | `doc.toDict()`, `doc.dump()`, `doc.toMarkdown({ canonical })` |
+| `Schema(marks=, nodes=, core_attrs=, block_image=)` | `new Schema({ marks, nodes, coreAttrs, blockImage })` |
+| `schema.marks`, `.nodes`, `.core_attrs`, `.block_image` | `schema.marks`, `.nodes`, `.coreAttrs`, `.blockImage` |
+| `schema.to_dict()`, `Schema.from_dict(data)`, `schema.extend(...)`, `a == b` | `schema.toDict()`, `Schema.fromDict(data)`, `schema.extend({ ... })`, `a.equals(b)` |
+| `UNDERLINE`, `HIGHLIGHT`, `SUBSCRIPT`, `SUPERSCRIPT`, `TEXT_STYLE`, `MENTION`, `DETAILS`, `INLINE_MATH`, `BLOCK_MATH`, `TEXT_ALIGN`, `LINK_ATTRS`, `IMAGE_SIZE`, `TABLE_SPANS` | Same names; `DETAILS` is an array |
+| `text_style(background_color=, color=, font_family=, font_size=, line_height=)` | `textStyle({ backgroundColor, color, fontFamily, fontSize, lineHeight })` |
+| `text_align(types=, alignments=, default_alignment=)` | `textAlign({ types, alignments, defaultAlignment })` |
+| `link_attrs(target=, rel=, class_=)` | `linkAttrs({ target, rel, class })` |
+| `MarktipError`, `UnknownTypeError`, `InvalidNodeError`, `ParseError` | Same names, hierarchy and fields: `code`, `path`, `detail`, plus `type`/`kind` or `field` |
+| `__version__` | `version`, available after `init()` |
+
+`Schema.extend()` returns a new schema, appends marks and nodes, and merges core attrs per owner.
+A duplicate core attr is an error.
+`equals()` compares declarations in order, so reordering attrs changes equality.
+
+The differences from Python are:
+
+1. Names use camelCase and keyword arguments become one options object.
+2. Initialization requires one `await tm.init()`; subsequent calls are synchronous.
+3. `Document` and `Schema` have `free()` and also register for automatic cleanup with `FinalizationRegistry`.
+   A method called after `free()` raises a clear error; calling `free()` twice does nothing.
+4. `MarkSpec`, `NodeSpec` and `Attr` are types for plain objects, with the same shape as the schema dict.
+   Attr types are `"str"`, `"int"`, `"bool"` or `"IntList"`.
+5. Caller mistakes raise `TypeError` or `RangeError`, corresponding to Python's `TypeError` or `ValueError`.
+6. JavaScript cannot represent every integer beyond ±2^53 exactly.
+7. With strict checking off, coercing a non-string `type` or `text` uses each host's text conversion: Python `str()` or the JSON literal in JavaScript.
+   Errors for wrongly typed scalars in a damaged stored form are also each host's own.
+
+### JavaScript limits and measurements
+
+- Inputs must be values JSON can carry.
+  `undefined` object properties become absent keys; `NaN` and `Infinity` become `null` through `JSON.stringify`.
+- Wasm memory grows when needed and does not shrink; the largest document read determines its high-water mark.
+- The shared nesting cap is 512, including the limit on simultaneously open declared mark tags.
+  Stack margin at that cap was measured on Node only; browser engine stacks were not measured.
+
+Measurements recorded on 2026-11-15 used an Intel Core Ultra 9 185H on Linux x86_64, Node 26.13.0 and an Emscripten 6.0.13 Release build.
+The wasm module was 611,095 bytes uncompressed.
+The timings below include UTF-8 transfer, parsing, JSON output and `JSON.parse` for `fromMarkdown()` plus `toDict()`.
+They exclude initialization, file reading and `free()`; each median is from three readings in one fresh process without a separate warmup.
+These measurements describe those inputs and that environment, rather than a performance guarantee.
+
+| Input at measurement time | UTF-8 bytes | Median, ms |
+| --- | ---: | ---: |
+| `README.md` | 66,106 | 3.646344 |
+| `scripts.benchmark.make_fixture(1200, 4)` | 5,986,244 | 90.030844 |
+
 ## Development
 
 ```bash
@@ -821,12 +960,22 @@ python -m pip install .[test]
 python -m pytest
 ```
 
-For a direct local CMake build:
+To build and test both bindings from a clean checkout, install Python's pytest and pybind11, CMake/Ninja, Emscripten 6.0.13, Node 26 and global TypeScript 6.0.3:
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DMARKTIP_BUILD_PYTHON=ON -DMARKTIP_BUILD_WASM=OFF \
   -Dpybind11_DIR="$(python -m pybind11 --cmakedir)"
+EM_CACHE="$PWD/build-wasm/cache" emcmake cmake -S . -B build-wasm -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DMARKTIP_BUILD_PYTHON=OFF -DMARKTIP_BUILD_WASM=ON
 cmake --build build
-PYTHONPATH=python python -m pytest
+EM_CACHE="$PWD/build-wasm/cache" cmake --build build-wasm -j 4
+python js/build.py
+PYTHONPATH=python python scripts/generate_wasm_parity.py
+PYTHONPATH=python python -m pytest -q
+node --test js/test_document.ts js/test_schema.ts js/test_package.ts
+tsc --project js/tsconfig.typecheck.json
 PYTHONPATH=python python scripts/benchmark.py
 ```
+
+The Node tests import `js/dist/`, so build the package and generate the parity fixture before running them.

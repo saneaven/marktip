@@ -1,26 +1,12 @@
-import createModule from "../build-wasm/marktip.mjs";
+import createModule from "./marktip.mjs";
+import { declarationToDict, normalizeMark, normalizeNode, normalizeCoreAttrs } from "./declarations.js";
+import type { AttrValue, CoreAttrs, MarkSpec, NodeSpec, SchemaDict } from "./declarations.js";
+import { optionsObject, optionNames } from "./options.js";
 
-type WasmModule = {
-    HEAPU8: Uint8Array;
-    _malloc(size: number): number;
-    _free(pointer: number): void;
-    _mt_schema_new(pointer: number, length: number): number;
-    _mt_from_markdown(pointer: number, length: number, options: number, optionsLength: number,
-                      schema: number): number;
-    _mt_from_dict(pointer: number, length: number, options: number, optionsLength: number,
-                  schema: number, base: number): number;
-    _mt_load(pointer: number, length: number, schema: number): number;
-    _mt_to_dict(document: number): void;
-    _mt_dump(document: number): void;
-    _mt_to_markdown(document: number, canonical: number): void;
-    _mt_document_free(document: number): void;
-    _mt_schema_free(schema: number): void;
-    _mt_version(): void;
-    _mt_result_ptr(): number;
-    _mt_result_len(): number;
-    _mt_error_ptr(): number;
-    _mt_error_len(): number;
-};
+export type { Attr, AttrValue, CoreAttrs, MarkSpec, NodeSpec, SchemaDict } from "./declarations.js";
+export * from "./presets.js";
+
+type WasmModule = Awaited<ReturnType<typeof createModule>>;
 
 type ErrorFields = {
     code?: string;
@@ -31,8 +17,73 @@ type ErrorFields = {
     kind?: string;
 };
 
-type Options = Record<string, unknown>;
 type Buffer = { pointer: number; length: number };
+
+export interface SchemaOptions {
+    marks?: readonly MarkSpec[];
+    nodes?: readonly NodeSpec[];
+    coreAttrs?: CoreAttrs | null;
+    blockImage?: boolean;
+}
+
+export interface SchemaExtendOptions extends Omit<SchemaOptions, "blockImage"> {
+    blockImage?: boolean | null;
+}
+
+export interface UriOptions {
+    linkSchemes?: readonly string[] | null;
+    imageSchemes?: readonly string[] | null;
+    linkRelative?: "allow" | "path_only" | "reject";
+    imageRelative?: "allow" | "path_only" | "reject";
+    rejectNodeTypes?: readonly string[] | null;
+    schema?: Schema | null;
+}
+
+export interface FromMarkdownOptions extends UriOptions {
+    cjkFriendly?: boolean;
+    html?: boolean;
+    partial?: boolean;
+    keepSource?: boolean;
+}
+
+export interface FromDictOptions extends UriOptions {
+    strict?: "off" | "content" | "exact";
+    base?: Document | null;
+}
+
+export interface LoadOptions {
+    schema?: Schema | null;
+}
+
+export interface ToMarkdownOptions {
+    canonical?: boolean;
+}
+
+export interface TiptapMark {
+    type: string;
+    attrs?: Record<string, AttrValue>;
+}
+
+export interface TiptapNode extends TiptapMark {
+    text?: string;
+    content?: TiptapNode[];
+    marks?: TiptapMark[];
+}
+
+export interface StoredDocument {
+    marktip: number;
+    schema: string;
+    doc: TiptapNode;
+    source?: { head: string; items: { text?: string; sep: string; node?: false }[] };
+}
+
+type SchemaDeclaration = {
+    marks: readonly MarkSpec[];
+    nodes: readonly NodeSpec[];
+    coreAttrs: CoreAttrs;
+    blockImage: boolean;
+    key: string;
+};
 
 let wasm: WasmModule | undefined;
 let initialization: Promise<void> | undefined;
@@ -41,6 +92,7 @@ export let version = "";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 const schemas = new WeakMap<Schema, number>();
+const declarations = new WeakMap<Schema, SchemaDeclaration>();
 const documents = new WeakMap<Document, number>();
 const schemaFinalizer = new FinalizationRegistry<number>((handle) => { wasm!._mt_schema_free(handle); });
 const documentFinalizer = new FinalizationRegistry<number>((handle) => { wasm!._mt_document_free(handle); });
@@ -136,19 +188,6 @@ function json(value: unknown): string {
     return text;
 }
 
-function optionsObject(value: unknown, name: string): Options {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-        throw new TypeError(`${name} must be an object`);
-    }
-    return value as Options;
-}
-
-function optionNames(options: Options, allowed: string[]): void {
-    for (const name of Object.keys(options)) {
-        if (!allowed.includes(name)) throw new TypeError(`unknown option '${name}'`);
-    }
-}
-
 function schemaHandle(value: unknown): number {
     if (value === undefined || value === null) return 0;
     if (!(value instanceof Schema)) throw new TypeError("schema must be a Schema or null");
@@ -171,6 +210,43 @@ function documentFromHandle(handle: number): Document {
     return document;
 }
 
+function buildSchema(schema: Schema, data: unknown): void {
+    const handle = withStrings([json(data)], (module, [input]) => (
+        module._mt_schema_new(input.pointer, input.length)
+    ));
+    schemas.set(schema, handle);
+    schemaFinalizer.register(schema, handle, schema);
+}
+
+function copyCoreAttrs(coreAttrs: CoreAttrs): CoreAttrs {
+    return Object.fromEntries(Object.entries(coreAttrs).filter(([, attrs]) => attrs !== undefined)
+        .map(([owner, attrs]) => [owner, Object.fromEntries(
+            Object.entries(attrs).filter(([, attr]) => attr !== undefined),
+        )]));
+}
+
+function extendCoreAttrs(current: CoreAttrs, addition: CoreAttrs): CoreAttrs {
+    if (typeof addition !== "object" || Array.isArray(addition)) return addition;
+    const owners = Object.entries(addition).filter(([, attrs]) => attrs !== undefined).map(([owner, attrs]) => {
+        if (typeof attrs !== "object" || attrs === null || Array.isArray(attrs)) return [owner, attrs];
+        const target = current[owner] ?? {};
+        const entries = Object.entries(attrs).filter(([, attr]) => attr !== undefined);
+        for (const [name] of entries) {
+            if (Object.hasOwn(target, name)) throw new RangeError(`duplicate core attr '${owner}.${name}'`);
+        }
+        return [owner, Object.fromEntries([...Object.entries(target), ...entries])];
+    });
+    return Object.fromEntries([...Object.entries(current), ...owners]);
+}
+
+function rememberDeclaration(schema: Schema, marks: readonly MarkSpec[], nodes: readonly NodeSpec[],
+                             coreAttrs: CoreAttrs, blockImage: boolean): void {
+    declarations.set(schema, {
+        marks: [...marks], nodes: [...nodes], coreAttrs: copyCoreAttrs(coreAttrs), blockImage,
+        key: json(declarationToDict(marks, nodes, coreAttrs, blockImage)),
+    });
+}
+
 export function init(): Promise<void> {
     if (!initialization) {
         initialization = createModule().then((module: WasmModule) => {
@@ -179,19 +255,74 @@ export function init(): Promise<void> {
             wasm = module;
         });
     }
-    return initialization;
+    return initialization!;
 }
 
 export class Schema {
-    constructor(declaration: Options = {}) {
+    constructor(declaration: SchemaOptions = {}) {
         runtime();
+        const settings = optionsObject(declaration, "schema declaration");
+        optionNames(settings, ["marks", "nodes", "coreAttrs", "blockImage"]);
         const { marks = [], nodes = [], coreAttrs = {}, blockImage = false } = (
-            optionsObject(declaration, "schema declaration")
+            settings as SchemaOptions
         );
-        const text = json({ marks, nodes, core_attrs: coreAttrs ?? {}, block_image: blockImage });
-        const handle = withStrings([text], (module, [input]) => module._mt_schema_new(input.pointer, input.length));
-        schemas.set(this, handle);
-        schemaFinalizer.register(this, handle, this);
+        buildSchema(this, { marks, nodes, core_attrs: coreAttrs ?? {}, block_image: blockImage });
+        rememberDeclaration(this, marks, nodes, coreAttrs ?? {}, blockImage);
+    }
+
+    get marks(): readonly MarkSpec[] {
+        schemaHandle(this);
+        return declarations.get(this)!.marks;
+    }
+
+    get nodes(): readonly NodeSpec[] {
+        schemaHandle(this);
+        return declarations.get(this)!.nodes;
+    }
+
+    get coreAttrs(): CoreAttrs {
+        schemaHandle(this);
+        return declarations.get(this)!.coreAttrs;
+    }
+
+    get blockImage(): boolean {
+        schemaHandle(this);
+        return declarations.get(this)!.blockImage;
+    }
+
+    toDict(): SchemaDict {
+        schemaHandle(this);
+        const { marks, nodes, coreAttrs, blockImage } = declarations.get(this)!;
+        return declarationToDict(marks, nodes, coreAttrs, blockImage);
+    }
+
+    static fromDict(data: SchemaDict): Schema {
+        const schema = Object.create(Schema.prototype) as Schema;
+        buildSchema(schema, data);
+        const wire = JSON.parse(json(data)) as SchemaDict;
+        rememberDeclaration(schema, (wire.marks ?? []).map(normalizeMark), (wire.nodes ?? []).map(normalizeNode),
+                            normalizeCoreAttrs(wire.core_attrs ?? {}), wire.block_image ?? false);
+        return schema;
+    }
+
+    extend(options: SchemaExtendOptions = {}): Schema {
+        schemaHandle(this);
+        const settings = optionsObject(options, "options");
+        optionNames(settings, ["marks", "nodes", "coreAttrs", "blockImage"]);
+        const { marks = [], nodes = [], coreAttrs = {}, blockImage = null } = settings as SchemaExtendOptions;
+        const current = declarations.get(this)!;
+        return new Schema({
+            marks: [...current.marks, ...marks], nodes: [...current.nodes, ...nodes],
+            coreAttrs: extendCoreAttrs(current.coreAttrs, coreAttrs ?? {}),
+            blockImage: blockImage ?? current.blockImage,
+        });
+    }
+
+    equals(other: unknown): boolean {
+        schemaHandle(this);
+        if (!(other instanceof Schema)) return false;
+        schemaHandle(other);
+        return declarations.get(this)!.key === declarations.get(other)!.key;
     }
 
     free(): void {
@@ -208,19 +339,19 @@ export class Schema {
 export class Document {
     private constructor() {}
 
-    toDict(): unknown {
+    toDict(): TiptapNode {
         const module = runtime();
         module._mt_to_dict(documentHandle(this));
         return JSON.parse(result(module));
     }
 
-    dump(): unknown {
+    dump(): StoredDocument {
         const module = runtime();
         module._mt_dump(documentHandle(this));
         return JSON.parse(result(module));
     }
 
-    toMarkdown(options: Options = {}): string {
+    toMarkdown(options: ToMarkdownOptions = {}): string {
         const settings = optionsObject(options, "options");
         optionNames(settings, ["canonical"]);
         const { canonical = false } = settings;
@@ -241,7 +372,7 @@ export class Document {
     }
 }
 
-export function fromMarkdown(markdown: string, options: Options = {}): Document {
+export function fromMarkdown(markdown: string, options: FromMarkdownOptions = {}): Document {
     runtime();
     if (typeof markdown !== "string") throw new TypeError("fromMarkdown() expects a string");
     const { schema, ...wire } = optionsObject(options, "options");
@@ -252,7 +383,7 @@ export function fromMarkdown(markdown: string, options: Options = {}): Document 
     return documentFromHandle(handle);
 }
 
-export function fromDict(value: unknown, options: Options = {}): Document {
+export function fromDict(value: unknown, options: FromDictOptions = {}): Document {
     runtime();
     const { schema, base, ...wire } = optionsObject(options, "options");
     const selected = schemaHandle(schema);
@@ -263,7 +394,7 @@ export function fromDict(value: unknown, options: Options = {}): Document {
     return documentFromHandle(handle);
 }
 
-export function load(value: unknown, options: Options = {}): Document {
+export function load(value: unknown, options: LoadOptions = {}): Document {
     runtime();
     const settings = optionsObject(options, "options");
     optionNames(settings, ["schema"]);

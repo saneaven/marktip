@@ -1,0 +1,19 @@
+{
+  "name": "marktip",
+  "version": "0.7.3",
+  "description": "Markdown and Tiptap JSON conversion through the marktip WebAssembly core",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/marktip.d.ts",
+      "import": "./dist/marktip.js"
+    }
+  },
+  "types": "./dist/marktip.d.ts",
+  "files": ["dist/", "README.md"],
+  "license": "MIT AND Unicode-3.0",
+  "scripts": {
+    "build": "python build.py",
+    "typecheck": "tsc --project tsconfig.typecheck.json"
+  }
+}
