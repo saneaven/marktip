@@ -22,6 +22,10 @@ An upstream bump therefore has to re-check that `const ENTITY* entity_lookup(con
 
 ## Local patches (deviations from upstream)
 
+- Task markers after blockquotes (md4c.c): the checkbox test uses the incoming item's container,
+  rather than the innermost old container that may still be a blockquote.
+  This preserves the next sibling's checked state and removes its checkbox from the text.
+  The patch is marked `MARKTIP LOCAL PATCH`; this defect is also present on upstream master.
 - Initial list-item blank lines (md4c.c): backported only this rule's handling from [upstream master f9e5eb232b95b737373ae706648cb75bd259ed1a](https://github.com/mity/md4c/blob/f9e5eb232b95b737373ae706648cb75bd259ed1a/src/md4c.c).
   The container records its LI opener's end and whether it has held content,
   and line analysis counts consecutive blank lines instead of reading the last block-buffer bytes as a header.

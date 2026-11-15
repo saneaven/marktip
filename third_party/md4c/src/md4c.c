@@ -6330,25 +6330,25 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
             n_parents = ctx->n_containers;
         }
 
-        /* Check for task mark. */
-        if((ctx->parser.flags & MD_FLAG_TASKLISTS)  &&  n_brothers + n_children > 0  &&
-           ISANYOF_(ctx->containers[ctx->n_containers-1].ch, _T("-+*.)")))
-        {
-            OFF tmp = off;
+        /* MARKTIP LOCAL PATCH: a sibling task marker belongs to the incoming item, not an open blockquote. */
+        if((ctx->parser.flags & MD_FLAG_TASKLISTS)  &&  n_brothers + n_children > 0) {
+            MD_CONTAINER* task_container = (n_children > 0 ? &ctx->containers[ctx->n_containers-1] : &container);
+            if(ISANYOF_(task_container->ch, _T("-+*.)"))) {
+                OFF tmp = off;
 
-            while(tmp < ctx->size  &&  tmp < off + 3  &&  ISBLANK(tmp))
-                tmp++;
-            if(tmp + 2 < ctx->size  &&  CH(tmp) == _T('[')  &&
-               ISANYOF(tmp+1, _T("xX "))  &&  CH(tmp+2) == _T(']')  &&
-               (tmp + 3 == ctx->size  ||  ISBLANK(tmp+3)  ||  ISNEWLINE(tmp+3)))
-            {
-                MD_CONTAINER* task_container = (n_children > 0 ? &ctx->containers[ctx->n_containers-1] : &container);
-                task_container->is_task = TRUE;
-                task_container->task_mark_off = tmp + 1;
-                off = tmp + 3;
-                while(off < ctx->size  &&  ISWHITESPACE(off))
-                    off++;
-                line->beg = off;
+                while(tmp < ctx->size  &&  tmp < off + 3  &&  ISBLANK(tmp))
+                    tmp++;
+                if(tmp + 2 < ctx->size  &&  CH(tmp) == _T('[')  &&
+                   ISANYOF(tmp+1, _T("xX "))  &&  CH(tmp+2) == _T(']')  &&
+                   (tmp + 3 == ctx->size  ||  ISBLANK(tmp+3)  ||  ISNEWLINE(tmp+3)))
+                {
+                    task_container->is_task = TRUE;
+                    task_container->task_mark_off = tmp + 1;
+                    off = tmp + 3;
+                    while(off < ctx->size  &&  ISWHITESPACE(off))
+                        off++;
+                    line->beg = off;
+                }
             }
         }
 
