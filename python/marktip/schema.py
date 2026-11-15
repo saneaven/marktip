@@ -46,6 +46,23 @@ def _attr_from_dict(data: dict) -> Attr:
     return Attr(types[name], data.get("required", False), data.get("choices"), data.get("default"), data.get("uri"))
 
 
+def _attrs_from_dict(data: dict) -> dict[str, Attr]:
+    return {name: _attr_from_dict(attr) for name, attr in data.items()}
+
+
+def _mark_from_dict(data: dict) -> MarkSpec:
+    excludes = data.get("excludes")
+    if isinstance(excludes, list):
+        excludes = tuple(excludes)
+    return MarkSpec(data.get("name"), data.get("tag"), _attrs_from_dict(data.get("attrs", {})), excludes)
+
+
+def _node_from_dict(data: dict) -> NodeSpec:
+    return NodeSpec(data.get("name"), data.get("kind"), data.get("content"), data.get("group"), data.get("tag"),
+                    _attrs_from_dict(data.get("attrs", {})), data.get("implicit", False),
+                    data.get("fence"), data.get("math"), data.get("body"))
+
+
 def _attrs_key(attrs: dict[str, Attr]) -> tuple:
     def value_key(value):
         return tuple(value) if isinstance(value, list) else value
@@ -120,22 +137,10 @@ class Schema(_CompiledSchema):
 
     @classmethod
     def from_dict(cls, data: dict) -> Schema:
-        marks = []
-        for mark in data["marks"]:
-            attrs = mark.get("attrs", {})
-            excludes = mark.get("excludes")
-            if isinstance(excludes, list):
-                excludes = tuple(excludes)
-            marks.append(MarkSpec(mark.get("name"), mark.get("tag"),
-                                  {name: _attr_from_dict(attr) for name, attr in attrs.items()}, excludes))
-        nodes = [
-            NodeSpec(node.get("name"), node.get("kind"), node.get("content"), node.get("group"), node.get("tag"),
-                     {name: _attr_from_dict(attr) for name, attr in node.get("attrs", {}).items()},
-                     node.get("implicit", False), node.get("fence"), node.get("math"), node.get("body"))
-            for node in data.get("nodes", ())
-        ]
+        marks = [_mark_from_dict(mark) for mark in data["marks"]]
+        nodes = [_node_from_dict(node) for node in data.get("nodes", ())]
         core_attrs = {
-            name: {attr_name: _attr_from_dict(attr) for attr_name, attr in attrs.items()}
+            name: _attrs_from_dict(attrs)
             for name, attrs in data.get("core_attrs", {}).items()
         }
         return cls(marks=marks, nodes=nodes, core_attrs=core_attrs)

@@ -38,6 +38,24 @@ except ImportError:  # pragma: no cover - development-only CMake build fallback
     from_markdown = _module.from_markdown
 
 from .schema import Attr, IntList, MarkSpec, NodeSpec, Schema
+from .presets import (
+    BLOCK_MATH,
+    DETAILS,
+    HIGHLIGHT,
+    IMAGE_SIZE,
+    INLINE_MATH,
+    LINK_ATTRS,
+    MENTION,
+    SUBSCRIPT,
+    SUPERSCRIPT,
+    TABLE_SPANS,
+    TEXT_ALIGN,
+    TEXT_STYLE,
+    UNDERLINE,
+    link_attrs,
+    text_align,
+    text_style,
+)
 
 
 __all__ = [
@@ -48,6 +66,22 @@ __all__ = [
     "MarkSpec",
     "NodeSpec",
     "Schema",
+    "UNDERLINE",
+    "HIGHLIGHT",
+    "SUBSCRIPT",
+    "SUPERSCRIPT",
+    "TEXT_STYLE",
+    "MENTION",
+    "DETAILS",
+    "INLINE_MATH",
+    "BLOCK_MATH",
+    "TEXT_ALIGN",
+    "LINK_ATTRS",
+    "IMAGE_SIZE",
+    "TABLE_SPANS",
+    "text_style",
+    "text_align",
+    "link_attrs",
     "MarktipError",
     "UnknownTypeError",
     "InvalidNodeError",

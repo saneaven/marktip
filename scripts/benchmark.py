@@ -109,6 +109,15 @@ def main() -> None:
         for level in ("off", "content", "exact")
     }
 
+    schema_marks = (tm.UNDERLINE, tm.HIGHLIGHT, tm.SUBSCRIPT, tm.SUPERSCRIPT, tm.TEXT_STYLE)
+    schema_nodes = (tm.MENTION, *tm.DETAILS, tm.INLINE_MATH, tm.BLOCK_MATH)
+    schema_attrs = {**tm.text_align(types=("paragraph", "heading")), **tm.LINK_ATTRS,
+                    **tm.IMAGE_SIZE, **tm.TABLE_SPANS}
+    schema_seconds = min(timeit.repeat(
+        lambda: tm.Schema(marks=schema_marks, nodes=schema_nodes, core_attrs=schema_attrs),
+        number=1_000, repeat=args.repetitions,
+    )) / 1_000
+
     tracemalloc.start()
     tm.from_markdown(markdown)
     _, peak_bytes = tracemalloc.get_traced_memory()
@@ -134,6 +143,8 @@ def main() -> None:
     print(f"Document -> dict: {node_count / to_dict_seconds:.0f} nodes/s ({to_dict_seconds:.3f}s)")
     for level, seconds in from_dict_seconds.items():
         print(f"dict -> Document (strict={level}): {node_count / seconds:.0f} nodes/s ({seconds:.3f}s)")
+    print(f"Schema ({len(schema_marks)} marks, {len(schema_nodes)} nodes, {len(schema_attrs)} core attr types): "
+          f"{schema_seconds * 1_000_000:.1f} us/build")
     print(f"{args.threads} threaded parses: {(size_mb * args.threads) / threaded_seconds:.2f} MiB/s ({threaded_seconds:.3f}s)")
 
 

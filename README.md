@@ -39,7 +39,9 @@ Underscores retain CommonMark's additional restriction on emphasis inside words.
 
 > **Changed in 0.7.3** — CJK-friendly character classification, variation-selector sequences, flanking, and underscore conditions follow the specification. The same flanking rules apply to `~~`. An editor document containing bold `《제목》` followed by `a` now survives serialization and reparsing with `cjk_friendly=True`.
 
-Pass `html=False` to parse raw HTML as literal text instead of `htmlBlock`/`htmlInline` nodes.
+Pass `html=False` to parse undeclared HTML as literal text instead of `htmlBlock`/`htmlInline` nodes.
+Declared tags are recognized with either setting when exposed as tag constructs.
+With `html=True`, an undeclared HTML block or comment remains raw as a whole, including declared-looking tags inside it.
 Content is preserved (the serializer escapes it), and `<br>` inside table cells still maps to `hardBreak` so marktip's own table output round-trips:
 
 ```python
@@ -79,7 +81,10 @@ doc = tm.from_markdown(untrusted, link_schemes=("https",), image_relative="rejec
 # InvalidNodeError: link href scheme 'javascript' is not allowed
 ```
 
-Violations raise `InvalidNodeError` with `.field` set to `"href"` or `"src"`.
+Violations raise `InvalidNodeError` with `.field` set to the URI attr name (`"href"` or `"src"` for core links and images).
+Declared `Attr(str, uri="link")` and `uri="image"` attrs use the corresponding policy too.
+For a declared URI attr or an active core link/image tag form,
+both the stored value and its entity-decoded form must pass because a tag carries the stored string.
 The options are keyword-only.
 
 ### Rejecting node types
@@ -95,7 +100,8 @@ doc = tm.from_markdown(imported_markdown, reject_node_types=NO_RAW_HTML)
 ```
 
 `None` (the default) rejects nothing; an empty iterable has the same effect.
-Every entry must name a node type marktip knows, and matching is exact and case-sensitive.
+Every entry must name a node type in the schema passed to the call, and matching is exact and case-sensitive.
+Declared node names are accepted too.
 A bare string or a non-string entry raises `TypeError`; an unknown node name raises `ValueError`.
 A document containing a configured type raises `InvalidNodeError` with `.code == "disallowed_node_type"`, `.field == "type"`, and `.path` locating the node.
 The option is keyword-only.
@@ -105,7 +111,9 @@ This differs from `html=False`: `html=False` preserves raw markup as escaped lit
 
 ### Refusing lossy conversions
 
-Node and mark *types* are always closed, but fields, attrs and content models are only closed when `strict` is enabled.
+Node and mark *types* are always closed by the selected schema, but fields, attrs and content models are only closed on dict input when `strict` is enabled.
+The examples and core attr table below use the default schema.
+[Extending the schema](#extending-the-schema) adds carried attrs and types without changing that default.
 An attr the serializer never reads is dropped without a word, so a `colspan: 2` cell quietly becomes a plain one:
 
 ```python
@@ -115,15 +123,16 @@ tm.from_dict(ast, strict="content")             # InvalidNodeError: attr 'colspa
 ```
 
 `strict` names what the conversion may not lose, from the walk that is already happening, so a consumer does not have to re-traverse the tree in Python to find out whether the document survives intact.
-It is keyword-only and a `from_dict` option only — the parser emits nothing but attrs it understands, with values in range, so there is nothing on the `from_markdown` path for it to catch.
+It is keyword-only and a `from_dict` option only.
+`from_markdown` validates declared tags, attrs and content as it reads them; that validation is always enabled.
 
 | `strict` | Keeps |
 | --- | --- |
 | `"off"` (default) | nothing is checked |
 | `"content"` | content and structure, including closed node fields and content models. Presentation an editor stamped on is type-checked and dropped |
-| `"exact"` | every attr the JSON carries |
+| `"exact"` | every attr the JSON carries, except declared defaults, which mean unset |
 
-Both enabled levels also enforce the ProseMirror same-type self-exclusion rule on each node's marks.
+Both enabled levels also enforce the schema's mark exclusions and refuse duplicate marks with equal type and attrs.
 The standard marks represented by marktip are self-exclusive, so a node cannot carry the same mark type twice — including two `link` marks with different destinations.
 The conflicting mark is rejected with `InvalidNodeError` rather than being serialized into Markdown that reparses with different formatting or structure.
 `strict="off"` skips this check because strict validation is disabled.
@@ -215,13 +224,234 @@ Rejecting an empty destination is the URI policy's job (`link_relative="reject"`
 `colspan`/`rowspan` are *known* attrs whose only accepted values are the no-ops Tiptap's table extension puts on every cell.
 Refusing the names outright would leave strict unusable for the documents it exists to check.
 
-Two attrs are accepted and then ignored at every level.
+In the Markdown form two attrs are accepted and then ignored at every level.
 The serializer derives a table's column count from its rows, so `colCount` is never read, and it takes cell alignment from the header row only, so `align` on a body row is never read either.
+The table tag form carries both attrs.
 Neither is a loss — the structure they describe is what survives — and `from_markdown` emits both, so refusing them would break re-parsing stored canonical Markdown on the read path, where a write-time refusal is much harder to notice.
+
+## Extending the schema
+
+Pass `schema=` to either input boundary to use declarations beyond the default GFM types.
+Declarations are plain data: `MarkSpec` adds a mark, `NodeSpec` adds a node, and `core_attrs` adds attrs to a core type.
+A callout has no official Tiptap shape, so declare the shape your editor uses:
+
+```python
+import marktip as tm
+
+schema = tm.Schema(
+    marks=[tm.MarkSpec("underline", tag="u")],
+    nodes=[tm.NodeSpec(
+        "callout", kind="block", content="block+",
+        attrs={"tone": tm.Attr(str, choices=("note", "warning"), default="note")},
+    )],
+    core_attrs={
+        "paragraph": {"textAlign": tm.Attr(str, choices=("left", "center", "right"))},
+    },
+)
+
+source = '<callout tone="warning">\n\n<u>Read this</u>.\n\n</callout>'
+doc = tm.from_markdown(source, schema=schema)
+written = doc.to_markdown()
+assert tm.from_dict(doc.to_dict(), schema=schema, strict="exact").to_markdown() == written
+assert tm.from_markdown(written, schema=schema).to_dict() == doc.to_dict()
+```
+
+Every declared type has a tag form, with the type name as the default tag name.
+Tag matching is exact and case-sensitive.
+The content and `kind` determine its shape:
+
+| Declaration | Shape | Written form |
+| --- | --- | --- |
+| `MarkSpec("underline", tag="u")` | mark | `<u>text</u>`, outside delimiter marks |
+| `NodeSpec("mention", "inline")` | inline atom | `<mention/>` |
+| `NodeSpec("ruby", "inline", content="inline*")` | inline container | `<ruby>inline content</ruby>` |
+| `NodeSpec("embed", "block")` | block atom | `<embed/>` alone on its line |
+| `NodeSpec("callout", "block", content="block+")` | block container | opening tag line, blocks, closing tag line |
+| `NodeSpec("summary", "block", content="inline*")` | textblock | `<summary>inline content</summary>` as one paragraph |
+
+`content=None` and `content=""` both declare an atom.
+An inline atom can carry marks; a container holds marks on its inline leaves, not on itself.
+A `code` mark on a declared atom is `invalid_mark_set` under strict validation, since the atom cannot be written inside a code span.
+With `strict="off"`, the atom is written outside the code span and that mark is omitted.
+Container tags form boundaries for the inline writer, so code runs and emphasis whitespace do not cross them.
+Inline content in a Markdown-form heading or a Markdown table cell keeps that context's single-line rules.
+A heading written in tag form uses ordinary textblock rules and preserves hard breaks and literal newlines outside Markdown table cells.
+
+### Attrs, exclusions and content
+
+`Attr(type, required=False, choices=None, default=None, uri=None)` accepts `str`, `int`, `bool` and `tm.IntList`.
+Integers fit in a signed 64-bit value; `bool` stays distinct from `int`.
+`IntList` is a list of integers, written as a comma-separated attr such as `colwidth="100,200"`.
+`choices` limits the allowed values, and `required=True` requires an attr after unset values have been removed.
+An attr with `uri="link"` or `uri="image"` must be a `str` and cannot also declare a default.
+It uses the corresponding URI policy and rejects control characters at every strict level.
+
+`None` means unset.
+A value equal to its declared `default` also means unset: the key is removed on input, never written, and never filled back in, including under `strict="exact"`.
+Compare a round trip with `from_dict(original, schema=schema).to_dict()`, not the unnormalized input dict.
+ProseMirror can restore its own defaults when it loads the result.
+
+Declared tag attrs are written in declaration order and always double-quoted.
+`&`, `"`, `<`, `>`, `|`, the backtick and C0 controls are written as character references.
+The reader accepts double-quoted, single-quoted, unquoted and value-less boolean attrs, decodes character references, and checks the declared type.
+An undeclared attr on a declared tag is `unknown_attr`; a repeated attr is `invalid_attr_value`.
+Dict input under `strict="off"` skips declared attr and content validation, and attrs the declaration does not carry are not written.
+
+`MarkSpec.excludes=None` means the mark excludes its own type, `()` excludes nothing, and `"_"` excludes every mark.
+Otherwise pass a tuple of mark names.
+Two marks conflict if either excludes the other; both strict dict levels and the Markdown reader report `invalid_mark_set`.
+Opening conflicting declared tags is an error even when their overlap contains no inline content.
+A self-exclusive mark nested inside itself replaces the outer mark for its extent and restores it afterward.
+A mark with `excludes=()` can stack with a different instance of its own type; equal type and attrs still count as a duplicate.
+
+Content expressions use ProseMirror's grammar: node names, group names, sequences, `|`, `*`, `+`, `?`, `{n}`, `{n,}`, `{n,m}` and parentheses.
+The built-in groups are `inline` and `block`.
+A node joins the group matching its kind by default; `group="name"` replaces that membership, `group="a b"` joins both, and `group=""` joins none.
+An expression cannot mix inline and block members or give an inline node block content.
+Use `text*` or `text+` for text runs: expressions that count adjacent `text` or `htmlInline` nodes are refused because Markdown merges those nodes.
+
+The schema compiles expressions once when it is built.
+Strict dict conversion checks the children without filling anything.
+Markdown input can create missing required children when a type has no required attr and its own minimal content can be created.
+Only `paragraph` can be created among core types; `text` cannot be created.
+Where several types fit, the first type named by the expression wins, and a fill that would create its own ancestor is refused at schema construction.
+Fill preserves the content grammar, not empty paragraphs that Markdown omitted.
+
+An implicit wrapper is a block node declared with `implicit=True` and `group=""`.
+It writes only its children; the reader wraps a run the parent does not accept directly.
+It must have block content, no attrs and no tag.
+Each parent expression must name it exactly once, without optionality or repetition.
+Its accepted child types must be disjoint from the parent's direct types and from the contents of any other implicit child of that parent.
+The `DETAILS` preset uses this for Tiptap's `detailsContent` node.
+
+### Fence and math carriers
+
+A block atom can declare `fence="math", body="latex"` with a declared `str` attr named `latex`.
+A code block whose effective info (`language`, otherwise `info`) has the declared word as its first word reads as the declared type.
+The reader uses only the first word: a suffix such as `display` in `math display` is not part of the declared node and is not written back.
+The code body loses its final newline; writing adds one newline.
+The fence form is used only when the body attr is set, no other attr is set, the body has no carriage return, and no line's leading whitespace contains a tab.
+Otherwise the node uses its tag form, so an unset body and an empty body remain distinct.
+Strict dict input refuses a core `codeBlock` whose info word collides with a declared fence, with `unrepresentable`.
+
+An inline atom can declare `math="inline", body="latex"` to read `$...$`.
+A block atom with `math="display"` reads a paragraph made only of `$$...$$`; display math is written as its fence form if declared, otherwise as a tag.
+Declaring either math mode makes `$` syntax for that schema, so existing unescaped dollar pairs can become math.
+The writer escapes dollar signs in ordinary text and image alt text.
+A span of an undeclared mode becomes literal text with its delimiters, and its inside is not parsed as Markdown.
+
+Inline math uses `$body$` only when its body and surrounding output prove that it reads back as the same node.
+Empty bodies, line breaks, dollar signs, backticks, odd trailing backslashes, word adjacency and a pipe in a Markdown table cell select the tag form.
+A marked math node whose body contains `*`, `~`, `[` or `]` also uses its tag form.
+The body of the dollar form is written raw.
+
+### Core tag forms
+
+`core_attrs` can add attrs to `paragraph`, `heading`, `image`, `link`, `blockquote`, the list family, and the table family.
+An attr Markdown already carries, such as `href` or `level`, cannot be redeclared.
+Known dropped attrs such as link `target` or image `width` can be redeclared with one type; `required=True` is refused for every `core_attrs` declaration.
+Without a redeclaration, a dropped attr stays dropped in either form and keeps its existing strict behavior.
+
+| Core type | Active tag form |
+| --- | --- |
+| `paragraph`, `heading` | `<p>`, `<h1>` through `<h6>` |
+| `image`, `link` | `<img/>`, `<a>` |
+| `blockquote` | `<blockquote>` |
+| `bulletList`, `taskList`, `orderedList` | `<ul>`, `<ol>` |
+| `listItem`, `taskItem` | `<li>`, `<li checked="...">` |
+| `table`, `tableRow`, `tableHeader`, `tableCell` | `<table>`, `<tr>`, `<th>`, `<td>` |
+
+For paragraph, heading, image, link and blockquote, a set overlay attr is the only reason to write the tag form.
+Without a set overlay, empty paragraphs and breaks inside headings behave exactly as they do without a schema.
+A set overlay selects a heading tag form that preserves hard breaks and newlines, subject to Markdown table cells' single-line rules.
+Declaring attrs on any list or table type activates its whole family.
+A list uses tags when it or any item needs them; items follow the list's form.
+A table uses tags when header cells are not exactly its first row, a cell has more than one child or any non-paragraph child, or an overlay on the table, a row or a cell is set.
+Rows and cells follow the table's form.
+A cell with no children or one paragraph remains Markdown-shaped.
+Empty lists and tables gain no special form rule.
+
+An active table family can carry multiple blocks and block containers in a cell; the Markdown form cannot.
+Declaring `colspan` and `rowspan` carries merged cells, and `colwidth` can use `tm.IntList`.
+Undeclared unit spans stay stored on dict input but are omitted from a cell tag, as they are from Markdown.
+A core tag writes Markdown-carried attrs first in syntax order (`src`, `alt`, `title` for images; `href`, `title` for links), followed by overlay attrs in declaration order.
+Heading level is carried by its tag name.
+
+Declared tags exposed as tag constructs are syntax with either `html=True` or `html=False`.
+With `html=True`, declared-looking tags inside an undeclared HTML block or a comment stay part of that raw construct.
+An unmatched tag, wrong placement, invalid attr, conflicting mark set or invalid content is an error, not a raw-HTML fallback.
+This includes hand-written HTML tables and lists once their family is active: each container tag must occupy its own block line and its children must fit the content model.
+`<table>\n<tr><td>a</td></tr>\n</table>` is not a substitute for that form.
+Strict dict input also refuses raw HTML payloads that would be read as declared tags, with `unrepresentable`.
+
+### Presets and schema ownership
+
+The presets are declarations, not precompiled schemas:
+
+| Presets | Value |
+| --- | --- |
+| `UNDERLINE`, `HIGHLIGHT`, `SUBSCRIPT`, `SUPERSCRIPT`, `TEXT_STYLE` | `MarkSpec` |
+| `MENTION`, `INLINE_MATH`, `BLOCK_MATH` | `NodeSpec` |
+| `DETAILS` | tuple of three `NodeSpec`s |
+| `TEXT_ALIGN`, `LINK_ATTRS`, `IMAGE_SIZE`, `TABLE_SPANS` | mappings for `core_attrs` |
+
+```python
+editor_schema = tm.Schema(
+    marks=[tm.UNDERLINE, tm.HIGHLIGHT, tm.SUBSCRIPT, tm.SUPERSCRIPT, tm.TEXT_STYLE],
+    nodes=[tm.MENTION, *tm.DETAILS, tm.INLINE_MATH, tm.BLOCK_MATH],
+    core_attrs={
+        **tm.TEXT_ALIGN,
+        **tm.LINK_ATTRS,
+        **tm.IMAGE_SIZE,
+        **tm.TABLE_SPANS,
+    },
+)
+```
+
+`HIGHLIGHT` declares an optional `color`, so it accepts highlights from editors with or without multicolor enabled.
+`DETAILS` declares `open` with default `False`, accepting both persisted and non-persisted open-state JSON.
+`TEXT_ALIGN` follows Tiptap's documented configuration for `heading` and `paragraph`; use `text_align(types=...)` for other targets.
+`IMAGE_SIZE` serves inline images, matching `Image.configure({inline: true})`.
+It does not change the core child grammar: strict `from_dict` still refuses an `image` directly under `doc`, which is the stock block-image shape.
+The configurable functions mirror options that change Tiptap's JSON:
+
+| Factory | Default declaration |
+| --- | --- |
+| `text_style(...)` | `background_color`, `color`, `font_family`, `font_size` and `line_height` are all `True`, matching TextStyleKit |
+| `text_align(types=..., alignments=..., default_alignment=...)` | `("heading", "paragraph")`; `("left", "center", "right", "justify")`; `None` |
+| `link_attrs(target=..., rel=..., class_=...)` | `"_blank"`; `"noopener noreferrer nofollow"`; `None` |
+
+Each uppercase constant equals its declaration in the shared preset data file.
+Two overlays for the same core type should be combined with `Schema.extend`, which merges per type rather than replacing the entire owner mapping.
+
+A schema is selected per call, immutable after compilation, and shareable between threads.
+Treat declaration objects and their attr mappings as frozen after using them to build a schema.
+The document keeps its schema for serialization; it belongs to the schema that wrote it.
+Reading stored Markdown with a different schema may leave old tags as raw HTML, interpret new syntax, or raise a validation error.
+Store the schema declaration or its application-level identifier with the Markdown.
+
+```python
+import json
+
+saved = json.loads(json.dumps(schema.to_dict()))
+restored = tm.Schema.from_dict(saved)
+assert restored == schema
+assert hash(restored) == hash(schema)
+
+extended = schema.extend(marks=[tm.MarkSpec("comment", attrs={"id": tm.Attr(str, required=True)}, excludes=())])
+assert extended != schema
+```
+
+`extend` returns a new schema and refuses duplicate declarations, including the same attr declared twice for one core type.
+Equality and hashing compare declarations in order, not just the languages they accept: an omitted tag and an explicit tag equal to the type name differ.
+Compilation happens once per schema object, so reuse a schema when calls share the same editor configuration.
+On an Intel Core Ultra 9 185H Linux machine with Python 3.14.6 and a GCC 16.2.1 Release build,
+`scripts/benchmark.py` measured about 61 microseconds to build a schema with five marks, six nodes and attrs for six core types.
+That is the best of seven batches of 1,000 builds, with declarations prepared outside the timed work.
 
 ## Errors
 
-Every rejection marktip raises derives from `marktip.MarktipError`, so "the input is malformed" is a single `except` — no need to catch a bare `ValueError` wide enough to swallow an unrelated bug:
+Document rejections derive from `marktip.MarktipError`, so "the input is malformed" is a single `except`:
 
 ```python
 try:
@@ -251,22 +481,24 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `invalid_root` | `InvalidNodeError` | the root node's type is not `doc` |
 | `wrong_type` | `InvalidNodeError` | `attrs`/`content`/`marks`/a child has the wrong Python type |
 | `max_depth` | `InvalidNodeError` | dict nesting exceeds 2048 |
-| `disallowed_scheme` | `InvalidNodeError` | a link `href` / image `src` scheme is outside the allowlist |
-| `disallowed_relative_url` | `InvalidNodeError` | a scheme-less `href`/`src` violates the relative policy |
-| `invalid_uri_char` | `InvalidNodeError` | an `href`/`src` contains an ASCII control character |
+| `disallowed_scheme` | `InvalidNodeError` | a core or declared URI attr has a scheme outside its allowlist |
+| `disallowed_relative_url` | `InvalidNodeError` | a scheme-less core or declared URI attr violates its relative policy |
+| `invalid_uri_char` | `InvalidNodeError` | a core or declared URI attr contains an ASCII control character |
 | `disallowed_node_type` | `InvalidNodeError` | a node type appears in `reject_node_types` |
 | `unknown_field` | `InvalidNodeError` | `strict`: a node/mark top-level key is not defined for that type |
-| `invalid_content` | `InvalidNodeError` | `strict`: a node violates its content model or text payload contract |
-| `unknown_attr` | `InvalidNodeError` | `strict`: the attr name is in neither dialect for that type |
-| `invalid_attr_value` | `InvalidNodeError` | `strict`: the attr's value has the wrong type or is out of range |
+| `invalid_content` | `InvalidNodeError` | a content-model violation on strict dict input or a declared tag, or an invalid strict text payload |
+| `unknown_attr` | `InvalidNodeError` | an unknown attr on strict dict input or a declared tag |
+| `invalid_attr_value` | `InvalidNodeError` | a wrong type, out-of-range value or repeated tag attr |
 | `unrepresentable` | `InvalidNodeError` | `strict`: the value is well-formed, but markdown cannot carry it |
-| `missing_attr` | `InvalidNodeError` | `strict`: a required attr is absent or `None` — a `link` with no `href`, an `image` with no `src` |
-| `invalid_mark_set` | `InvalidNodeError` | `strict`: a node carries conflicting marks of the same type |
-| `markdown_max_depth` | `ParseError` | markdown nesting exceeds 2048 |
+| `missing_attr` | `InvalidNodeError` | a required attr is unset on strict dict input or a declared tag |
+| `invalid_mark_set` | `InvalidNodeError` | conflicting or duplicate marks on strict dict input or in declared tags |
+| `invalid_tag` | `InvalidNodeError` | a declared tag is unmatched, self-closing where a container is required, or in the wrong position |
+| `markdown_max_depth` | `ParseError` | Markdown node nesting or simultaneously open declared mark tags exceeds 2048 |
 | `parse_failed` | `ParseError` | MD4C could not parse the input |
 
-`from_markdown` still raises a plain `TypeError` when the argument is not `str`/`bytes` — that is a caller bug, not a malformed document.
-So is a bad option value: a non-iterable `link_schemes` or `reject_node_types` raises `TypeError`, and `link_schemes=("https://",)`, `reject_node_types=("callout",)`, `link_relative="nope"` or `strict="strict"` raises `ValueError`.
+Malformed schema declarations are caller bugs and raise ordinary Python exceptions rather than `MarktipError`; bad declaration values raise `ValueError`.
+`from_markdown` raises a plain `TypeError` when the argument is not `str`/`bytes` for the same reason.
+Bad option values behave similarly: a non-iterable `link_schemes` or `reject_node_types` raises `TypeError`, and `link_schemes=("https://",)`, `reject_node_types=("callout",)`, `link_relative="nope"` or `strict="strict"` raises `ValueError`.
 `strict` takes a level name, so `strict=True` raises `TypeError` rather than quietly meaning something.
 
 > **Changed in 0.4.0** — these were previously `ValueError` (`from_dict`) and `RuntimeError` (`from_markdown`).
@@ -284,14 +516,14 @@ So is a bad option value: a non-iterable `link_schemes` or `reject_node_types` r
 
 ## What `from_dict` validates
 
-The Tiptap-side schema is closed: every node/mark type must have a markdown mapping.
-`from_dict` is the single enforcement point and rejects unknown types instead of silently dropping content.
+The selected schema is closed: every node/mark type must have a Markdown or tag mapping.
+`from_dict` rejects unknown types instead of silently dropping content.
 It guarantees, for the whole tree:
 
 - **Closed schema.**
   Node types are `doc`, `paragraph`, `text`, `hardBreak`, `heading`, `blockquote`, `codeBlock`, `horizontalRule`, `bulletList`, `orderedList`, `listItem`, `taskList`, `taskItem`, `table`, `tableRow`, `tableHeader`, `tableCell`, `image`, `htmlBlock`, `htmlInline`.
   Marks are `bold`, `italic`, `strike`, `code`, `link`.
-  Anything else → `UnknownTypeError`.
+  Additional types must be declared in the passed schema; anything else raises `UnknownTypeError`.
 - **`type` is required** on every node and mark.
 - **The root is a `doc`.**
 - **Shapes**: `attrs` is a dict, `content` and `marks` are lists, and every entry of `content`/`marks` is a dict.
@@ -307,15 +539,18 @@ It deliberately does **not** validate, unless `strict` asks it to:
 
 - **`attrs` names and value types.**
   Keys are free-form.
-  `str`, `int`, and `bool` round-trip unchanged; every other value is dropped, `None` included, so `to_dict()` gives back what you passed in minus the keys markdown could not have carried anyway.
+  `str`, `int` and `bool` can be stored on free-form keys; a list of integers is stored only for an attr declared `tm.IntList`.
+  Other values and `None` are dropped.
+  Declared defaults are also removed.
   An attr with no markdown form is dropped at serialization — see [Refusing lossy conversions](#refusing-lossy-conversions).
 - **Per-node required attrs.**
   A `heading` without `level` or a `codeBlock` without `language` is accepted; the serializer substitutes a default rather than failing.
-  `strict` adds exactly two: a `link` needs an `href` and an `image` needs a `src`, because the default there is an empty destination that reads back as a real link.
+  For core types `strict` requires a link's `href` and an image's `src`, because an empty destination would read back as a real link.
+  Declarations can require additional attrs on declared types.
   `{"src": None}` and no `src` key at all are the same thing to every part of the library, the URI policy included.
 - **Mark sets.**
   With strict validation disabled, two marks of the same type may appear on one node and are serialized independently.
-  `strict="content"` and `strict="exact"` reject the second mark because marktip's standard ProseMirror/Tiptap marks are self-exclusive.
+  Both strict levels enforce the selected schema's exclusions and reject equal type-and-attr duplicates.
 - **Node and mark top-level fields.**
   With strict validation disabled, a key the converter does not read is ignored.
   Both enabled levels reject it with `unknown_field`, including `marks` on a block or `text` on a non-text node.
@@ -323,10 +558,13 @@ It deliberately does **not** validate, unless `strict` asks it to:
   With strict validation disabled, which node may contain which is not checked — a `text` node directly under `doc` is accepted and serialized.
   Both enabled levels enforce the content-model table above, the text payload shape, and the absence of marks inside a code block.
 - **Raw HTML.**
-  The URI policy governs `link` marks and `image` nodes, not markup inside `htmlBlock`/`htmlInline`, so `<a href="javascript:...">` passes it.
+  The URI policy governs link/image and declared URI attrs, not undeclared markup inside `htmlBlock`/`htmlInline`.
+  Without an active link tag form, `<a href="javascript:...">` remains raw HTML and passes it.
   Reject those node types with `reject_node_types=("htmlBlock", "htmlInline")`; on Markdown input, `html=False` is the alternative that retains the markup as literal text.
 - **URI syntax beyond the scheme.**
-  Everything after the scheme is opaque, and the stored value is never rewritten — an `href` is checked in its entity-decoded form but stored exactly as given.
+  Everything after the scheme is opaque.
+  Dict URI values are not rewritten; core Markdown destinations are checked entity-decoded, and active tag forms also check the stored form.
+  A tag attr is entity-decoded when read into the document.
   Under `link_relative="allow"` a protocol-relative `//evil.com/x` also passes, since it carries no scheme; `"path_only"` is the setting that rejects it.
 
 Structural violations report where they happened:
@@ -344,18 +582,41 @@ except tm.InvalidNodeError as e:
 ## Defined normalizations
 
 Markdown cannot represent every Tiptap document exactly.
-Rather than emitting or retaining a representation that changes on the next conversion, marktip applies these deterministic (and idempotent) normalizations during parsing and serialization:
+marktip applies the following deterministic normalizations during parsing and serialization.
+The tag-boundary whitespace case reaches its stable form after the first write/read cycle.
 
-- **NUL in content strings** — U+0000 in text or a non-URI string attr (`alt`, `title`, `language`, `html`, etc.) becomes U+FFFD. Markdown input is replaced once before tokenization, including inline/fenced/indented code and raw HTML, so reparsing cannot retain a NUL or accumulate replacement characters. On dict input, `link.href` and `image.src` are excluded and retain their unconditional `invalid_uri_char` rejection.
-- **Hard breaks in headings** — ATX headings are single-line, so a `hardBreak` (or a literal newline carried over from setext input) inside a heading serializes as a single space: `heading("a", hardBreak, "b")` → `# a b`.
-- **Multi-block table cells** — blocks inside a cell are joined with `<br>` and the cell is flattened to one line; two paragraphs in a cell reparse as one paragraph containing a `hardBreak`.
-- **Headerless tables** — GFM tables require a header row, so the first row is always emitted as the header; a leading `tableCell` row reparses as `tableHeader`.
+- **NUL in content strings** — U+0000 in text or a non-URI string attr (`alt`, `title`, `language`, `html`, etc.) becomes U+FFFD. Markdown input is replaced once before tokenization, including inline/fenced/indented code and raw HTML, so reparsing cannot retain a NUL or accumulate replacement characters. On dict input, core and declared URI attrs are excluded and retain their unconditional `invalid_uri_char` rejection.
+- **Hard breaks in Markdown-form headings** — ATX headings are single-line, so a `hardBreak` (or a literal newline carried over from setext input) serializes as a single space: `heading("a", hardBreak, "b")` → `# a b`.
+  A heading with a set overlay uses its tag form and preserves both outside Markdown table cells.
+- **Multi-block table cells** — without an active table family, blocks inside a cell are joined with `<br>` and flattened to one line; two paragraphs reparse as one paragraph containing a `hardBreak`.
+  An active table family writes these cells in tag form instead.
+- **Headerless tables** — without an active table family, the first row is emitted as a GFM header; a leading `tableCell` row reparses as `tableHeader`.
+  The active family preserves header placement through the tag form.
 - **Heading levels** — clamped to 1–6 at serialization (`0` → `#`, `7` → `######`).
 - **Ordered list start** — clamped to CommonMark's 0–999999999 (`-5` → `0.`), and the running number stops at that ceiling rather than emitting a 10-digit marker. Only the first number is honoured on reparse, so a repeated ceiling changes nothing.
-- **Code fence info strings** — a `language` is truncated at the first newline, since an info string is a single line; one containing a backtick switches the fence to `~~~`, which carries it losslessly.
+- **Code fence info strings** — the parser records the first info word as `language`, which takes precedence over the full `info` on writing, so a parsed fence's suffix is dropped.
+  Declared fence carriers also keep only their declared word.
+  A `language` is truncated at the first newline; one containing a backtick switches the fence to `~~~`.
 - **Nested same-type marks** — Markdown spans that map to the same self-exclusive mark are collapsed (`*outer _inner_ outer*` becomes one continuous `italic` mark) rather than producing an invalid ProseMirror mark set.
 - **Emphasis boundary whitespace** — whitespace touching an emphasis delimiter has no valid markdown form and is expelled outside the marks (`bold("굵게 ")` → `**굵게** `), cf. prosemirror-markdown's `expelEnclosingWhitespace`.
 - **Adjacent same-family lists** — consecutive lists of the same family alternate markers (`-`/`*`, `1.`/`1)`) so they stay separate lists on reparse instead of merging (which would renumber ordered items or spread task checkboxes).
+- **Declared defaults** — `None` and a value equal to a declared default are omitted at every strict level and are never materialized on read.
+- **Stored mark order** — core marks keep their given order, followed by declared marks in declaration order.
+  A link that takes tag form follows the other core marks and precedes declared marks; a Markdown-form link keeps its given position.
+- **Nested declared marks** — a self-exclusive inner mark replaces the outer one temporarily and the outer mark resumes after the close tag.
+- **Adjacent text** — after tag removal, adjacent text or raw-inline-HTML nodes with equal marks are merged.
+- **Tag-boundary emphasis whitespace** — `**a <u>b</u>**` writes as `**a** <u>**b**</u>`; the intervening space loses bold.
+  Italic and strike behave the same way, and the result is stable from the next cycle onward.
+- **Empty paragraphs and fill** — an empty paragraph is written as nothing unless a set overlay attr selects its tag form.
+  Missing required children can be filled on Markdown input, but extra empty paragraphs are not recovered.
+- **Task items** — continuation lines use the list marker's indent, without the checkbox width.
+  A non-paragraph first block starts after a checkbox-only line; in a loose list that line reads as an empty leading paragraph, while in a tight list it does not.
+- **Task-list tags** — an LI with `checked` is a task item, even when the value is false.
+  A UL containing any task item becomes a task list and its unchecked items become unchecked task items; an empty UL becomes a bullet list.
+  Each LI's attrs are decoded against its own checked-selected type before that list normalization.
+- **Tag-form images and links** — a missing image `alt` becomes `""`, and an empty image or link `title` is omitted.
+- **Undeclared unit spans** — `colspan: 1` and `rowspan: 1` stay stored on dict input but are not emitted on cell tags unless redeclared.
+- **Math spans** — line breaks inside dollar spans become spaces, and a display span read as a block node has leading and trailing whitespace removed.
 
 ## Development
 

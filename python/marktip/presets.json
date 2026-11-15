@@ -1,0 +1,92 @@
+{
+  "UNDERLINE": {"marks": [{"name": "underline", "tag": "u"}]},
+  "HIGHLIGHT": {
+    "marks": [{"name": "highlight", "tag": "mark", "attrs": {"color": {"type": "str"}}}]
+  },
+  "SUBSCRIPT": {"marks": [{"name": "subscript", "tag": "sub"}]},
+  "SUPERSCRIPT": {"marks": [{"name": "superscript", "tag": "sup"}]},
+  "TEXT_STYLE": {
+    "marks": [{
+      "name": "textStyle", "tag": "span",
+      "attrs": {
+        "backgroundColor": {"type": "str"},
+        "color": {"type": "str"},
+        "fontFamily": {"type": "str"},
+        "fontSize": {"type": "str"},
+        "lineHeight": {"type": "str"}
+      }
+    }]
+  },
+  "MENTION": {
+    "marks": [],
+    "nodes": [{
+      "name": "mention", "kind": "inline",
+      "attrs": {
+        "id": {"type": "str"},
+        "label": {"type": "str"},
+        "mentionSuggestionChar": {"type": "str", "default": "@"}
+      }
+    }]
+  },
+  "DETAILS": {
+    "marks": [],
+    "nodes": [
+      {
+        "name": "details", "kind": "block", "content": "detailsSummary detailsContent",
+        "attrs": {"open": {"type": "bool", "default": false}}
+      },
+      {"name": "detailsSummary", "kind": "block", "content": "text*", "group": "", "tag": "summary"},
+      {"name": "detailsContent", "kind": "block", "content": "block+", "group": "", "implicit": true}
+    ]
+  },
+  "INLINE_MATH": {
+    "marks": [],
+    "nodes": [{
+      "name": "inlineMath", "kind": "inline", "math": "inline", "body": "latex",
+      "attrs": {"latex": {"type": "str", "default": ""}}
+    }]
+  },
+  "BLOCK_MATH": {
+    "marks": [],
+    "nodes": [{
+      "name": "blockMath", "kind": "block", "fence": "math", "math": "display", "body": "latex",
+      "attrs": {"latex": {"type": "str", "default": ""}}
+    }]
+  },
+  "TEXT_ALIGN": {
+    "marks": [],
+    "core_attrs": {
+      "heading": {"textAlign": {"type": "str", "choices": ["left", "center", "right", "justify"]}},
+      "paragraph": {"textAlign": {"type": "str", "choices": ["left", "center", "right", "justify"]}}
+    }
+  },
+  "LINK_ATTRS": {
+    "marks": [],
+    "core_attrs": {
+      "link": {
+        "target": {"type": "str", "default": "_blank"},
+        "rel": {"type": "str", "default": "noopener noreferrer nofollow"},
+        "class": {"type": "str"}
+      }
+    }
+  },
+  "IMAGE_SIZE": {
+    "marks": [],
+    "core_attrs": {"image": {"width": {"type": "int"}, "height": {"type": "int"}}}
+  },
+  "TABLE_SPANS": {
+    "marks": [],
+    "core_attrs": {
+      "tableHeader": {
+        "colspan": {"type": "int", "default": 1},
+        "rowspan": {"type": "int", "default": 1},
+        "colwidth": {"type": "IntList"}
+      },
+      "tableCell": {
+        "colspan": {"type": "int", "default": 1},
+        "rowspan": {"type": "int", "default": 1},
+        "colwidth": {"type": "IntList"}
+      }
+    }
+  }
+}
