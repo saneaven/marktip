@@ -270,9 +270,9 @@ struct MathToken {
 // have no break syntax at all, so breaks there demote to a plain space.
 enum class InlineContext { Default, TableCell, Heading };
 
-// Adjacent lists of the same family would merge on reparse if they used the
-// same marker, so sibling loops alternate the marker (variant 0/1) between
-// consecutive same-family lists: "-" vs "*", "1. " vs "1) ".
+// Adjacent lists of the same family would merge on reparse if they used the same marker,
+// so sibling loops alternate the marker between consecutive same-family lists.
+// Spelled roots also use "+" when both other bullet markers are occupied by remembered neighbours.
 enum class ListFamily { None, Bullet, Ordered };
 
 enum class BlockKind {
@@ -289,6 +289,11 @@ struct BlockPiece {
     ListFamily family;
 };
 
+struct BlockOrigin {
+    const SpellingPiece* source;
+    bool remembered;
+};
+
 ListFamily list_family(const std::string& type) {
     if (type == "bulletList" || type == "taskList") {
         return ListFamily::Bullet;
@@ -297,6 +302,40 @@ ListFamily list_family(const std::string& type) {
         return ListFamily::Ordered;
     }
     return ListFamily::None;
+}
+
+int remembered_list_marker(std::string_view text, ListFamily family) {
+    std::size_t pos = text.find_first_not_of(" \t");
+    if (pos == std::string_view::npos) {
+        return -1;
+    }
+    int variant = -1;
+    if (family == ListFamily::Bullet) {
+        std::size_t marker = std::string_view("-*+").find(text[pos]);
+        if (marker != std::string_view::npos) {
+            variant = static_cast<int>(marker);
+            ++pos;
+        }
+    } else if (family == ListFamily::Ordered) {
+        std::size_t begin = pos;
+        while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') {
+            ++pos;
+        }
+        if (pos > begin && pos < text.size() && (text[pos] == '.' || text[pos] == ')')) {
+            variant = text[pos++] == '.' ? 0 : 1;
+        }
+    }
+    return pos == text.size() || text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\r' || text[pos] == '\n'
+               ? variant : -1;
+}
+
+int available_list_variant(ListFamily family, int left, int right = -1) {
+    int variant = 0;
+    int last = family == ListFamily::Bullet ? 2 : 1;
+    while (variant < last && (variant == left || variant == right)) {
+        ++variant;
+    }
+    return variant;
 }
 
 bool gap_has_blank_line(std::string_view gap) {
@@ -559,7 +598,7 @@ private:
             return render_blocks(node, 0);
         }
         std::vector<BlockPiece> pieces;
-        std::vector<const SpellingPiece*> origins;
+        std::vector<BlockOrigin> origins;
         origins.reserve(spelling->items.size());
         int prev_variant = 0;
         collect_block_children(node, nullptr, 0, false, pieces, prev_variant, spelling, &origins);
@@ -575,10 +614,11 @@ private:
         size += 2 * (pieces.size() - 1);
         out.reserve(size);
         for (std::size_t i = 1; i < pieces.size(); ++i) {
-            const SpellingPiece& previous = *origins[i - 1];
-            const SpellingPiece& next = *origins[i];
+            const SpellingPiece& previous = *origins[i - 1].source;
+            const SpellingPiece& next = *origins[i].source;
             std::string_view gap = spelling->view(previous.gap);
-            bool original_neighbours = previous.text && next.text && previous.gap.end == next.text->begin;
+            bool original_neighbours = origins[i - 1].remembered && origins[i].remembered &&
+                                       previous.gap.end == next.text->begin;
             if (&previous != &next && (gap_has_blank_line(gap) || original_neighbours)) {
                 out += gap;
             } else {
@@ -586,9 +626,8 @@ private:
             }
             out += pieces[i].text;
         }
-        const SpellingPiece& last = *origins.back();
-        if (last.text) {
-            out += spelling->view(last.gap);
+        if (origins.back().remembered) {
+            out += spelling->view(origins.back().source->gap);
         }
         return out;
     }
@@ -664,12 +703,14 @@ private:
     void collect_block_children(const Node& node, const NodeSpec* container, int indent, bool list_item,
                                 std::vector<BlockPiece>& pieces, int& prev_variant,
                                 const Spelling* spelling = nullptr,
-                                std::vector<const SpellingPiece*>* origins = nullptr) {
+                                std::vector<BlockOrigin>* origins = nullptr) {
         pieces.reserve(node.content.size());
         ContentModel inherited = container != nullptr && container->core ? container->allow : ContentModel::None;
         if (container != nullptr && !container->implicit) {
             append_container_tag(node, *container, indent, false, pieces, prev_variant);
         }
+        const Node* generated_list = nullptr;
+        int pending_replacement = 0;
         auto collect_child = [&](const Node& child) {
             const NodeSpec* spec = nullptr;
             if (node_forms_) {
@@ -697,8 +738,8 @@ private:
             }
 
             ListFamily family = list_family(child.type);
-            int variant = (family != ListFamily::None && !pieces.empty() && pieces.back().family == family)
-                              ? 1 - prev_variant : 0;
+            bool follows_list = family != ListFamily::None && !pieces.empty() && pieces.back().family == family;
+            int variant = follows_list ? available_list_variant(family, prev_variant) : 0;
             std::string rendered = render_block(child, indent, spec, variant, InlineContext::Default, list_item);
             if (!list_item) {
                 rstrip_newlines(rendered);
@@ -706,19 +747,58 @@ private:
             if ((!list_item || container != nullptr) && rendered.empty()) {
                 return;
             }
+            if (family != ListFamily::None && spelling != nullptr) {
+                generated_list = &child;
+                pending_replacement = available_list_variant(family, follows_list ? prev_variant : -1, variant);
+            }
             pieces.emplace_back(std::move(rendered), list_item ? block_kind(child, spec) : BlockKind::Other, family);
             prev_variant = variant;
         };
         if (spelling != nullptr) {
             std::size_t child_index = 0;
+            const Node* pending_list = nullptr;
+            std::size_t pending_piece = 0;
             for (const SpellingPiece& source : spelling->items) {
                 const Node* child = source.has_node ? &document_.node(node.content[child_index++]) : nullptr;
+                std::size_t begin = pieces.size();
+                bool remembered = false;
+                generated_list = nullptr;
                 if (source.text) {
-                    pieces.emplace_back(std::string(spelling->view(*source.text)), BlockKind::Other, ListFamily::None);
+                    ListFamily family = child != nullptr ? list_family(child->type) : ListFamily::None;
+                    std::string_view text = spelling->view(*source.text);
+                    int variant = remembered_list_marker(text, family);
+                    // The next remembered marker decides the pending generated list's right constraint.
+                    if (pending_list != nullptr && pieces.back().family == family && variant >= 0 &&
+                        variant == prev_variant) {
+                        pieces[pending_piece].text = render_block(*pending_list, indent, nullptr,
+                                                                 pending_replacement, InlineContext::Default,
+                                                                 list_item);
+                        rstrip_newlines(pieces[pending_piece].text);
+                        prev_variant = pending_replacement;
+                    }
+                    pending_list = nullptr;
+                    if (variant >= 0 && !pieces.empty() && pieces.back().family == family &&
+                        variant == prev_variant) {
+                        collect_child(*child);
+                    } else {
+                        pieces.emplace_back(std::string(text), BlockKind::Other,
+                                            variant >= 0 ? family : ListFamily::None);
+                        remembered = true;
+                        if (variant >= 0) {
+                            prev_variant = variant;
+                        }
+                    }
                 } else if (child != nullptr) {
                     collect_child(*child);
                 }
-                origins->resize(pieces.size(), &source);
+                origins->resize(pieces.size(), {&source, remembered});
+                if (pieces.size() == begin) {
+                    continue;
+                }
+                pending_list = generated_list;
+                if (pending_list != nullptr) {
+                    pending_piece = begin;
+                }
             }
         } else {
             for_each_child(node, collect_child);
@@ -857,7 +937,7 @@ private:
             }
 
             std::string marker = ordered ? std::to_string(number) + (variant != 0 ? ") " : ". ")
-                                         : std::string(variant != 0 ? "* " : "- ");
+                                         : std::string(variant == 2 ? "+ " : variant != 0 ? "* " : "- ");
             // Only the first number is honoured on reparse, so repeating the ceiling
             // changes nothing about the parsed result.
             number = std::min(number + 1, kMaxListStart);

@@ -8,6 +8,10 @@ bool is_declared_uri_attr(const AttrSpec& attr, bool core) {
     return attr.uri != UriKind::None && (!core || attr.form == MarkdownForm::Tag);
 }
 
+bool attr_is_carried(const AttrSpec& attr) {
+    return attr.form != MarkdownForm::Dropped && attr.rule != AttrRule::NoSpan;
+}
+
 Schema::Schema() {
     // The sentences Exact reports for a Dropped attr, shared by the specs that mean the same thing.
     const char* no_link_presentation = "a markdown link carries only a destination and a title";

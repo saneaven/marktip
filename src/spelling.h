@@ -24,6 +24,7 @@ struct SpellingPiece {
 // Sharing the immutable source lets another Document inherit pieces without copying their bytes.
 struct Spelling {
     explicit Spelling(std::string input);
+    explicit Spelling(std::shared_ptr<const std::string> input);
 
     std::shared_ptr<const std::string> source;
     SourceRange head;

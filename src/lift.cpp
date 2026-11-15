@@ -346,6 +346,7 @@ MARKTIP_NOINLINE void process_blocks(Document& document, std::size_t index, cons
         pieces.push_back({kind, node_index, &spec, spec.core ? std::optional<std::size_t>(child) : std::nullopt});
     }
     build_containers(document, index, parent_spec, pieces, std::move(original), path);
+    // A container written as tag lines is one piece from its opening tag line through its closing one.
     if (index == 0 && document.spelling()) {
         Spelling& spelling = *document.spelling();
         std::vector<SpellingPiece> merged;

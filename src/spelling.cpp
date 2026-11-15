@@ -6,6 +6,8 @@ namespace marktip {
 
 Spelling::Spelling(std::string input) : source(std::make_shared<const std::string>(std::move(input))) {}
 
+Spelling::Spelling(std::shared_ptr<const std::string> input) : source(std::move(input)) {}
+
 std::string_view Spelling::view(SourceRange range) const {
     return std::string_view(*source).substr(range.begin, range.end - range.begin);
 }

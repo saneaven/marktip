@@ -124,7 +124,7 @@ void merge_core_attrs(std::vector<AttrSpec>& attrs, std::vector<std::size_t>& or
         auto existing = std::find_if(attrs.begin(), attrs.end(), [&](const AttrSpec& spec) {
             return spec.name == attr.name;
         });
-        if (existing != attrs.end() && existing->form != MarkdownForm::Dropped && existing->rule != AttrRule::NoSpan) {
+        if (existing != attrs.end() && attr_is_carried(*existing)) {
             throw std::invalid_argument("core attr '" + declaration.type + "." + attr.name +
                                         "' is already carried by Markdown");
         }

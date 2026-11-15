@@ -97,6 +97,7 @@ struct AttrSpec {
 };
 
 bool is_declared_uri_attr(const AttrSpec& attr, bool core);
+bool attr_is_carried(const AttrSpec& attr);
 
 enum class Shape { InlineAtom, InlineContainer, BlockAtom, BlockContainer, TextBlock };
 enum class MathMode { None, Inline, Display };

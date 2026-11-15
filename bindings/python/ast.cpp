@@ -1,5 +1,6 @@
 #include "bindings.h"
 
+#include "inherit.h"
 #include "schema.h"
 
 namespace py = pybind11;
@@ -113,10 +114,14 @@ std::optional<std::vector<long long>> int_list_from_py(py::list values) {
 // Dropping says the same thing without the invention,
 // and it is what collapses "None" and "no such key" into one shape for everything downstream:
 // strict, the serializer, the URI policy.
-AttrList attrs_from_py(py::dict attrs, const std::vector<AttrSpec>& specs) {
+AttrList attrs_from_py(py::dict attrs, const std::vector<AttrSpec>& specs,
+                       std::vector<std::string>* keys = nullptr) {
     AttrList out;
     for (auto item : attrs) {
         std::string name = py_to_string(item.first);
+        if (keys != nullptr) {
+            keys->push_back(name);
+        }
         py::handle value = item.second;
         bool is_bool = py::isinstance<py::bool_>(value);
         bool is_int = !is_bool && py::isinstance<py::int_>(value);
@@ -249,7 +254,8 @@ void check_attrs_strict(py::dict attrs, const std::vector<AttrSpec>& specs, std:
     }
 }
 
-Mark mark_from_py(py::dict mark_dict, const Schema& schema, StrictMode mode, const PathStack& path) {
+Mark mark_from_py(py::dict mark_dict, const Schema& schema, StrictMode mode, const PathStack& path,
+                  std::vector<std::string>* keys) {
     Mark mark;
     mark.type = required_type(mark_dict, "mark", path);
     const MarkSpec* spec = require_mark_spec(schema, mark.type, path);
@@ -264,7 +270,7 @@ Mark mark_from_py(py::dict mark_dict, const Schema& schema, StrictMode mode, con
         if (mode != StrictMode::Off) {
             check_attrs_strict(attr_dict, specs, mark.type, "mark", mode, path);
         }
-        mark.attrs = attrs_from_py(attr_dict, specs);
+        mark.attrs = attrs_from_py(attr_dict, specs, keys);
     }
     // Outside the block above on purpose: a link mark with no attrs key at all
     // is a link with no destination just as much as one whose href is None.
@@ -277,7 +283,8 @@ Mark mark_from_py(py::dict mark_dict, const Schema& schema, StrictMode mode, con
 
 // Keep mark parsing outside fill_node_from_py's recursive frame: kMaxNodeDepth must
 // remain safe on the smaller Windows worker stack even as strict checks grow.
-void fill_marks_from_py(Node& node, py::object marks, const Schema& schema, StrictMode mode, PathStack& path) {
+void fill_marks_from_py(Node& node, py::object marks, const Schema& schema, StrictMode mode, PathStack& path,
+                         NodeAttrKeys* keys) {
     if (marks.is_none()) {
         return;
     }
@@ -286,7 +293,12 @@ void fill_marks_from_py(Node& node, py::object marks, const Schema& schema, Stri
     std::size_t mark_index = 0;
     for (py::handle mark_handle : mark_list) {
         path.push_back({"marks", mark_index});
-        Mark mark = mark_from_py(expect_dict(mark_handle, "mark", "marks", path), schema, mode, path);
+        std::vector<std::string>* mark_keys = nullptr;
+        if (keys != nullptr) {
+            keys->marks.emplace_back();
+            mark_keys = &keys->marks.back();
+        }
+        Mark mark = mark_from_py(expect_dict(mark_handle, "mark", "marks", path), schema, mode, path, mark_keys);
         if (mode != StrictMode::Off) {
             check_mark_set(node.marks, mark, schema, path);
         }
@@ -300,7 +312,8 @@ void fill_marks_from_py(Node& node, py::object marks, const Schema& schema, Stri
 // frame. kMaxNodeDepth must remain safe on small Windows worker stacks even as
 // strict validation grows.
 const NodeSpec* fill_node_fields_from_py(Document& document, std::size_t index, py::dict node_dict,
-                                         std::string_view context, StrictMode mode, PathStack& path) {
+                                         std::string_view context, StrictMode mode, PathStack& path,
+                                         NodeAttrKeys* keys) {
     Node node;
     node.type = required_type(node_dict, context, path);
     const Schema& schema = document.schema();
@@ -324,7 +337,7 @@ const NodeSpec* fill_node_fields_from_py(Document& document, std::size_t index, 
         if (mode != StrictMode::Off) {
             check_attrs_strict(attr_dict, specs, node.type, "node", mode, path);
         }
-        node.attrs = attrs_from_py(attr_dict, specs);
+        node.attrs = attrs_from_py(attr_dict, specs, keys != nullptr ? &keys->node : nullptr);
     }
     // Outside the block above: an image with no attrs key at all still has no src.
     if (mode != StrictMode::Off) {
@@ -336,7 +349,7 @@ const NodeSpec* fill_node_fields_from_py(Document& document, std::size_t index, 
     if (mode != StrictMode::Off && marks.is_none() && dict_contains(node_dict, "marks")) {
         expect_list(marks, "node marks", "marks", path);
     }
-    fill_marks_from_py(node, marks, schema, mode, path);
+    fill_marks_from_py(node, marks, schema, mode, path, keys);
     if (mode != StrictMode::Off && !spec->core) {
         check_node_marks(node, *spec, path);
     }
@@ -346,10 +359,14 @@ const NodeSpec* fill_node_fields_from_py(Document& document, std::size_t index, 
 }
 
 const NodeSpec* fill_node_from_py(Document& document, std::size_t index, py::dict node_dict, std::string_view context,
-                                  std::size_t depth, StrictMode mode, PathStack& path) {
+                                  std::size_t depth, StrictMode mode, PathStack& path, InputAttrKeys* keys = nullptr) {
     check_node_depth(depth, path);
 
-    const NodeSpec* spec = fill_node_fields_from_py(document, index, node_dict, context, mode, path);
+    if (keys != nullptr) {
+        keys->resize(index + 1);
+    }
+    const NodeSpec* spec = fill_node_fields_from_py(document, index, node_dict, context, mode, path,
+                                                   keys != nullptr ? &(*keys)[index] : nullptr);
 
     bool has_content = dict_contains(node_dict, "content");
     py::object content = dict_get(node_dict, "content");
@@ -369,7 +386,8 @@ const NodeSpec* fill_node_from_py(Document& document, std::size_t index, py::dic
         path.push_back({"content", child_pos});
         py::dict child_dict = expect_dict(child_handle, "content child", "content", path);
         std::size_t child_index = document.append_child(index, Node{});
-        const NodeSpec* child = fill_node_from_py(document, child_index, child_dict, "node", depth + 1, mode, path);
+        const NodeSpec* child = fill_node_from_py(document, child_index, child_dict, "node", depth + 1, mode, path,
+                                                 keys);
         if (mode != StrictMode::Off) {
             check_child_content(document, *spec, *child, document.node(child_index),
                                 content_list.size(), path);
@@ -390,7 +408,8 @@ py::dict to_dict_py(const Document& document) {
 }
 
 Document from_dict_py(py::dict root, py::object link_schemes, py::object image_schemes, py::object link_relative,
-                      py::object image_relative, py::object reject_node_types, py::object strict, py::object schema) {
+                      py::object image_relative, py::object reject_node_types, py::object strict, py::object schema,
+                      py::object base) {
     // Options are validated before the tree is walked:
     // a bad option value is a caller bug,
     // and should surface whatever the document happens to contain.
@@ -399,6 +418,16 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
     std::shared_ptr<const Schema> selected_schema = schema_from_py(schema);
     NodeTypePolicy node_policy = node_type_policy_from_py(std::move(reject_node_types), *selected_schema);
     StrictMode mode = strict_from_py(strict, "strict");
+    const Document* inheritance_base = nullptr;
+    if (!base.is_none()) {
+        if (!py::isinstance<Document>(base)) {
+            throw py::type_error("base must be a Document or None");
+        }
+        const Document& candidate = py::cast<const Document&>(base);
+        if (candidate.spelling() && &candidate.schema() == selected_schema.get()) {
+            inheritance_base = &candidate;
+        }
+    }
 
     PathStack path;
     path.reserve(32);
@@ -407,7 +436,13 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
     check_root_type(type, path);
 
     Document document(std::move(selected_schema));
-    fill_node_from_py(document, 0, root, "root node", 0, mode, path);
+    if (inheritance_base != nullptr) {
+        InputAttrKeys present;
+        fill_node_from_py(document, 0, root, "root node", 0, mode, path, &present);
+        inherit_spelling(document, *inheritance_base, present);
+    } else {
+        fill_node_from_py(document, 0, root, "root node", 0, mode, path);
+    }
     finalize_document(document, node_policy, policy);
     return document;
 }

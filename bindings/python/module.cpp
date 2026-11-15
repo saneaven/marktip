@@ -321,6 +321,9 @@ PYBIND11_MODULE(_core, module) {
     // declared fields, valid content relationships and attrs it understands.
     const std::string from_dict_doc =
         "Build a Document from a Tiptap-style JSON dict."
+        " Pass base=Document to reuse spelling of equal blocks from that document."
+        " Matched blocks inherit attrs whose keys are absent; a key set to None is cleared."
+        " Spelling reuse requires the same Schema instance as the base."
         " Pass schema=Schema(...) to use declared marks and nodes, fence and math carriers,"
         " and attrs added to core types through core_attrs;"
         " None (the default) uses the built-in GFM schema." +
@@ -359,5 +362,6 @@ PYBIND11_MODULE(_core, module) {
                py::arg("link_schemes") = py::none(), py::arg("image_schemes") = py::none(),
                py::arg("link_relative") = "allow",
                py::arg("image_relative") = "allow", py::arg("reject_node_types") = py::none(),
-               py::arg("strict") = "off", py::arg("schema") = py::none(), from_dict_doc.c_str());
+               py::arg("strict") = "off", py::arg("schema") = py::none(), py::arg("base") = py::none(),
+               from_dict_doc.c_str());
 }
