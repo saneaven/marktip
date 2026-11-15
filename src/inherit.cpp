@@ -200,8 +200,6 @@ void inherit_attrs_and_spelling(Document& document, const Document& base, const 
     document.spelling().emplace(base_spelling.source);
     Spelling& spelling = *document.spelling();
     spelling.head = base_spelling.head;
-    spelling.html = base_spelling.html;
-    spelling.cjk_friendly = base_spelling.cjk_friendly;
     spelling.items.reserve(base_spelling.items.size() + children.size());
     spelling.items.insert(spelling.items.end(), trailing[0].begin(), trailing[0].end());
     for (std::size_t i = 0; i < children.size(); ++i) {

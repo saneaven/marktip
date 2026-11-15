@@ -32,7 +32,7 @@ def assert_canonical_readback(document, *, schema=None, html=True):
         document.to_markdown(canonical=True)
     )
     stored = json.loads(json.dumps(document.dump()))
-    restored = tm.load(stored, schema=schema, html=html)
+    restored = tm.load(stored, schema=schema)
     assert restored.to_dict() == document.to_dict()
     assert restored.to_markdown() == written
     assert restored.dump() == stored
@@ -61,7 +61,7 @@ def test_spec_editor_roundtrip_keeps_source_spelling(markdown, html, simulated):
     assert document.to_markdown() == markdown
     assert without_editor_presentation(document.to_dict()) == without_editor_presentation(original)
     stored = json.loads(json.dumps(document.dump()))
-    restored = tm.load(stored, html=html)
+    restored = tm.load(stored)
     assert restored.to_dict() == document.to_dict()
     assert restored.to_markdown() == markdown
     assert restored.dump() == stored

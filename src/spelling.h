@@ -41,8 +41,6 @@ struct Spelling {
     std::shared_ptr<const std::string> source;
     SourceRange head;
     std::vector<SpellingPiece> items;
-    bool html = true;
-    bool cjk_friendly = false;
 
     std::string_view view(SourceRange range) const;
     void append_segment(std::size_t begin, std::size_t end, bool has_node);

@@ -10,7 +10,7 @@ namespace marktip {
 
 pybind11::dict to_dict_py(const Document& document);
 pybind11::dict dump_py(const Document& document);
-Document load_py(pybind11::dict data, bool cjk_friendly, bool html, pybind11::object schema);
+Document load_py(pybind11::dict data, pybind11::object schema);
 
 // Requires the GIL.
 // Malformed option values are a caller bug rather than a malformed document,

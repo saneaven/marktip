@@ -451,11 +451,6 @@ py::dict dump_py(const Document& document) {
     py::dict result;
     result["marktip"] = 1;
     result["schema"] = document.schema().fingerprint();
-    const auto& spelling = document.spelling();
-    py::dict options;
-    options["html"] = spelling ? spelling->html : true;
-    options["cjk_friendly"] = spelling ? spelling->cjk_friendly : false;
-    result["options"] = std::move(options);
     result["doc"] = to_dict_py(document);
     std::optional<StoredSpelling> stored = dump_spelling(document);
     if (stored) {
@@ -479,7 +474,7 @@ py::dict dump_py(const Document& document) {
     return result;
 }
 
-Document load_py(py::dict data, bool cjk_friendly, bool html, py::object schema) {
+Document load_py(py::dict data, py::object schema) {
     py::object version = dict_get(data, "marktip");
     if (!py::isinstance<py::int_>(version) || py::cast<long long>(version) != 1) {
         throw py::value_error("unsupported marktip version");
@@ -491,10 +486,7 @@ Document load_py(py::dict data, bool cjk_friendly, bool html, py::object schema)
     if (!dict_contains(data, "source")) {
         return document;
     }
-    py::dict options = expect_dict(dict_get(data, "options"), "stored options", "options", path);
-    if (py::cast<std::string>(dict_get(data, "schema")) != document.schema().fingerprint() ||
-        py::cast<bool>(dict_get(options, "html")) != html ||
-        py::cast<bool>(dict_get(options, "cjk_friendly")) != cjk_friendly) {
+    if (py::cast<std::string>(dict_get(data, "schema")) != document.schema().fingerprint()) {
         return document;
     }
     py::dict source = expect_dict(dict_get(data, "source"), "stored source", "source", path);
@@ -516,8 +508,6 @@ Document load_py(py::dict data, bool cjk_friendly, bool html, py::object schema)
     }
     if (blocks == document.root().content.size()) {
         document.spelling() = restore_spelling(stored);
-        document.spelling()->html = html;
-        document.spelling()->cjk_friendly = cjk_friendly;
     }
     return document;
 }

@@ -9,14 +9,14 @@ import marktip as tm
 from spec_examples import EDGE_DOCUMENTS, EXAMPLES, block_schema, editor_dict
 
 
-def json_storage_roundtrip(document, *, schema=None, html=True, cjk_friendly=False):
+def json_storage_roundtrip(document, *, schema=None):
     stored = json.loads(json.dumps(document.dump()))
     assert stored["marktip"] == 1
     assert isinstance(stored["schema"], str) and stored["schema"]
     assert stored["doc"] == document.to_dict()
     if "source" in stored:
         assert sum(item.get("node", True) for item in stored["source"]["items"]) == len(stored["doc"]["content"])
-    restored = tm.load(stored, schema=schema, html=html, cjk_friendly=cjk_friendly)
+    restored = tm.load(stored, schema=schema)
     assert restored.to_dict() == document.to_dict()
     assert restored.to_markdown() == document.to_markdown()
     assert restored.dump() == stored
@@ -27,22 +27,21 @@ def json_storage_roundtrip(document, *, schema=None, html=True, cjk_friendly=Fal
 @pytest.mark.parametrize("markdown", EXAMPLES)
 def test_spec_dump_and_load_preserve_content_and_source(markdown, html):
     document = tm.from_markdown(markdown, html=html)
-    stored, restored = json_storage_roundtrip(document, html=html)
-    assert stored["options"] == {"html": html, "cjk_friendly": False}
+    _, restored = json_storage_roundtrip(document)
     assert restored.to_markdown() == markdown
 
 
 @pytest.mark.parametrize("html", (True, False))
 def test_readme_dump_and_load_preserve_content_and_source(html):
     markdown = (Path(__file__).resolve().parents[1] / "README.md").read_bytes().decode("utf-8")
-    _, restored = json_storage_roundtrip(tm.from_markdown(markdown, html=html), html=html)
+    _, restored = json_storage_roundtrip(tm.from_markdown(markdown, html=html))
     assert restored.to_markdown() == markdown
 
 
 @pytest.mark.parametrize("html", (True, False))
 @pytest.mark.parametrize("markdown", EDGE_DOCUMENTS)
 def test_edge_document_dump_and_load_preserve_source(markdown, html):
-    _, restored = json_storage_roundtrip(tm.from_markdown(markdown, html=html), html=html)
+    _, restored = json_storage_roundtrip(tm.from_markdown(markdown, html=html))
     assert restored.to_markdown() == markdown
 
 
@@ -61,7 +60,7 @@ def test_tag_line_containers_atoms_and_internal_definitions_survive_storage(html
         "<callout>\n*text*\n</callout>\n<embed label='x'/>\n</callout>\n"
     )
     _, restored = json_storage_roundtrip(tm.from_markdown(markdown, schema=schema, html=html),
-                                        schema=schema, html=html)
+                                        schema=schema)
     assert restored.to_markdown() == markdown
 
 
@@ -70,43 +69,27 @@ def test_generated_block_image_pieces_survive_storage(html):
     schema = tm.Schema(block_image=True)
     markdown = "# Keep ###\nx ![a](/a.png) y\n\n__end__\n"
     document = tm.from_markdown(markdown, schema=schema, html=html)
-    stored, _ = json_storage_roundtrip(document, schema=schema, html=html)
+    stored, _ = json_storage_roundtrip(document, schema=schema)
     items = stored["source"]["items"]
     assert ["text" in item for item in items] == [True, False, False, False, True]
 
 
-def test_inherited_spelling_keeps_the_bases_parser_options():
+def test_inherited_spelling_read_with_nondefault_options_survives_storage():
     markdown = "\n**《제목》**a <u>x</u>\n"
     base = tm.from_markdown(markdown, html=False, cjk_friendly=True)
     document = tm.from_dict(editor_dict(base.to_dict()), base=base)
-    stored, restored = json_storage_roundtrip(document, html=False, cjk_friendly=True)
-    assert stored["options"] == {"html": False, "cjk_friendly": True}
+    _, restored = json_storage_roundtrip(document)
     assert restored.to_markdown() == markdown
 
 
-@pytest.mark.parametrize("stored_options, load_options", (
-    ({"html": False}, {}),
-    ({"cjk_friendly": True}, {}),
-    ({}, {"html": False}),
-    ({}, {"cjk_friendly": True}),
-))
-def test_load_drops_spelling_when_parser_options_differ(stored_options, load_options):
-    document = tm.from_markdown("\nTitle\n=====\n", **stored_options)
-    restored = tm.load(document.dump(), **load_options)
-    assert restored.to_dict() == document.to_dict()
-    assert restored.to_markdown() == document.to_markdown(canonical=True) == "# Title"
-    assert "source" not in restored.dump()
-
-
-@pytest.mark.parametrize("mismatch", ("schema", "html"))
-def test_an_editor_save_keeps_absent_attrs_after_load_drops_spelling(mismatch):
+def test_an_editor_save_keeps_absent_attrs_after_load_drops_spelling():
     markdown = (
         "- first\n\n- second\n\n```python title=x\nprint('x')\n```\n\n"
         "| A | B |\n| --- | --- |\n| a | b |\n"
     )
     stored = json.loads(json.dumps(tm.from_markdown(markdown).dump()))
-    schema = tm.Schema(marks=[tm.MarkSpec("extra")]) if mismatch == "schema" else None
-    loaded = tm.load(stored, schema=schema, html=mismatch != "html")
+    schema = tm.Schema(marks=[tm.MarkSpec("extra")])
+    loaded = tm.load(stored, schema=schema)
     assert "source" not in loaded.dump()
     editor_json = loaded.to_dict()
     editor_json["content"][0]["attrs"].pop("tight")
@@ -229,10 +212,10 @@ def test_agent_editor_storage_flow_keeps_untouched_blocks_through_two_rounds(htm
     for round_number in (1, 2):
         editor_json = copy.deepcopy(stored["doc"])
         editor_json["content"][1]["content"][0]["text"] = f"round {round_number}"
-        base = tm.load(stored, schema=schema, html=html)
+        base = tm.load(stored, schema=schema)
         edited = tm.from_dict(editor_json, schema=schema, base=base)
         stored = json.loads(json.dumps(edited.dump()))
-        read = tm.load(stored, schema=schema, html=html)
+        read = tm.load(stored, schema=schema)
         assert read.to_dict() == stored["doc"] == edited.to_dict()
         expected = (
             f"\n# Keep ###\n\n*round {round_number}*\n\n> __quote__\n\n"

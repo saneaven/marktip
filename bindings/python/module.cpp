@@ -273,7 +273,7 @@ PYBIND11_MODULE(_core, module) {
 
     py::class_<marktip::Document>(module, "Document")
         .def("to_dict", &marktip::to_dict_py, "Convert the document AST to a Tiptap-style JSON dict.")
-        .def("dump", &marktip::dump_py, "Return JSON-serializable content, spelling, schema and parser options.")
+        .def("dump", &marktip::dump_py, "Return JSON-serializable content, spelling and schema.")
         .def("to_markdown",
              [](const marktip::Document& document, bool canonical) {
                  return marktip::to_markdown(document, canonical);
@@ -363,11 +363,10 @@ PYBIND11_MODULE(_core, module) {
                py::arg("image_relative") = "allow", py::arg("reject_node_types") = py::none(),
                py::arg("strict") = "off", py::arg("schema") = py::none(), py::arg("base") = py::none(),
                from_dict_doc.c_str());
-    module.def("load", &marktip::load_py, py::arg("data"), py::kw_only(), py::arg("cjk_friendly") = false,
-               py::arg("html") = true, py::arg("schema") = py::none(),
+    module.def("load", &marktip::load_py, py::arg("data"), py::kw_only(), py::arg("schema") = py::none(),
                "Load a Document saved by dump()."
-               " Restore spelling when the schema declaration and parser options match."
-               " Otherwise only content is loaded. Defaults match from_markdown."
+               " Restore spelling when the schema declaration matches."
+               " Otherwise only content is loaded."
                " Stored spelling is not reparsed or checked against content."
                " An unknown marktip version raises ValueError.");
 }

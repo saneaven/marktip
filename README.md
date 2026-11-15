@@ -124,7 +124,6 @@ The stored form has this shape, with the fingerprint and `doc.content` abbreviat
 {
   "marktip": 1,
   "schema": "9f2c…",
-  "options": {"html": true, "cjk_friendly": false},
   "doc": {"type": "doc", "content": [...]},
   "source": {
     "head": "",
@@ -145,23 +144,15 @@ An item without `text` has no remembered spelling; `sep` is its trailing gap.
 A document without spelling omits `source` entirely and still round-trips through `dump` and `load`.
 
 The schema is compared by a stable fingerprint of its declaration, so separately constructed equal schemas can reuse spelling through both `base=` and `load`.
-`load(data, schema=S, html=True, cjk_friendly=False)` reads the stored content and restores spelling only when the declaration fingerprint and parser options match.
+`load(data, schema=S)` reads the stored content and restores spelling only when the declaration fingerprint matches.
 The content must be readable under the supplied schema.
-A different declaration or different options drops the spelling, so readable content is written in marktip's spelling.
-If `from_markdown` used non-default parser options, pass those same options to `load`:
-
-```python
-doc = tm.from_markdown("<span>literal</span>\n", html=False, cjk_friendly=True)
-stored = doc.dump()
-restored = tm.load(stored, html=False, cjk_friendly=True)
-assert restored.to_markdown() == doc.to_markdown()
-```
+A different declaration drops the spelling, so readable content is written in marktip's spelling.
 
 `load` trusts that the stored spelling denotes the stored content; it does not reparse the text to check it.
 An unknown `marktip` version raises `ValueError`.
 If the source's block-piece count does not match the root's child count, the spelling is dropped.
 
-For the default schema and options, the caller's flow is:
+For the default schema, the caller's flow is:
 
 | Action | Code | Conversion |
 | --- | --- | --- |
@@ -170,11 +161,12 @@ For the default schema and options, the caller's flow is:
 | Editor saves | `from_dict(editor_json, base=load(stored)).dump()` | Read JSON twice and compare blocks |
 | Agent reads | `load(stored).to_markdown()` | Read JSON once and join pieces |
 
-Pass the application's schema and matching parser options when restoring a configured document.
+Pass the application's schema when restoring a configured document.
 The frontend can render the stored `doc` without running marktip.
 
 ### Source-spelling limits
 
+- Changing parser options (`html`, `cjk_friendly`) can make documents stored earlier read back differently.
 - The unit is one top-level block.
   When a list, table, quote, or declared container needs rewriting, that whole block is written again and its internal source spelling is lost.
 - When identical blocks occur together and one is deleted, which original spelling the survivor inherits is unspecified.

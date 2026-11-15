@@ -810,8 +810,6 @@ Document parse_to_document(std::string markdown, bool cjk_friendly, bool html,
         throw ParseError("parse_failed", "MD4C failed to parse markdown");
     }
     Document document = std::move(builder).into_document();
-    document.spelling()->html = html;
-    document.spelling()->cjk_friendly = cjk_friendly;
     if (document.schema().has_tags() || document.schema().block_image()) {
         lift(document, html);
     }
