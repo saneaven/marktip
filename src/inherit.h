@@ -15,6 +15,6 @@ struct NodeAttrKeys {
 
 using InputAttrKeys = std::vector<NodeAttrKeys>;
 
-void inherit_spelling(Document& document, const Document& base, const InputAttrKeys& present);
+void inherit_attrs_and_spelling(Document& document, const Document& base, const InputAttrKeys& present);
 
 }  // namespace marktip

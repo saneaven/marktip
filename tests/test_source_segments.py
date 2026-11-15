@@ -22,6 +22,8 @@ def source_positions(markdown, *, html=True):
 def test_all_vendored_spec_examples_are_loaded():
     assert len(COMMONMARK) == 652
     assert len(GFM) == 672
+    assert len(EXAMPLES) == 693
+    assert len({example.values[0] for example in EXAMPLES}) == 693
 
 
 @pytest.mark.parametrize("html", (True, False))

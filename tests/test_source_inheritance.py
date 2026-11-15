@@ -5,25 +5,7 @@ from pathlib import Path
 import pytest
 
 import marktip as tm
-from spec_examples import EXAMPLES
-from test_source_spelling import block_schema
-
-
-def editor_dict(value):
-    result = copy.deepcopy(value)
-
-    def visit(node):
-        attrs = node.get("attrs", {})
-        for name in ("tight", "align", "colCount", "info"):
-            attrs.pop(name, None)
-        if node["type"] in ("tableCell", "tableHeader"):
-            node.setdefault("attrs", {})["colspan"] = 1
-        node.get("marks", []).reverse()
-        for child in node.get("content", []):
-            visit(child)
-
-    visit(result)
-    return result
+from spec_examples import EDGE_DOCUMENTS, EXAMPLES, block_schema, editor_dict
 
 
 def without_editor_presentation(value):
@@ -95,17 +77,7 @@ def test_readme_editor_roundtrip_keeps_source_spelling(html):
 
 
 @pytest.mark.parametrize("html", (True, False))
-@pytest.mark.parametrize("markdown", (
-    "",
-    "\n\n",
-    " \t\r\n\t\r\n ",
-    "[one]: /one\n[two]: /two\n\n",
-    "\n \t\n# Title ### \t\nbody without final newline",
-    "\r\n# 제목 ### \t\r\n\r\n*first*\r\n \t\r\n> 인용\r\n",
-    "~~~py\ncode\n~~~ \t\n \t\n",
-    "    code\n\n \t\n",
-    "# Heading\n[one]: /one\n\nbody\n\n[two]: /two",
-))
+@pytest.mark.parametrize("markdown", EDGE_DOCUMENTS)
 def test_edge_document_editor_roundtrip_keeps_source_spelling(markdown, html):
     base = tm.from_markdown(markdown, html=html)
     assert tm.from_dict(editor_dict(base.to_dict()), base=base).to_markdown() == markdown
@@ -353,6 +325,37 @@ def test_dropped_and_free_attrs_do_not_change_spelling_but_a_carried_attr_does()
     document = tm.from_dict(submitted, base=base)
     assert document.to_markdown() == '[x](https://new.example "Title")'
     assert_canonical_readback(document)
+
+
+@pytest.mark.parametrize("target", ("absent", "_self", None))
+def test_matched_blocks_inherit_all_absent_attrs_and_keep_present_values(target):
+    markdown = "\n[Link](https://example.com 'Title')\n\n3. _item_\n\n__tail__\n"
+    parsed = tm.from_markdown(markdown)
+    seeded = parsed.to_dict()
+    seeded["content"][0]["content"][0]["marks"][0]["attrs"]["target"] = "_blank"
+    seeded["content"][1]["attrs"]["type"] = "i"
+    seeded["content"][2]["attrs"] = {"textAlign": "center"}
+    base = tm.from_dict(seeded, base=parsed)
+    assert base.to_markdown() == markdown
+
+    submitted = base.to_dict()
+    link_attrs = submitted["content"][0]["content"][0]["marks"][0]["attrs"]
+    link_attrs.pop("target")
+    submitted["content"][1]["attrs"].pop("type")
+    submitted["content"][2]["attrs"].pop("textAlign")
+    if target != "absent":
+        link_attrs["target"] = target
+
+    expected = base.to_dict()
+    expected_link_attrs = expected["content"][0]["content"][0]["marks"][0]["attrs"]
+    if target is None:
+        expected_link_attrs.pop("target")
+    elif target != "absent":
+        expected_link_attrs["target"] = target
+
+    document = tm.from_dict(submitted, base=base)
+    assert document.to_dict() == document.dump()["doc"] == expected
+    assert document.to_markdown() == markdown
 
 
 @pytest.mark.parametrize("owner", ("node", "mark"))

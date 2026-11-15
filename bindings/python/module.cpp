@@ -322,7 +322,7 @@ PYBIND11_MODULE(_core, module) {
         "Build a Document from a Tiptap-style JSON dict."
         " Pass base=Document to reuse spelling of equal blocks from that document."
         " Matched blocks inherit attrs whose keys are absent; a key set to None is cleared."
-        " Spelling reuse requires the same schema declaration as the base."
+        " A base with a different schema declaration lends nothing."
         " Pass schema=Schema(...) to use declared marks and nodes, fence and math carriers,"
         " and attrs added to core types through core_attrs;"
         " None (the default) uses the built-in GFM schema." +

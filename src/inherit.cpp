@@ -30,13 +30,10 @@ bool same_attrs(const AttrList& current, const AttrList& original, const std::ve
     return true;
 }
 
-void inherit_attrs(AttrList& current, const AttrList& original, const std::vector<AttrSpec>& specs,
-                    const std::vector<std::string>& present) {
-    for (const AttrSpec& spec : specs) {
-        if (attr_is_carried(spec) && !has_key(present, spec.name)) {
-            if (const AttrValue* value = find_attr(original, spec.name)) {
-                set_attr(current, spec.name, *value);
-            }
+void inherit_attrs(AttrList& current, const AttrList& original, const std::vector<std::string>& present) {
+    for (const auto& attr : original) {
+        if (!has_key(present, attr.first)) {
+            set_attr(current, attr.first, attr.second);
         }
     }
 }
@@ -91,13 +88,11 @@ public:
     void fill(std::size_t current_index, std::size_t original_index) {
         Node& current = document_.node(current_index);
         const Node& original = base_.node(original_index);
-        const NodeSpec& spec = *document_.schema().node(current.type);
-        inherit_attrs(current.attrs, original.attrs, spec.attrs, present_[current_index].node);
+        inherit_attrs(current.attrs, original.attrs, present_[current_index].node);
         std::vector<std::size_t> pairs = *mark_pairs(current_index, original_index);
         for (std::size_t i = 0; i < current.marks.size(); ++i) {
             Mark& mark = current.marks[i];
-            inherit_attrs(mark.attrs, original.marks[pairs[i]].attrs, document_.schema().mark(mark.type)->attrs,
-                          present_[current_index].marks[i]);
+            inherit_attrs(mark.attrs, original.marks[pairs[i]].attrs, present_[current_index].marks[i]);
         }
         for (std::size_t i = 0; i < current.content.size(); ++i) {
             fill(current.content[i], original.content[i]);
@@ -141,7 +136,7 @@ private:
 
 }  // namespace
 
-void inherit_spelling(Document& document, const Document& base, const InputAttrKeys& present) {
+void inherit_attrs_and_spelling(Document& document, const Document& base, const InputAttrKeys& present) {
     const auto& original_children = base.root().content;
     const auto& children = document.root().content;
     std::unordered_map<std::size_t, std::vector<std::size_t>> candidates;
@@ -185,12 +180,12 @@ void inherit_spelling(Document& document, const Document& base, const InputAttrK
     if (!base.spelling()) {
         return;
     }
-    const Spelling& source = *base.spelling();
+    const Spelling& base_spelling = *base.spelling();
     std::vector<const SpellingPiece*> blocks;
     blocks.reserve(original_children.size());
     std::vector<std::vector<SpellingPiece>> trailing(children.size() + 1);
     std::size_t anchor = 0;
-    for (const SpellingPiece& piece : source.items) {
+    for (const SpellingPiece& piece : base_spelling.items) {
         if (piece.has_node) {
             std::size_t index = blocks.size();
             blocks.push_back(&piece);
@@ -202,12 +197,12 @@ void inherit_spelling(Document& document, const Document& base, const InputAttrK
         }
     }
 
-    document.spelling().emplace(source.source);
+    document.spelling().emplace(base_spelling.source);
     Spelling& spelling = *document.spelling();
-    spelling.head = source.head;
-    spelling.html = source.html;
-    spelling.cjk_friendly = source.cjk_friendly;
-    spelling.items.reserve(source.items.size() + children.size());
+    spelling.head = base_spelling.head;
+    spelling.html = base_spelling.html;
+    spelling.cjk_friendly = base_spelling.cjk_friendly;
+    spelling.items.reserve(base_spelling.items.size() + children.size());
     spelling.items.insert(spelling.items.end(), trailing[0].begin(), trailing[0].end());
     for (std::size_t i = 0; i < children.size(); ++i) {
         spelling.items.push_back(matches[i] ? *blocks[*matches[i]] : SpellingPiece {});

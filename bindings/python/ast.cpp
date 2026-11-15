@@ -112,9 +112,8 @@ std::optional<std::vector<long long>> int_list_from_py(py::list values) {
 // Scalars and declared int lists are the values the serializer can act on; every other key is dropped.
 // Stamping the rest through py::str turned [100] into "[100]" and a None into "",
 // which put a string the caller never wrote into to_dict() and lost the value anyway.
-// Dropping says the same thing without the invention,
-// and it is what collapses "None" and "no such key" into one shape for everything downstream:
-// strict, the serializer, the URI policy.
+// None is omitted from AttrList.
+// The key sink keeps it distinct from an absent key for inheritance.
 AttrList attrs_from_py(py::dict attrs, const std::vector<AttrSpec>& specs,
                        std::vector<std::string>* keys = nullptr) {
     AttrList out;
@@ -440,7 +439,7 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
     if (inheritance_base != nullptr) {
         InputAttrKeys present;
         fill_node_from_py(document, 0, root, "root node", 0, mode, path, &present);
-        inherit_spelling(document, *inheritance_base, present);
+        inherit_attrs_and_spelling(document, *inheritance_base, present);
     } else {
         fill_node_from_py(document, 0, root, "root node", 0, mode, path);
     }

@@ -76,6 +76,17 @@ def test_original_indentation_after_a_list_can_be_absorbed(action):
     assert first_item["content"][1] == paragraph("paragraph")
 
 
+def test_original_indented_code_blocks_that_become_neighbours_can_merge():
+    base = tm.from_markdown("    first\n\nseparator\n\n    second\n")
+    submitted = base.to_dict()
+    submitted["content"].pop(1)
+    document = tm.from_dict(submitted, base=base)
+    assert [child["type"] for child in document.to_dict()["content"]] == ["codeBlock", "codeBlock"]
+    assert document.to_markdown() == "    first\n\n    second\n"
+    reread = tm.from_markdown(document.to_markdown()).to_dict()
+    assert [child["type"] for child in reread["content"]] == ["codeBlock"]
+
+
 @pytest.mark.parametrize("source", (
     "> [r]: /u\n>\n> inside\n\n[link][r]\n",
     "[r]: /u\ninside\n\n[link][r]\n",

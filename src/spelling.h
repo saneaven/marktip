@@ -33,6 +33,7 @@ struct StoredSpelling {
 
 // Ranges keep the original positions when pieces lose text or change order.
 // Sharing the immutable source lets another Document inherit pieces without copying their bytes.
+// Pieces that carry a node correspond in order to the root's children.
 struct Spelling {
     explicit Spelling(std::string input);
     explicit Spelling(std::shared_ptr<const std::string> input);

@@ -6,9 +6,7 @@ from pathlib import Path
 import pytest
 
 import marktip as tm
-from spec_examples import EXAMPLES
-from test_source_inheritance import editor_dict
-from test_source_spelling import block_schema
+from spec_examples import EDGE_DOCUMENTS, EXAMPLES, block_schema, editor_dict
 
 
 def json_storage_roundtrip(document, *, schema=None, html=True, cjk_friendly=False):
@@ -42,17 +40,7 @@ def test_readme_dump_and_load_preserve_content_and_source(html):
 
 
 @pytest.mark.parametrize("html", (True, False))
-@pytest.mark.parametrize("markdown", (
-    "",
-    "\n\n",
-    " \t\r\n\t\r\n ",
-    "[one]: /one\n[two]: /two\n\n",
-    "\n \t\n# Title ### \t\nbody without final newline",
-    "\r\n# 제목 ### \t\r\n\r\n*first*\r\n \t\r\n> 인용\r\n",
-    "~~~py\ncode\n~~~ \t\n \t\n",
-    "    code\n\n \t\n",
-    "# Heading\n[one]: /one\n\nbody\n\n[two]: /two",
-))
+@pytest.mark.parametrize("markdown", EDGE_DOCUMENTS)
 def test_edge_document_dump_and_load_preserve_source(markdown, html):
     _, restored = json_storage_roundtrip(tm.from_markdown(markdown, html=html), html=html)
     assert restored.to_markdown() == markdown

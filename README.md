@@ -179,7 +179,7 @@ The frontend can render the stored `doc` without running marktip.
   When a list, table, quote, or declared container needs rewriting, that whole block is written again and its internal source spelling is lost.
 - When identical blocks occur together and one is deleted, which original spelling the survivor inherits is unspecified.
 - Adding a block after an original unclosed code fence or an HTML block such as an unclosed `<script>` can put the added block inside it on readback.
-- An original block beginning with spaces can be absorbed into a list if it is moved directly after that list or if the block between them is deleted.
+- An original block beginning with spaces can be absorbed into a list if it is moved directly after that list or if the block between them is deleted; two original indented code blocks that become neighbours after deletion or movement can read back as one code block.
 - Reference definitions inside a quote, list, or the start of a paragraph disappear when that containing block is rewritten.
   Other unchanged blocks using those definitions can then re-read their reference links as literal text.
 - If the editor omits `tight`, an edited loose list is written tight.

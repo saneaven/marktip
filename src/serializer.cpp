@@ -805,22 +805,23 @@ private:
                     ListFamily family = child != nullptr ? list_family(child->type) : ListFamily::None;
                     std::string_view text = spelling->view(*source.text);
                     int variant = remembered_list_marker(text, family);
-                    // The next remembered marker decides the pending generated list's right constraint.
-                    if (pending_list != nullptr && pieces.back().family == family && variant >= 0 &&
-                        variant == prev_variant) {
-                        pieces.back().text = render_block(*pending_list, indent, nullptr, pending_replacement,
-                                                          InlineContext::Default, list_item);
-                        rstrip_newlines(pieces.back().text);
-                        prev_variant = pending_replacement;
-                    }
-                    pending_list = nullptr;
+                    remembered = true;
                     if (variant >= 0 && !pieces.empty() && pieces.back().family == family &&
                         variant == prev_variant) {
-                        collect_child(*child);
-                    } else {
+                        if (pending_list != nullptr) {
+                            // Re-render the pending generated list to avoid the next remembered list's marker.
+                            pieces.back().text = render_block(*pending_list, indent, nullptr, pending_replacement,
+                                                              InlineContext::Default, list_item);
+                            rstrip_newlines(pieces.back().text);
+                        } else {
+                            collect_child(*child);
+                            remembered = false;
+                        }
+                    }
+                    pending_list = nullptr;
+                    if (remembered) {
                         pieces.emplace_back(std::string(text), BlockKind::Other,
                                             variant >= 0 ? family : ListFamily::None);
-                        remembered = true;
                         if (variant >= 0) {
                             prev_variant = variant;
                         }

@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 import marktip as tm
-from spec_examples import EXAMPLES
+from spec_examples import EDGE_DOCUMENTS, EXAMPLES, block_schema
 
 
 @pytest.mark.parametrize("html", (True, False))
@@ -21,17 +21,7 @@ def test_readme_keeps_its_source_spelling(html):
     assert tm.from_markdown(markdown, html=html).to_markdown() == markdown
 
 
-@pytest.mark.parametrize("markdown", (
-    "",
-    "\n\n",
-    " \t\r\n\t\r\n ",
-    "[one]: /one\n[two]: /two\n\n",
-    "\n \t\n# Title ### \t\nbody without final newline",
-    "\r\n# 제목 ### \t\r\n\r\n*first*\r\n \t\r\n> 인용\r\n",
-    "~~~py\ncode\n~~~ \t\n \t\n",
-    "    code\n\n \t\n",
-    "# Heading\n[one]: /one\n\nbody\n\n[two]: /two",
-))
+@pytest.mark.parametrize("markdown", EDGE_DOCUMENTS)
 @pytest.mark.parametrize("html", (True, False))
 def test_source_boundaries_keep_head_text_and_trailing_gap(markdown, html):
     assert tm.from_markdown(markdown, html=html).to_markdown() == markdown
@@ -42,13 +32,6 @@ def test_source_spelling_uses_the_existing_nul_normalization():
     document = tm.from_markdown(markdown)
     assert document.to_markdown() == markdown.replace("\0", "\ufffd")
     assert document.to_dict()["content"][0]["content"][0]["text"] == "a\ufffdb"
-
-
-def block_schema(*, block_image=False):
-    return tm.Schema(block_image=block_image, nodes=[
-        tm.NodeSpec("callout", "block", content="block*", attrs={"tone": tm.Attr(str)}),
-        tm.NodeSpec("embed", "block", attrs={"label": tm.Attr(str), "enabled": tm.Attr(bool)}),
-    ])
 
 
 @pytest.mark.parametrize("html", (True, False))
