@@ -136,6 +136,7 @@ class SchemaDeclarationReader {
                 attr.fallback = attr_value(*fallback);
             }
             attr.uri = optional_string(item.second, "uri");
+            attr.inherit = boolean(item.second, "inherit");
             result.push_back(std::move(attr));
         }
         return result;

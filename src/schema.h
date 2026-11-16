@@ -94,6 +94,8 @@ struct AttrSpec {
     std::optional<std::vector<AttrValue>> choices = std::nullopt;
     std::optional<AttrValue> fallback = std::nullopt;
     UriKind uri = UriKind::None;
+    // A mark replacing an open mark of its own type takes this attr from it, unless its own tag writes one.
+    bool inherit = false;
 };
 
 bool is_declared_uri_attr(const AttrSpec& attr, bool core);

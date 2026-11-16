@@ -29,19 +29,23 @@ export type TextStyleOptions = {
     fontFamily?: boolean;
     fontSize?: boolean;
     lineHeight?: boolean;
+    mergeNestedSpanStyles?: boolean;
 };
 
 export function textStyle(settings: TextStyleOptions = {}): MarkSpec {
     const options = optionsObject(settings, "options");
-    optionNames(options, ["backgroundColor", "color", "fontFamily", "fontSize", "lineHeight"]);
+    optionNames(options, ["backgroundColor", "color", "fontFamily", "fontSize", "lineHeight",
+                          "mergeNestedSpanStyles"]);
     const {
         backgroundColor = true, color = true, fontFamily = true, fontSize = true, lineHeight = true,
+        mergeNestedSpanStyles = true,
     } = options;
     const template = mark("TEXT_STYLE");
     const enabled = [backgroundColor, color, fontFamily, fontSize, lineHeight];
     return {
         ...template,
-        attrs: Object.fromEntries(Object.entries(template.attrs!).filter((_, index) => enabled[index])),
+        attrs: Object.fromEntries(Object.entries(template.attrs!).filter((_, index) => enabled[index])
+            .map(([name, attr]) => [name, { ...attr, inherit: mergeNestedSpanStyles } as Attr])),
     };
 }
 

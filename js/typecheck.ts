@@ -3,7 +3,8 @@ import * as tm from "./dist/marktip.js";
 await tm.init();
 
 const tone: tm.Attr = { type: "str", choices: ["note", "warning"], default: "note" };
-const mark: tm.MarkSpec = { name: "review", tag: "review", attrs: { tone }, excludes: ["bold"] };
+const shade: tm.Attr = { type: "str", inherit: true };
+const mark: tm.MarkSpec = { name: "review", tag: "review", attrs: { tone, shade }, excludes: ["bold"] };
 const node: tm.NodeSpec = { name: "callout", kind: "block", content: "block+", attrs: { tone } };
 const schema = new tm.Schema({
     marks: [mark, tm.UNDERLINE, tm.HIGHLIGHT, tm.SUBSCRIPT, tm.SUPERSCRIPT, tm.TEXT_STYLE],
@@ -16,7 +17,9 @@ const extended = schema.extend({
     coreAttrs: { paragraph: { annotation: { type: "str", default: "" } } },
     blockImage: true,
 });
-const style: tm.MarkSpec = tm.textStyle({ backgroundColor: false, fontFamily: false, lineHeight: false });
+const style: tm.MarkSpec = tm.textStyle({
+    backgroundColor: false, fontFamily: false, lineHeight: false, mergeNestedSpanStyles: false,
+});
 const alignment = tm.textAlign({ types: ["paragraph"], alignments: ["left", "right"], defaultAlignment: "left" });
 const link = tm.linkAttrs({ target: null, rel: null, class: "link" });
 const restoredSchema = tm.Schema.fromDict(schema.toDict());

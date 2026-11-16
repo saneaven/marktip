@@ -14,6 +14,7 @@ class Attr:
     choices: tuple[object, ...] | None = None
     default: object = None
     uri: str | None = None
+    inherit: bool = False
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,8 @@ def _attr_from_dict(data: dict) -> Attr:
     types = {"str": str, "int": int, "bool": bool, "IntList": IntList}
     if name not in types:
         raise ValueError("attr type must be 'str', 'int', 'bool' or 'IntList'")
-    return Attr(types[name], data.get("required", False), data.get("choices"), data.get("default"), data.get("uri"))
+    return Attr(types[name], data.get("required", False), data.get("choices"), data.get("default"), data.get("uri"),
+                data.get("inherit", False))
 
 
 def _attrs_from_dict(data: dict) -> dict[str, Attr]:
@@ -70,7 +72,7 @@ def _attrs_key(attrs: dict[str, Attr]) -> tuple:
     return tuple(
         (name, attr.type, attr.required,
          None if attr.choices is None else tuple(value_key(value) for value in attr.choices),
-         value_key(attr.default), attr.uri)
+         value_key(attr.default), attr.uri, attr.inherit)
         for name, attr in attrs.items()
     )
 
@@ -84,7 +86,7 @@ def _attr_to_dict(attr: Attr) -> dict:
         raise TypeError("choices must be a tuple or list")
     return {"type": type_.__name__, "required": attr.required,
             "choices": None if choices is None else list(choices),
-            "default": attr.default, "uri": attr.uri}
+            "default": attr.default, "uri": attr.uri, "inherit": attr.inherit}
 
 
 def _attrs_to_dict(attrs: dict[str, Attr]) -> dict:

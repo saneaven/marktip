@@ -22,11 +22,13 @@ def _core_attrs(name):
     return {type_: _attrs_from_dict(attrs) for type_, attrs in _DATA[name]["core_attrs"].items()}
 
 
-def text_style(*, background_color=True, color=True, font_family=True, font_size=True, line_height=True):
-    """Select the attrs enabled by TextStyleKit."""
+def text_style(*, background_color=True, color=True, font_family=True, font_size=True, line_height=True,
+               merge_nested_span_styles=True):
+    """Select the attrs enabled by TextStyleKit, and match TextStyle's mergeNestedSpanStyles."""
     mark = _mark("TEXT_STYLE")
     enabled = (background_color, color, font_family, font_size, line_height)
-    return replace(mark, attrs={name: attr for (name, attr), active in zip(mark.attrs.items(), enabled) if active})
+    return replace(mark, attrs={name: replace(attr, inherit=merge_nested_span_styles)
+                                for (name, attr), active in zip(mark.attrs.items(), enabled) if active})
 
 
 _ALIGN_TYPES = _core_attrs("TEXT_ALIGN")

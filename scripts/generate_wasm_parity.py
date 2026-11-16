@@ -94,6 +94,7 @@ def schema_results(payload):
         ("textStyle", {"background_color": False, "color": False, "font_family": False,
                        "font_size": False, "line_height": False},
          {"backgroundColor": False, "color": False, "fontFamily": False, "fontSize": False, "lineHeight": False}),
+        ("textStyle", {"merge_nested_span_styles": False}, {"mergeNestedSpanStyles": False}),
         ("textAlign", {}, {}),
         ("textAlign", {"types": ("paragraph",), "alignments": ("left", "right"), "default_alignment": "right"},
          {"types": ["paragraph"], "alignments": ["left", "right"], "defaultAlignment": "right"}),
@@ -197,6 +198,8 @@ def generate():
         "pinned": pinned_schema(),
         "empty": tm.Schema(),
         "overlays": tm.Schema(core_attrs={**tm.TEXT_ALIGN, **tm.LINK_ATTRS, **tm.IMAGE_SIZE, **tm.TABLE_SPANS}),
+        "styles": tm.Schema(marks=[tm.TEXT_STYLE, tm.UNDERLINE]),
+        "styles-unmerged": tm.Schema(marks=[tm.text_style(merge_nested_span_styles=False)]),
     }
     payload = {
         "version": tm.__version__,
@@ -226,6 +229,11 @@ def generate():
     add_document("options/cjk", "**《제목》**a", "default", cjk_friendly=True)
     add_document("options/html", "a <span>x</span> b", "default", html=False)
     add_document("options/no-source", "\nTitle\n=====\n\n* first\n", "default", keep_source=False)
+    nested_spans = ('<span color="red">a <span fontSize="12px">b <u>c <span lineHeight="2">d</span></u></span> '
+                    '<span color="blue">e</span></span>\n')
+    add_document("styles/nested-spans", nested_spans, "styles")
+    add_document("styles/nested-spans-unmerged", '<span color="red">a <span fontSize="12px">b</span></span>\n',
+                 "styles-unmerged")
     add_document("text/leading-bom", "\ufeffHello\n", "default")
     add_document("text/control-characters", "before\u0001\u0008\u000c\u001fafter\n", "default")
     add_document("overlays/tag-forms", '<p textAlign="center">Aligned</p>\n\n'

@@ -197,7 +197,7 @@ def test_preset_constants_declare_the_optional_extension_attrs():
 
 def test_configured_text_style_only_declares_the_enabled_extension_attrs():
     configured = tm.text_style(background_color=False, font_family=False, font_size=False, line_height=False)
-    assert configured.attrs == {"color": tm.Attr(str)}
+    assert configured.attrs == {"color": tm.Attr(str, inherit=True)}
     schema = tm.Schema(marks=[configured])
     ast = doc(node("paragraph", text("x", mark("textStyle", color="red"))))
     source = tm.from_dict(ast, schema=schema, strict="exact")

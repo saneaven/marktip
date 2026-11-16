@@ -136,7 +136,7 @@ test("an undefined core attr is absent when extending equal schemas", () => {
         extendedB = b.extend({ coreAttrs: { paragraph: { tone } } });
         assert.deepEqual(extendedA.toDict(), {
             marks: [], core_attrs: { paragraph: {
-                tone: { type: "str", required: false, choices: null, default: null, uri: null },
+                tone: { type: "str", required: false, choices: null, default: null, uri: null, inherit: false },
             } },
         });
         assert.deepEqual(extendedA.toDict(), extendedB.toDict());

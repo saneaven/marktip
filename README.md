@@ -436,12 +436,13 @@ A heading written in tag form uses ordinary textblock rules and preserves hard b
 
 ### Attrs, exclusions and content
 
-`Attr(type, required=False, choices=None, default=None, uri=None)` accepts `str`, `int`, `bool` and `tm.IntList`.
+`Attr(type, required=False, choices=None, default=None, uri=None, inherit=False)` accepts `str`, `int`, `bool` and `tm.IntList`.
 Integers fit in a signed 64-bit value; `bool` stays distinct from `int`.
 `IntList` is a list of integers, written as a comma-separated attr such as `colwidth="100,200"`.
 `choices` limits the allowed values, and `required=True` requires an attr after unset values have been removed.
 An attr with `uri="link"` or `uri="image"` must be a `str` and cannot also declare a default.
 It uses the corresponding URI policy and rejects control characters at every strict level.
+`inherit=True` is for an attr of a declared mark, such as a style: see nested marks below.
 
 `None` means unset.
 A value equal to its declared `default` also means unset: the key is removed on input, never written, and never filled back in, including under `strict="exact"`.
@@ -459,6 +460,16 @@ Otherwise pass a tuple of mark names.
 Two marks conflict if either excludes the other; both strict dict levels and the Markdown reader report `invalid_mark_set`.
 Opening conflicting declared tags is an error even when their overlap contains no inline content.
 A self-exclusive mark nested inside itself replaces the outer mark for its extent and restores it afterward.
+The replacing mark keeps the outer mark's attrs declared with `inherit=True`, except those its own tag writes.
+With `TEXT_STYLE`, `<span color="red">a <span fontSize="12px">b</span></span>` gives `b` both `color` and `fontSize`,
+and `<span color="blue">` inside it would override the color.
+An attr without `inherit=True` is not carried over, and only reading Markdown is affected:
+`to_markdown()` writes each run as one flat tag with all of its attrs.
+
+> **Changed in 0.8.1** — `Attr(inherit=True)` is new, and the `TEXT_STYLE` preset declares its attrs with it:
+> a nested `<span>` now keeps the outer span's styles, as Tiptap's TextStyle does when it reads HTML.
+> Pass `text_style(merge_nested_span_styles=False)` for the previous behavior.
+> A schema that uses `TEXT_STYLE` has a new fingerprint, so documents stored with it by 0.8.0 are read without their source spelling.
 A mark with `excludes=()` can stack with a different instance of its own type; equal type and attrs still count as a duplicate.
 
 Content expressions use ProseMirror's grammar: node names, group names, sequences, `|`, `*`, `+`, `?`, `{n}`, `{n,}`, `{n,m}` and parentheses.
@@ -576,7 +587,7 @@ The configurable functions mirror options that change Tiptap's JSON:
 
 | Factory | Default declaration |
 | --- | --- |
-| `text_style(...)` | `background_color`, `color`, `font_family`, `font_size` and `line_height` are all `True`, matching TextStyleKit |
+| `text_style(...)` | `background_color`, `color`, `font_family`, `font_size` and `line_height` are all `True`, matching TextStyleKit; `merge_nested_span_styles=True` matches TextStyle's `mergeNestedSpanStyles` and declares each attr with `inherit=True` |
 | `text_align(types=..., alignments=..., default_alignment=...)` | `("heading", "paragraph")`; `("left", "center", "right", "justify")`; `None` |
 | `link_attrs(target=..., rel=..., class_=...)` | `"_blank"`; `"noopener noreferrer nofollow"`; `None` |
 
@@ -804,6 +815,7 @@ The tag-boundary whitespace case reaches its stable form after the first write/r
 - **Stored mark order** — core marks keep their given order, followed by declared marks in declaration order.
   A link that takes tag form follows the other core marks and precedes declared marks; a Markdown-form link keeps its given position.
 - **Nested declared marks** — a self-exclusive inner mark replaces the outer one temporarily and the outer mark resumes after the close tag.
+  The inner mark keeps the outer one's attrs that are declared with `inherit=True`.
 - **Adjacent text** — after tag removal, adjacent text or raw-inline-HTML nodes with equal marks are merged.
 - **Tag-boundary emphasis whitespace** — `**a <u>b</u>**` writes as `**a** <u>**b**</u>`; the intervening space loses bold.
   Italic and strike behave the same way, and the result is stable from the next cycle onward.
@@ -923,7 +935,7 @@ Unknown option names raise `TypeError`, including snake_case names passed to cam
 | `schema.marks`, `.nodes`, `.core_attrs`, `.block_image` | `schema.marks`, `.nodes`, `.coreAttrs`, `.blockImage` |
 | `schema.to_dict()`, `Schema.from_dict(data)`, `schema.extend(...)`, `a == b` | `schema.toDict()`, `Schema.fromDict(data)`, `schema.extend({ ... })`, `a.equals(b)` |
 | `UNDERLINE`, `HIGHLIGHT`, `SUBSCRIPT`, `SUPERSCRIPT`, `TEXT_STYLE`, `MENTION`, `DETAILS`, `INLINE_MATH`, `BLOCK_MATH`, `TEXT_ALIGN`, `LINK_ATTRS`, `IMAGE_SIZE`, `TABLE_SPANS` | Same names; `DETAILS` is an array |
-| `text_style(background_color=, color=, font_family=, font_size=, line_height=)` | `textStyle({ backgroundColor, color, fontFamily, fontSize, lineHeight })` |
+| `text_style(background_color=, color=, font_family=, font_size=, line_height=, merge_nested_span_styles=)` | `textStyle({ backgroundColor, color, fontFamily, fontSize, lineHeight, mergeNestedSpanStyles })` |
 | `text_align(types=, alignments=, default_alignment=)` | `textAlign({ types, alignments, defaultAlignment })` |
 | `link_attrs(target=, rel=, class_=)` | `linkAttrs({ target, rel, class })` |
 | `MarktipError`, `UnknownTypeError`, `InvalidNodeError`, `ParseError` | Same names, hierarchy and fields: `code`, `path`, `detail`, plus `type`/`kind` or `field` |

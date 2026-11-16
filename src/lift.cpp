@@ -93,6 +93,30 @@ AttrList decode_tag_attrs(const HtmlConstruct& tag, const std::vector<AttrSpec>&
     return ordered_attrs;
 }
 
+// The mark replacing an open mark of its own type keeps that mark's inheriting attrs,
+// except those its own tag writes, even when the written value is the declared default.
+AttrList inherit_mark_attrs(const HtmlConstruct& tag, AttrList own, const AttrList& outer,
+                            const std::vector<AttrSpec>& specs) {
+    AttrList merged;
+    for (const AttrSpec& spec : specs) {
+        auto written = std::find_if(own.begin(), own.end(), [&](const auto& entry) {
+            return entry.first == spec.name;
+        });
+        if (written != own.end()) {
+            merged.push_back(std::move(*written));
+            continue;
+        }
+        bool in_tag = std::any_of(tag.attrs.begin(), tag.attrs.end(), [&](const HtmlAttr& attr) {
+            return attr.name == spec.name;
+        });
+        const AttrValue* inherited = spec.inherit && !in_tag ? find_attr(outer, spec.name) : nullptr;
+        if (inherited != nullptr) {
+            merged.emplace_back(spec.name, *inherited);
+        }
+    }
+    return merged;
+}
+
 AttrList carrier_attrs(std::string body, const NodeSpec& spec, const PathStack& path) {
     const AttrSpec& body_spec = spec.attrs[spec.body];
     AttrInput input(std::move(body));
@@ -622,6 +646,7 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
                         return current.type == spec.name;
                     });
                     if (previous != effective.end()) {
+                        mark.attrs = inherit_mark_attrs(token, std::move(mark.attrs), previous->attrs, spec.attrs);
                         effective.erase(previous);
                     }
                 }

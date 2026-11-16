@@ -6,6 +6,7 @@ export interface Attr {
     choices?: readonly AttrValue[] | null;
     default?: AttrValue | null;
     uri?: string | null;
+    inherit?: boolean;
 }
 
 export interface MarkSpec {
@@ -44,6 +45,7 @@ export function normalizeAttrs(attrs: Record<string, Attr>): Record<string, Attr
         choices: attr.choices == null ? null : [...attr.choices],
         default: attr.default ?? null,
         uri: attr.uri ?? null,
+        inherit: attr.inherit ?? false,
     }]));
 }
 

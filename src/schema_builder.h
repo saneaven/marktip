@@ -17,6 +17,7 @@ struct AttrDeclaration {
     std::optional<std::vector<AttrValue>> choices = std::nullopt;
     std::optional<AttrValue> fallback = std::nullopt;
     std::optional<std::string> uri = std::nullopt;
+    bool inherit = false;
 };
 
 using ExcludeDeclaration = std::variant<std::monostate, std::string, std::vector<std::string>>;

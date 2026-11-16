@@ -13,7 +13,7 @@
 namespace py = pybind11;
 
 #ifndef MARKTIP_VERSION
-#define MARKTIP_VERSION "0.8.0"
+#define MARKTIP_VERSION "0.8.1"
 #endif
 
 namespace {

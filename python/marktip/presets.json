@@ -9,11 +9,11 @@
     "marks": [{
       "name": "textStyle", "tag": "span",
       "attrs": {
-        "backgroundColor": {"type": "str"},
-        "color": {"type": "str"},
-        "fontFamily": {"type": "str"},
-        "fontSize": {"type": "str"},
-        "lineHeight": {"type": "str"}
+        "backgroundColor": {"type": "str", "inherit": true},
+        "color": {"type": "str", "inherit": true},
+        "fontFamily": {"type": "str", "inherit": true},
+        "fontSize": {"type": "str", "inherit": true},
+        "lineHeight": {"type": "str", "inherit": true}
       }
     }]
   },

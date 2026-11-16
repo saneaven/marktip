@@ -80,7 +80,17 @@ AttrSpec compile_attr(const AttrDeclaration& declaration) {
     }
     return {declaration.name, declaration.rule, NullAttr::Unset, MarkdownForm::Carried,
             declaration.required ? Presence::Required : Presence::Optional, {},
-            declaration.choices, declaration.fallback, uri};
+            declaration.choices, declaration.fallback, uri, declaration.inherit};
+}
+
+// Only a declared mark can be opened inside itself, so only its attrs have anything to inherit from.
+void refuse_inherit(const std::vector<AttrDeclaration>& declarations, const std::string& owner) {
+    for (const AttrDeclaration& declaration : declarations) {
+        if (declaration.inherit) {
+            throw std::invalid_argument("attr '" + owner + "." + declaration.name +
+                                        "' cannot inherit: only attrs of a declared mark can");
+        }
+    }
 }
 
 std::vector<AttrSpec> compile_attrs(const std::vector<AttrDeclaration>& declarations) {
@@ -121,6 +131,7 @@ void merge_core_attrs(std::vector<AttrSpec>& attrs, std::vector<std::size_t>& or
             throw std::invalid_argument("core attr '" + declaration.type + "." + attr.name + "' cannot be required");
         }
     }
+    refuse_inherit(declaration.attrs, declaration.type);
     for (AttrSpec& attr : compile_attrs(declaration.attrs)) {
         auto existing = std::find_if(attrs.begin(), attrs.end(), [&](const AttrSpec& spec) {
             return spec.name == attr.name;
@@ -237,7 +248,8 @@ std::string SchemaBuilder::fingerprint(const std::vector<MarkDeclaration>& marks
                     case AttrRule::ColWidth: byte(9); break;
                     case AttrRule::NoSpan: byte(10); break;
                 }
-                byte(declaration.required);
+                // One byte for both flags: a declaration that inherits nothing keeps the fingerprint it had.
+                byte(static_cast<std::uint8_t>((declaration.required ? 1 : 0) | (declaration.inherit ? 2 : 0)));
                 byte(declaration.choices.has_value());
                 if (declaration.choices) {
                     integer(declaration.choices->size());
@@ -501,6 +513,7 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
         if (declaration.content && !declaration.content->empty()) {
             shape = declaration.kind == "inline" ? Shape::InlineContainer : Shape::BlockContainer;
         }
+        refuse_inherit(declaration.attrs, declaration.name);
         schema->nodes_.push_back({declaration.name, compile_attrs(declaration.attrs), ContentModel::None,
                                   is_block, is_inline, false, declaration.implicit,
                                   declaration.implicit ? std::string {} :
