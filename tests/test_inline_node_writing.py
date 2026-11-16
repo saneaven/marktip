@@ -1,4 +1,4 @@
-"""Writer rules for inline-container context and mark barriers."""
+"""Writer rules for inline containers and their own marks."""
 
 import pytest
 
@@ -42,23 +42,21 @@ def test_heading_container_preserves_the_core_break_and_newline_normalization(ht
 
 
 @pytest.mark.parametrize("html", (True, False))
-@pytest.mark.parametrize("mark, before, inside, after", (
-    ({"type": "bold"}, "**a**", "**b**", "**c**"),
-    ({"type": "italic"}, "*a*", "*b*", "*c*"),
-    ({"type": "strike"}, "~~a~~", "~~b~~", "~~c~~"),
-    ({"type": "code"}, "`a`", "`b`", "`c`"),
+@pytest.mark.parametrize("level", ("off", "content", "exact"))
+@pytest.mark.parametrize("mark, markdown", (
+    ({"type": "bold"}, "**a<wrap>b</wrap>c**"),
+    ({"type": "italic"}, "*a<wrap>b</wrap>c*"),
+    ({"type": "strike"}, "~~a<wrap>b</wrap>c~~"),
     ({"type": "link", "attrs": {"href": "https://example.com"}},
-     "[a](https://example.com)", "[b](https://example.com)", "[c](https://example.com)"),
-    ({"type": "underline"}, "<u>a</u>", "<u>b</u>", "<u>c</u>"),
+     "[a<wrap>b</wrap>c](https://example.com)"),
+    ({"type": "underline"}, "<u>a<wrap>b</wrap>c</u>"),
 ))
-def test_off_ignores_container_own_marks_and_keeps_the_container_as_a_barrier(html, mark, before, inside, after):
+def test_container_own_marks_share_a_run_with_neighbours(html, level, mark, markdown):
     schema = tm.Schema(nodes=[tm.NodeSpec("wrap", kind="inline", content="inline*")],
                        marks=[tm.MarkSpec("underline", tag="u")])
-    children = [text("a", mark), wrap(text("b", mark), marks=[mark]), text("c", mark)]
-    source = tm.from_dict(doc({"type": "paragraph", "content": children}), schema=schema, strict="off")
-    markdown = before + "<wrap>" + inside + "</wrap>" + after
+    children = [text("a", mark), wrap(text("b"), marks=[mark]), text("c", mark)]
+    source = tm.from_dict(doc({"type": "paragraph", "content": children}), schema=schema, strict=level)
     assert source.to_markdown(canonical=True) == markdown
     parsed = tm.from_markdown(markdown, schema=schema, html=html)
-    expected = doc({"type": "paragraph", "content": [text("a", mark), wrap(text("b", mark)), text("c", mark)]})
-    assert parsed.to_dict() == expected
+    assert parsed.to_dict() == source.to_dict()
     assert parsed.to_markdown(canonical=True) == markdown

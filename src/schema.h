@@ -173,7 +173,6 @@ public:
     bool has_table_tags() const;
     bool block_image() const;
     const std::string& fingerprint() const;
-    bool has_inline_containers() const;
     bool has_fences() const;
     const NodeSpec* fence(std::string_view word) const;
     bool has_math() const;
@@ -200,7 +199,6 @@ private:
     bool declared_marks_ = false;
     bool declared_nodes_ = false;
     bool core_attrs_ = false;
-    bool inline_containers_ = false;
     std::vector<FenceEntry> fences_;
     int inline_math_ = -1;
     int display_math_ = -1;

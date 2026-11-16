@@ -73,7 +73,7 @@ const AttrSpec* find_attr_spec(const std::vector<AttrSpec>& specs, std::string_v
                            format_path(path));
 }
 
-[[noreturn]] void throw_atom_code_marks(const NodeSpec& spec, const PathStack& path) {
+[[noreturn]] void throw_inline_code_marks(const NodeSpec& spec, const PathStack& path) {
     throw InvalidNodeError("invalid_mark_set", "marks",
                            "node type '" + spec.name + "' must not carry a code mark", format_path(path));
 }
@@ -151,7 +151,7 @@ void check_top_level_field(const std::string& name, std::string_view owner_type,
 }
 
 bool node_allows_marks(const NodeSpec& spec) {
-    return spec.core ? spec.is_inline : spec.shape == Shape::InlineAtom;
+    return spec.core ? spec.is_inline : spec.shape == Shape::InlineAtom || spec.shape == Shape::InlineContainer;
 }
 
 void check_text_payload(bool present, bool is_string, std::string_view value, const PathStack& path) {
@@ -427,9 +427,9 @@ void check_child_content(const Document& document, const NodeSpec& parent, const
 }
 
 void check_node_marks(const Node& node, const NodeSpec& spec, const PathStack& path) {
-    if (!spec.core && spec.shape == Shape::InlineAtom &&
+    if (!spec.core && node_allows_marks(spec) &&
         std::any_of(node.marks.begin(), node.marks.end(), [](const Mark& mark) { return mark.type == "code"; })) {
-        throw_atom_code_marks(spec, path);
+        throw_inline_code_marks(spec, path);
     }
 }
 

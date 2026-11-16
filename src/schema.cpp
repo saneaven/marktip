@@ -175,10 +175,6 @@ bool Schema::block_image() const {
     return block_image_;
 }
 
-bool Schema::has_inline_containers() const {
-    return inline_containers_;
-}
-
 bool Schema::has_fences() const {
     return !fences_.empty();
 }

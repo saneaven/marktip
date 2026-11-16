@@ -58,15 +58,23 @@ def test_explicit_group_replaces_inline_membership_but_atoms_can_still_have_mark
     assert err.path == NODE_PATH
 
 
-@pytest.mark.parametrize("level", STRICT_LEVELS)
-@pytest.mark.parametrize("marks", ([], None, [{"type": "bold"}], [{"type": "code"}]))
-def test_inline_containers_refuse_the_marks_field(level, marks):
+@pytest.mark.parametrize("level", LEVELS)
+@pytest.mark.parametrize("marks", ([], [{"type": "bold"}]))
+def test_inline_containers_accept_the_marks_field(level, marks):
     schema = tm.Schema(nodes=[tm.NodeSpec("ruby", kind="inline", content="text*")])
-    err = invalid(doc(p({"type": "ruby", "marks": marks})), schema, level)
-    assert err.code == "unknown_field"
-    assert err.field == "marks"
-    assert err.path == NODE_PATH
-    assert str(err) == "field 'marks' is not defined for node type 'ruby'"
+    expected = {"type": "ruby"}
+    if marks:
+        expected["marks"] = marks
+    assert tm.from_dict(doc(p({"type": "ruby", "marks": marks})), schema=schema, strict=level).to_dict() == (
+        doc(p(expected))
+    )
+
+
+@pytest.mark.parametrize("level", STRICT_LEVELS)
+def test_inline_container_marks_must_be_a_list(level):
+    schema = tm.Schema(nodes=[tm.NodeSpec("ruby", kind="inline", content="text*")])
+    err = invalid(doc(p({"type": "ruby", "marks": None})), schema, level)
+    assert (err.code, err.field, err.path) == ("wrong_type", "marks", NODE_PATH)
 
 
 @pytest.mark.parametrize("level", STRICT_LEVELS)

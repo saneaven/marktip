@@ -540,9 +540,6 @@ std::shared_ptr<Schema> SchemaBuilder::build(std::vector<MarkDeclaration> marks,
                                       declaration.tag ? *declaration.tag : declaration.name,
                                   shape});
         content_types.push_back({declaration.name, declaration.kind == "inline", std::move(groups)});
-        if (shape == Shape::InlineContainer) {
-            schema->inline_containers_ = true;
-        }
     }
     for (std::size_t i = 0; i < nodes.size(); ++i) {
         if (!nodes[i].content || nodes[i].content->empty()) {

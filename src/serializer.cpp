@@ -523,7 +523,6 @@ public:
         : document_(document), schema_(document.schema()),
           extended_(schema_.has_declared_marks() || schema_.has_link_tag()),
           node_forms_(schema_.has_declared_nodes() || schema_.has_core_attrs()),
-          inline_containers_(schema_.has_inline_containers()),
           math_(schema_.has_math()) {}
 
     std::string render(bool canonical) {
@@ -569,7 +568,6 @@ private:
     const Schema& schema_;
     bool extended_;
     bool node_forms_;
-    bool inline_containers_;
     bool math_;
     std::vector<MathToken> math_tokens_;
 
@@ -1171,10 +1169,10 @@ private:
         return rendered;
     }
 
-    // Render one inline node without applying its marks. Marks are emitted by
-    // emit_runs(), which keeps marks shared between consecutive runs open
-    // across the boundary.
-    std::string render_inline_content(const Node& node, InlineContext ctx, bool in_code) {
+    // Render one inline node without applying its marks.
+    // emit_runs() keeps marks shared between consecutive runs open across the boundary.
+    std::string render_inline_content(const Node& node, InlineContext ctx, bool in_code,
+                                      const std::vector<Mark>& enclosing) {
         const std::string& type = node.type;
         if (type == "text") {
             bool tag_link = !in_code && has_tag_link(node.marks);
@@ -1218,14 +1216,25 @@ private:
                     const AttrValue* body = carrier_body(spec, node.attrs);
                     if (body != nullptr &&
                         inline_math_body_allowed(body->string_value, ctx == InlineContext::TableCell,
-                                                 !node.marks.empty())) {
+                                                 !node.marks.empty() || !enclosing.empty())) {
                         return math_token(node, spec);
                     }
                 }
-                return open_node_tag(spec, node.attrs);
+                std::string rendered = open_node_tag(spec, node.attrs);
+                if (spec.shape == Shape::InlineContainer) {
+                    std::vector<Mark> inner = enclosing;
+                    for (const Mark& mark : node.marks) {
+                        if (mark.type != "code" && !uses_tag_form(mark, *schema_.mark(mark.type)) &&
+                            std::find(inner.begin(), inner.end(), mark) == inner.end()) {
+                            inner.push_back(mark);
+                        }
+                    }
+                    rendered += render_inlines(node, ctx, inner) + close_node_tag(spec, node.attrs);
+                }
+                return rendered;
             }
         }
-        return render_inlines(node, ctx);
+        return render_inlines(node, ctx, enclosing);
     }
 
     const NodeSpec* declared_inline_spec(const Node& node) const {
@@ -1238,73 +1247,62 @@ private:
                    ? &spec : nullptr;
     }
 
-    bool declared_inline_atom(const Node& node) const {
-        const NodeSpec* spec = declared_inline_spec(node);
-        return spec != nullptr && spec->shape == Shape::InlineAtom;
-    }
-
-    std::string render_inlines(const Node& node, InlineContext ctx = InlineContext::Default) {
+    std::string render_inlines(const Node& node, InlineContext ctx = InlineContext::Default,
+                               const std::vector<Mark>& enclosing = {}) {
         if (node.content.empty() && node.type == "text") {
             return render_inline(node, ctx);
         }
 
-        if (inline_containers_) {
-            return render_inline_segments(node.content, ctx);
-        }
-        return render_inline_segment(node.content, 0, node.content.size(), ctx);
+        return render_inline_segment(node.content, ctx, enclosing);
     }
 
-    std::string render_inline_segment(const std::vector<std::size_t>& content, std::size_t begin, std::size_t end,
-                                      InlineContext ctx) {
-        std::vector<InlineRun> runs = build_runs(content, begin, end, ctx);
+    std::string render_inline_segment(const std::vector<std::size_t>& content, InlineContext ctx,
+                                      const std::vector<Mark>& enclosing) {
+        std::vector<InlineRun> runs = build_runs(content, ctx, enclosing);
         expel_boundary_whitespace(runs);
         return emit_runs(runs, schema_);
     }
 
-    std::string render_inline_segments(const std::vector<std::size_t>& content, InlineContext ctx) {
-        std::string out;
-        std::size_t begin = 0;
-        for (std::size_t i = 0; i < content.size(); ++i) {
-            const Node& child = document_.node(content[i]);
-            const NodeSpec* spec = declared_inline_spec(child);
-            if (spec == nullptr || spec->shape != Shape::InlineContainer) {
-                continue;
-            }
-            // Container tags close the surrounding marks before the inner inline sequence starts.
-            out += render_inline_segment(content, begin, i, ctx);
-            out += open_node_tag(*spec, child.attrs) + render_inlines(child, ctx) + close_node_tag(*spec, child.attrs);
-            begin = i + 1;
-        }
-        out += render_inline_segment(content, begin, content.size(), ctx);
-        return out;
-    }
-
-    std::vector<InlineRun> build_runs(const std::vector<std::size_t>& content, std::size_t begin, std::size_t end,
-                                      InlineContext ctx) {
+    std::vector<InlineRun> build_runs(const std::vector<std::size_t>& content, InlineContext ctx,
+                                      const std::vector<Mark>& enclosing) {
         std::vector<InlineRun> runs;
-        std::size_t i = begin;
-        while (i < end) {
+        auto without_enclosing = [&](const std::vector<Mark>& marks) {
+            std::vector<Mark> filtered;
+            for (const Mark& mark : marks) {
+                if (std::find(enclosing.begin(), enclosing.end(), mark) == enclosing.end()) {
+                    filtered.push_back(mark);
+                }
+            }
+            return filtered;
+        };
+        std::size_t i = 0;
+        while (i < content.size()) {
             const Node& first = document_.node(content[i]);
-            bool in_code = has_mark(first.marks, "code");
-            bool code_atom = in_code && node_forms_ && declared_inline_atom(first);
-            in_code = in_code && !code_atom;
-            std::size_t group_end = code_atom ? i + 1 : end;
+            std::vector<Mark> filtered;
+            if (!enclosing.empty()) {
+                filtered = without_enclosing(first.marks);
+            }
+            const std::vector<Mark>& marks = enclosing.empty() ? first.marks : filtered;
+            bool in_code = has_mark(marks, "code");
+            bool code_node = in_code && node_forms_ && declared_inline_spec(first) != nullptr;
+            in_code = in_code && !code_node;
+            std::size_t group_end = code_node ? i + 1 : content.size();
             std::string group;
             std::size_t j = i;
             while (j < group_end) {
                 const Node& child = document_.node(content[j]);
-                if (!(child.marks == first.marks)) {
+                if (enclosing.empty() ? !(child.marks == first.marks) : !(without_enclosing(child.marks) == marks)) {
                     break;
                 }
-                if (in_code && node_forms_ && declared_inline_atom(child)) {
+                if (in_code && node_forms_ && declared_inline_spec(child) != nullptr) {
                     break;
                 }
-                group += render_inline_content(child, ctx, in_code);
+                group += render_inline_content(child, ctx, in_code, enclosing);
                 ++j;
             }
 
             InlineRun run;
-            for (const Mark& mark : first.marks) {
+            for (const Mark& mark : marks) {
                 if (mark.type != "code") {
                     run.marks.push_back(mark);
                 }
@@ -1323,15 +1321,12 @@ private:
 
     std::string render_inline(const Node& node, InlineContext ctx = InlineContext::Default) {
         const NodeSpec* spec = node_forms_ ? declared_inline_spec(node) : nullptr;
-        if (spec != nullptr && spec->shape == Shape::InlineContainer) {
-            return open_node_tag(*spec, node.attrs) + render_inlines(node, ctx) + close_node_tag(*spec, node.attrs);
-        }
         bool in_code = has_mark(node.marks, "code");
         bool skip_code = in_code;
         if (spec != nullptr) {
             in_code = false;
         }
-        std::string rendered = render_inline_content(node, ctx, in_code);
+        std::string rendered = render_inline_content(node, ctx, in_code, {});
         std::vector<Mark> ordered;
         const std::vector<Mark>* marks = &node.marks;
         if (extended_) {

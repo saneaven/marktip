@@ -61,6 +61,7 @@ Pass `partial=True` to read an open declared tag as closed where its parent ends
 The resulting tree is the same as if its closing tag were there, including the usual completion of missing content.
 Closing tags without an opening tag, attr errors inside complete tags, and content-model violations still raise errors;
 a container's closing tag is still an error while a container opened inside it is still open.
+Marks crossing an inline container's boundary also remain errors with `partial=True`.
 `partial` is keyword-only and defaults to `False`.
 Incomplete tags such as `<callout tone="no`, `</call`, and `<mention id="1"` are read as text even with `partial=True`, like `**bo`.
 Where that text does not fit its parent's content model, the input raises `invalid_content` until the tag is complete; this affects tag-form tables and lists and containers with narrow content models.
@@ -432,10 +433,18 @@ The content and `kind` determine its shape:
 | `NodeSpec("summary", "block", content="inline*")` | textblock | `<summary>inline content</summary>` as one paragraph |
 
 `content=None` and `content=""` both declare an atom.
-An inline atom can carry marks; a container holds marks on its inline leaves, not on itself.
-A `code` mark on a declared atom is `invalid_mark_set` under strict validation, since the atom cannot be written inside a code span.
-With `strict="off"`, the atom is written outside the code span and that mark is omitted.
-Container tags form boundaries for the inline writer, so code runs and emphasis whitespace do not cross them.
+Inline atoms and inline containers can carry their own marks.
+Marks open at a container's opening tag belong to the container node; its content starts with no open marks.
+For example, `<u>a <ruby>x</ruby> b</u>` gives underline to `a `, the `ruby` node and ` b`, while `x` has no marks.
+Marks opened inside the container apply only to its content.
+A dict may give a container and its content marks of the same type independently.
+Equal delimiter marks (`bold`, `italic`, `strike` and `link`) on a container and its content collapse to the container's mark after writing and reading Markdown.
+The Markdown link form cannot represent a different link nested inside a container's link.
+Declared mark tags and Markdown delimiter marks must open and close on the same side of each container boundary; crossing it raises `invalid_tag`.
+The writer groups a marked container with adjacent nodes carrying the same marks and writes its content separately.
+Mark order, delimiter placement and emphasis whitespace follow the inline atom rules.
+A `code` mark on a declared inline atom or inline container is `invalid_mark_set` under strict validation, since the node cannot be written inside a code span.
+With `strict="off"`, the node is written outside the code span and that mark is omitted.
 Inline content in a Markdown-form heading or a Markdown table cell keeps that context's single-line rules.
 A heading written in tag form uses ordinary textblock rules and preserves hard breaks and literal newlines outside Markdown table cells.
 
@@ -485,6 +494,9 @@ An attr without `inherit=True` is not carried over, and only reading Markdown is
 `to_markdown()` writes each run as one flat tag with all of its attrs.
 For `StrMap`, inheritance copies the whole outer map when the inner tag has no entries for that prefix.
 An inner map replaces it as a whole; keys are not merged.
+Mark replacement and attr inheritance stop at inline container boundaries.
+A mark inside a container cannot inherit attrs from a mark outside it, including attrs declared with both `required=True` and `inherit=True`.
+Those required attrs must be supplied inside the boundary.
 
 > **Changed in 0.8.2** — an attr declared with both `required=True` and `inherit=True` is satisfied by the value it inherits.
 > The inner tag used to raise `missing_attr` before inheritance.
@@ -534,7 +546,7 @@ A span of an undeclared mode becomes literal text with its delimiters, and its i
 
 Inline math uses `$body$` only when its body and surrounding output prove that it reads back as the same node.
 Empty bodies, line breaks, dollar signs, backticks, odd trailing backslashes, word adjacency and a pipe in a Markdown table cell select the tag form.
-A marked math node whose body contains `*`, `~`, `[` or `]` also uses its tag form.
+A math node whose body contains `*`, `~`, `[` or `]` also uses its tag form when it carries marks or sits inside a container carrying a delimiter mark.
 The body of the dollar form is written raw.
 
 ### Core tag forms
@@ -721,7 +733,7 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `unrepresentable` | `InvalidNodeError` | `strict`: the value is well-formed, but markdown cannot carry it |
 | `missing_attr` | `InvalidNodeError` | a required attr is unset on strict dict input or a declared tag |
 | `invalid_mark_set` | `InvalidNodeError` | conflicting or duplicate marks on strict dict input or in declared tags |
-| `invalid_tag` | `InvalidNodeError` | a declared tag is unmatched, self-closing where a container is required, or in the wrong position |
+| `invalid_tag` | `InvalidNodeError` | a declared tag is unmatched, self-closing where a container is required, or in the wrong position; a declared or delimiter mark crosses an inline container boundary |
 | `markdown_max_depth` | `ParseError` | Markdown node nesting or simultaneously open declared mark tags exceeds 512 |
 | `parse_failed` | `ParseError` | MD4C could not parse the input |
 
@@ -834,6 +846,7 @@ The tag-boundary whitespace case reaches its stable form after the first write/r
   Declared fence carriers also keep only their declared word.
   A `language` is truncated at the first newline; one containing a backtick switches the fence to `~~~`.
 - **Nested same-type marks** — Markdown spans that map to the same self-exclusive mark are collapsed (`*outer _inner_ outer*` becomes one continuous `italic` mark) rather than producing an invalid ProseMirror mark set.
+  Equal delimiter marks on a container and its content collapse to the container's mark after a Markdown round trip.
 - **Emphasis boundary whitespace** — whitespace touching an emphasis delimiter has no valid markdown form and is expelled outside the marks (`bold("굵게 ")` → `**굵게** `), cf. prosemirror-markdown's `expelEnclosingWhitespace`.
 - **Adjacent same-family lists** — the canonical writer alternates markers (`-`/`*`, `1.`/`1)`) so they stay separate lists on reparse instead of merging (which would renumber ordered items or spread task checkboxes).
   Source-preserving output reads the actual markers of its neighbours and can use `+` for a new bullet list between two different original markers.
@@ -841,7 +854,7 @@ The tag-boundary whitespace case reaches its stable form after the first write/r
 - **Stored mark order** — core marks keep their given order, followed by declared marks in declaration order.
   A link that takes tag form follows the other core marks and precedes declared marks; a Markdown-form link keeps its given position.
 - **Nested declared marks** — a self-exclusive inner mark replaces the outer one temporarily and the outer mark resumes after the close tag.
-  The inner mark keeps the outer one's attrs that are declared with `inherit=True`.
+  Without an intervening inline container boundary, the inner mark keeps the outer one's attrs that are declared with `inherit=True`.
 - **Adjacent text** — after tag removal, adjacent text or raw-inline-HTML nodes with equal marks are merged.
 - **Tag-boundary emphasis whitespace** — `**a <u>b</u>**` writes as `**a** <u>**b**</u>`; the intervening space loses bold.
   Italic and strike behave the same way, and the result is stable from the next cycle onward.

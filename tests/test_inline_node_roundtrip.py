@@ -170,7 +170,7 @@ def test_off_drops_only_the_code_mark_from_atoms_and_does_not_join_code_runs(htm
 @pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize("core, delimiter", (("bold", "**"), ("italic", "*"), ("strike", "~~"), ("code", "`")))
-def test_inline_containers_are_barriers_to_mark_and_code_runs(html, level, core, delimiter):
+def test_unmarked_inline_containers_separate_mark_and_code_runs(html, level, core, delimiter):
     marks = [mark(core)]
     ast = doc(p(text("a", *marks), node("wrap", text("b", *marks)), text("c", *marks)))
     markdown = f"{delimiter}a{delimiter}<wrap>{delimiter}b{delimiter}</wrap>{delimiter}c{delimiter}"
@@ -178,23 +178,16 @@ def test_inline_containers_are_barriers_to_mark_and_code_runs(html, level, core,
 
 
 @pytest.mark.parametrize("html", HTML)
-@pytest.mark.parametrize("markup, expected, written", [
-    ("<u>a<wrap>b</u>c</wrap>d",
-     doc(p(text("a", mark("underline")), node("wrap", text("b", mark("underline")), text("c")), text("d"))),
-     "<u>a</u><wrap><u>b</u>c</wrap>d"),
-    ("**a<wrap>b**c</wrap>d",
-     doc(p(text("a", mark("bold")), node("wrap", text("b", mark("bold")), text("c")), text("d"))),
-     "**a**<wrap>**b**c</wrap>d"),
-    ("<wrap>a<u>b</wrap>c</u>",
-     doc(p(node("wrap", text("a"), text("b", mark("underline"))), text("c", mark("underline")))),
-     "<wrap>a<u>b</u></wrap><u>c</u>"),
-])
-def test_flat_mark_pairing_can_cross_inline_container_boundaries(html, markup, expected, written):
+@pytest.mark.parametrize("markup", (
+    "<u>a<wrap>b</u>c</wrap>d",
+    "**a<wrap>b**c</wrap>d",
+    "<wrap>a<u>b</wrap>c</u>",
+))
+def test_mark_pairing_cannot_cross_inline_container_boundaries(html, markup):
     schema = inline_schema(marks=[tm.MarkSpec("underline", tag="u")])
-    parsed = tm.from_markdown(markup, schema=schema, html=html)
-    assert parsed.to_dict() == expected
-    assert parsed.to_markdown(canonical=True) == written
-    assert tm.from_markdown(written, schema=schema, html=html).to_dict() == expected
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_markdown(markup, schema=schema, html=html)
+    assert excinfo.value.code == "invalid_tag"
 
 
 @pytest.mark.parametrize("html", HTML)

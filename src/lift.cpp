@@ -133,6 +133,13 @@ struct OpenMark {
     Mark mark;
 };
 
+struct ContainerMarks {
+    const NodeSpec* spec;
+    std::vector<Mark> core;
+    std::vector<OpenMark> open;
+    std::vector<Mark> effective;
+};
+
 enum class InlinePieceKind { Node, Atom, OpenContainer, CloseContainer };
 
 struct InlinePiece {
@@ -176,6 +183,26 @@ void apply_declared_marks(std::vector<Mark>& marks, const std::vector<Mark>& eff
     }
 }
 
+void check_container_marks(const std::vector<Mark>& marks, const std::vector<ContainerMarks>& containers,
+                           const PathStack& path) {
+    if (containers.empty()) {
+        return;
+    }
+    for (const Mark& outer : containers.back().core) {
+        if (std::find(marks.begin(), marks.end(), outer) == marks.end()) {
+            invalid_tag("delimiter mark crosses an inline container boundary", path);
+        }
+    }
+}
+
+void strip_container_marks(std::vector<Mark>& marks, const std::vector<ContainerMarks>& containers) {
+    if (!containers.empty()) {
+        for (const Mark& outer : containers.back().core) {
+            marks.erase(std::find(marks.begin(), marks.end(), outer));
+        }
+    }
+}
+
 void append_inline(Document& document, std::vector<std::size_t>& content, std::size_t index) {
     const Node& node = document.node(index);
     if (!content.empty() && (node.type == "text" || node.type == "htmlInline")) {
@@ -195,12 +222,13 @@ void append_inline(Document& document, std::vector<std::size_t>& content, std::s
 }
 
 void append_raw(Document& document, std::vector<InlinePiece>& pieces, std::string value,
-                 const std::vector<Mark>& core, const std::vector<Mark>& effective, bool html,
-                 const PathStack& path) {
+                 const std::vector<Mark>& core, const std::vector<Mark>& effective,
+                 const std::vector<ContainerMarks>& containers, bool html, const PathStack& path) {
     if (value.empty()) {
         return;
     }
     Node node {html ? "htmlInline" : "text", {}, {}, core, {}};
+    strip_container_marks(node.marks, containers);
     if (html) {
         set_attr(node.attrs, "html", AttrValue::string(std::move(value)));
     } else {
@@ -563,11 +591,13 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
     pieces.reserve(original.size());
     std::vector<OpenMark> open;
     std::vector<Mark> effective;
+    std::vector<ContainerMarks> containers;
     bool math = schema.has_math();
     bool block_image = schema.block_image();
     const NodeSpec* inline_math = math ? schema.inline_math() : nullptr;
     const NodeSpec* display_math = math ? schema.display_math() : nullptr;
     for (std::size_t child : original) {
+        check_container_marks(document.node(child).marks, containers, path);
         if (document.node(child).type != "htmlInline") {
             Node& node = document.node(child);
             const NodeSpec* carrier = nullptr;
@@ -582,6 +612,7 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
                     node.attrs.clear();
                 }
             }
+            strip_container_marks(node.marks, containers);
             apply_declared_marks(node.marks, effective, schema, path);
             if (block_image && node.type == "image") {
                 check_block_marks(node, "a block image cannot carry marks", path);
@@ -599,7 +630,7 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
                 raw.append(token.raw.data(), token.raw.size());
                 continue;
             }
-            append_raw(document, pieces, std::move(raw), core, effective, options.html, path);
+            append_raw(document, pieces, std::move(raw), core, effective, containers, options.html, path);
             raw.clear();
 
             if (!tag->is_mark) {
@@ -609,6 +640,18 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
                     invalid_tag("tag '<" + std::string(token.name) + ">' must occupy its declared block form", path);
                 }
                 if (spec.shape == Shape::InlineContainer && token.closing && !token.self_closing) {
+                    if (containers.empty() || containers.back().spec != &spec) {
+                        invalid_tag("closing tag '</" + spec.tag + ">' has no matching opening container", path);
+                    }
+                    if (!open.empty()) {
+                        invalid_tag("opening tag '<" + open.front().spec->tag + ">' has no matching closing tag", path);
+                    }
+                    if (core != containers.back().core) {
+                        invalid_tag("delimiter mark crosses an inline container boundary", path);
+                    }
+                    open = std::move(containers.back().open);
+                    effective = std::move(containers.back().effective);
+                    containers.pop_back();
                     pieces.push_back({InlinePieceKind::CloseContainer, 0, &spec});
                     continue;
                 }
@@ -618,15 +661,20 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
                 Node node;
                 node.type = spec.name;
                 node.attrs = decode_tag_attrs(token, spec.attrs, spec.name, "node", path);
+                node.marks = core;
+                strip_container_marks(node.marks, containers);
+                apply_declared_marks(node.marks, effective, schema, path);
                 InlinePieceKind kind = InlinePieceKind::OpenContainer;
                 if (spec.shape == Shape::InlineAtom || image) {
-                    node.marks = core;
-                    apply_declared_marks(node.marks, effective, schema, path);
                     // Native and tag images share the temporary paragraph until its parent splits it.
                     kind = image ? InlinePieceKind::Node : InlinePieceKind::Atom;
                     if (image) {
                         check_block_marks(node, "a block image cannot carry marks", path);
                     }
+                } else {
+                    containers.push_back({&spec, core, std::move(open), std::move(effective)});
+                    open.clear();
+                    effective.clear();
                 }
                 std::size_t node_index = document.append_node(std::move(node));
                 pieces.push_back({kind, node_index, &spec});
@@ -682,12 +730,12 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
                 }
             }
         }
-        append_raw(document, pieces, std::move(raw), core, effective, options.html, path);
+        append_raw(document, pieces, std::move(raw), core, effective, containers, options.html, path);
     }
     if (!open.empty() && !options.partial) {
         invalid_tag("opening tag '<" + open.front().spec->tag + ">' has no matching closing tag", path);
     }
-    // Mark pairs are resolved over the flat sequence before containers add structure.
+    // Mark pairs are resolved within each container before containers add structure.
     // Heap-backed parent frames also let excessive tag nesting fail before recursive traversal.
     build_containers(document, {index, &content_spec, std::move(original)}, pieces, options.partial, path);
     if (block_image && content_spec.name != "paragraph") {
