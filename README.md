@@ -357,6 +357,8 @@ A name in neither column is an `unknown_attr` at both levels — that is the rul
 `bool` and `int` stay distinct: `{"level": True}` is refused rather than read as `1`.
 Most of these also take `None`, meaning the attr was never set; the paragraph below says which do not.
 
+> **Changed in 0.8.2** — a table cell's `colwidth` stays in `to_dict()` and `dump()`, as the other attrs in the right-hand column do; it used to be removed on input.
+
 > **Changed in 0.7.0** — `strict` takes a level name instead of a bool, so `strict=True` now raises `TypeError`; `strict="exact"` is what it used to mean.
 > Three things move with the new `"content"` level: the attrs in the right-hand column above are accepted and dropped rather than refused, `href`/`src` are required, and a refused presentation attr reports `unrepresentable` where it used to report `unknown_attr`.
 
@@ -458,6 +460,8 @@ An owner cannot declare both a `StrMap` named `X` and another attr whose name st
 The bare tag attr `X="..."` is `unknown_attr`; only `X-key="..."` supplies a map entry.
 Collecting Tiptap editor attrs into the map is the editor's responsibility.
 
+> **Changed in 0.8.2** — `tm.StrMap` is new.
+
 `None` means unset.
 A value equal to its declared `default` also means unset: the key is removed on input, never written, and never filled back in, including under `strict="exact"`.
 Compare a round trip with `from_dict(original, schema=schema).to_dict()`, not the unnormalized input dict.
@@ -481,6 +485,9 @@ An attr without `inherit=True` is not carried over, and only reading Markdown is
 `to_markdown()` writes each run as one flat tag with all of its attrs.
 For `StrMap`, inheritance copies the whole outer map when the inner tag has no entries for that prefix.
 An inner map replaces it as a whole; keys are not merged.
+
+> **Changed in 0.8.2** — an attr declared with both `required=True` and `inherit=True` is satisfied by the value it inherits.
+> The inner tag used to raise `missing_attr` before inheritance.
 
 > **Changed in 0.8.1** — `Attr(inherit=True)` is new, and the `TEXT_STYLE` preset declares its attrs with it:
 > a nested `<span>` now keeps the outer span's styles, as Tiptap's TextStyle does when it reads HTML.
