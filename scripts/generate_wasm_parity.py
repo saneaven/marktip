@@ -255,6 +255,9 @@ def generate():
     add_document("str-map/node", '<custom-div class="game.status" data-hp="30" data-name="리안">\n\n'
                  'x\n\n</custom-div>', "str-map")
     add_document("str-map/core", '<p aria-label="status" aria-description="리안">x</p>', "str-map")
+    add_document("inline-container/declared-mark", "<u>a <ruby>x</ruby> b</u>", "partial")
+    add_document("inline-container/delimiter-mark", "**a <ruby>x</ruby> b**", "partial")
+    add_document("inline-container/own-and-child-marks", "<u><ruby><u>x</u></ruby></u>", "partial")
 
     source = '<callout tone="note">\n\n<summary><ruby><u>body</u></ruby></summary>\n\n</callout>'
     for length in (0, 1, 8, 20, 22, 31, 37, 40, len(source) - 4, len(source)):
@@ -294,6 +297,14 @@ def generate():
         ("exponent-number", "fromDict", {"type": "doc", "content": [{"type": "heading", "attrs": {"level": 1e21}}]},
          "default", {"strict": "exact"}),
         ("unmatched-tag", "fromMarkdown", "</callout>", "declared", {}),
+        ("inline-container/declared-mark-closes-inside", "fromMarkdown", "<u>a <ruby>x</u> y</ruby>",
+         "partial", {}),
+        ("inline-container/declared-mark-closes-outside", "fromMarkdown", "<ruby>a <u>b</ruby> c</u>",
+         "partial", {}),
+        ("inline-container/delimiter-mark-closes-inside", "fromMarkdown", "**a <ruby>x** y</ruby>",
+         "partial", {}),
+        ("inline-container/delimiter-mark-closes-outside", "fromMarkdown", "<ruby>a **b</ruby> c**",
+         "partial", {}),
         ("bad-tag-attr", "fromMarkdown", '<callout unknown="value">\n\n</callout>', "declared", {}),
         ("relative-link", "fromMarkdown", "[link](/path)", "default", {"link_relative": "reject"}),
         ("link-schemes", "fromMarkdown", "[link](http://example.test/page)",

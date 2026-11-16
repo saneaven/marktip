@@ -59,6 +59,46 @@ test("plain object StrMap declarations roundtrip tag attrs as a nested object", 
     }
 });
 
+test("strict dict input accepts marks on inline containers and their children", () => {
+    const schema = schemas.get("partial");
+    const underline = { type: "underline" };
+    const tree = { type: "doc", content: [{ type: "paragraph", content: [{
+        type: "ruby", marks: [underline], content: [{ type: "text", text: "x", marks: [underline] }],
+    }] }] };
+    for (const strict of ["content", "exact"]) {
+        const document = tm.fromDict(tree, { schema, strict });
+        try {
+            assert.deepEqual(document.toDict(), tree);
+        } finally {
+            document.free();
+        }
+    }
+});
+
+test("container code marks use strict validation and are omitted by the off writer", () => {
+    const schema = schemas.get("partial");
+    const tree = { type: "doc", content: [{ type: "paragraph", content: [{
+        type: "ruby", marks: [{ type: "code" }, { type: "underline" }],
+        content: [{ type: "text", text: "x" }],
+    }] }] };
+    for (const strict of ["content", "exact"]) {
+        assert.throws(() => tm.fromDict(tree, { schema, strict }), error => {
+            assert.ok(error instanceof tm.InvalidNodeError);
+            assert.equal(error.code, "invalid_mark_set");
+            assert.equal(error.field, "marks");
+            assert.equal(error.path, "content[0].content[0]");
+            return true;
+        });
+    }
+    const document = tm.fromDict(tree, { schema, strict: "off" });
+    try {
+        assert.deepEqual(document.toDict(), tree);
+        assert.equal(document.toMarkdown({ canonical: true }), "<u><ruby>x</ruby></u>");
+    } finally {
+        document.free();
+    }
+});
+
 for (const fixture of fixtures.documents) {
     test(`document parity: ${fixture.id}`, () => {
         const options = optionsFor(fixture);
