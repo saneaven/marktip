@@ -715,6 +715,7 @@ It guarantees, for the whole tree:
 - **`type` is required** on every node and mark.
 - **The root is a `doc`.**
 - **Shapes**: `attrs` is a dict, `content` and `marks` are lists, and every entry of `content`/`marks` is a dict.
+  With `strict="off"`, an explicit `None` for `attrs`, `content` or `marks` is read as an absent key.
 - **Depth** is at most 512 levels.
   The same limit caps simultaneously open declared mark tags.
 - **No ASCII control character** in a link `href` or image `src`, entity references included (`&Tab;`, `&#09;`).

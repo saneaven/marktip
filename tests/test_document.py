@@ -50,6 +50,22 @@ def test_deeply_nested_markdown_raises_instead_of_crashing():
         tm.from_markdown(">" * 50000 + " x")
 
 
+MAX_NODE_DEPTH = 512
+
+
+def test_markdown_at_the_depth_limit_reads_back_from_its_own_dict_and_dump():
+    # doc, the blockquotes, list, item, paragraph, text: the text sits exactly at the limit.
+    doc = tm.from_markdown(">" * (MAX_NODE_DEPTH - 4) + " - x")
+
+    assert tm.from_dict(doc.to_dict()).to_dict() == doc.to_dict()
+    assert tm.load(doc.dump()).to_dict() == doc.to_dict()
+
+
+def test_paragraph_wrapped_around_list_item_text_counts_toward_the_depth_limit():
+    with pytest.raises(tm.ParseError, match="maximum depth"):
+        tm.from_markdown(">" * (MAX_NODE_DEPTH - 3) + " - x")
+
+
 def test_deeply_nested_dict_raises_instead_of_crashing():
     node = {"type": "paragraph"}
     for _ in range(5000):

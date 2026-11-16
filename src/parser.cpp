@@ -501,10 +501,15 @@ private:
         return document_.append_child(stack_.back(), std::move(node));
     }
 
-    void push_index(std::size_t index) {
+    // A child of the innermost open node may itself hold leaves one level further down.
+    void check_can_nest() const {
         if (stack_.size() >= kMaxNodeDepth) {
             throw ParseError("markdown_max_depth", "markdown nesting exceeds maximum depth");
         }
+    }
+
+    void push_index(std::size_t index) {
+        check_can_nest();
         stack_.push_back(index);
     }
 
@@ -712,6 +717,8 @@ private:
                 return;
             }
 
+            // The paragraph puts these inline nodes one level deeper than they were parsed at.
+            check_can_nest();
             Node paragraph;
             paragraph.type = "paragraph";
             paragraph.content = std::move(inline_run);
