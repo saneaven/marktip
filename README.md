@@ -23,6 +23,13 @@ markdown = doc.to_markdown()
 doc = tm.from_dict(ast)
 ```
 
+> **Changed in 0.8.0** — `to_markdown()` returns the Markdown a document was read from, and marktip's own spelling only for blocks that changed;
+> pass `canonical=True` for the previous output.
+> Nesting is limited to 512 levels instead of 2,048.
+> A table whose header and delimiter rows disagree on the cell count is read as a paragraph, as GFM specifies, instead of losing the extra header cells.
+> `Schema(block_image=...)` takes a real `bool`.
+> New in this release: `dump()` and `load()`, `from_dict(base=)`, `from_markdown(partial=, keep_source=)`, and a WebAssembly build with a JavaScript package.
+
 `from_markdown` follows GFM/CommonMark by default.
 Pass `cjk_friendly=True` to follow the [CommonMark CJK-friendly Amendments Specification](https://github.com/tats-u/markdown-cjk-friendly/blob/main/specification.md) for emphasis (`*`, `_`) and strikethrough (`~`). This opt-in extension recognizes CJK punctuation as well as letters, so `**《제목》**a`, `a**《제목》**`, and `**「約束」**a` retain their bold marks:
 
