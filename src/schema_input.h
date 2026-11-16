@@ -105,8 +105,9 @@ class SchemaDeclarationReader {
             if (name == "int") return AttrRule::Int;
             if (name == "bool") return AttrRule::Bool;
             if (name == "IntList") return AttrRule::ColWidth;
+            if (name == "StrMap") return AttrRule::StrMap;
         }
-        throw std::invalid_argument("attr type must be 'str', 'int', 'bool' or 'IntList'");
+        throw std::invalid_argument("attr type must be 'str', 'int', 'bool', 'IntList' or 'StrMap'");
     }
 
     static std::vector<AttrDeclaration> attrs(Value object) {

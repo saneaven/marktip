@@ -37,6 +37,13 @@ class DocumentWriter {
                         }
                     });
                     break;
+                case AttrValue::Kind::StrMap:
+                    Output::field_object(out, attr.first, [&](Object& map) {
+                        for (const auto& entry : attr.second.str_map_value()) {
+                            Output::field(map, entry.first, entry.second);
+                        }
+                    });
+                    break;
             }
         }
     }

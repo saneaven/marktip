@@ -19,6 +19,7 @@ namespace py = pybind11;
 namespace {
 
 struct IntList {};
+struct StrMap {};
 
 // Builds the Python exception instance and fills the fields every MarktipError carries.
 // The caller attaches any subclass-specific fields, then raises it.
@@ -98,6 +99,7 @@ PYBIND11_MODULE(_core, module) {
     });
 
     py::class_<IntList>(module, "IntList");
+    py::class_<StrMap>(module, "StrMap");
 
     py::class_<marktip::Schema, std::shared_ptr<marktip::Schema>>(module, "Schema")
         .def(py::init([](py::object declaration) {

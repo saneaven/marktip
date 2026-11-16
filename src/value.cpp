@@ -2,6 +2,8 @@
 
 #include <charconv>
 
+#include "tags.h"
+
 namespace marktip {
 
 // CommonMark replaces an insecure NUL with U+FFFD before parsing. from_dict
@@ -61,6 +63,44 @@ AttrValue AttrValue::int_list(std::vector<long long> value) {
     return attr;
 }
 
+AttrValue AttrValue::str_map(StrMapEntries value) {
+    AttrValue attr;
+    attr.kind = Kind::StrMap;
+    // NUL separates keys and normalized values without enlarging scalar attrs.
+    for (auto& entry : value) {
+        attr.string_value += entry.first;
+        attr.string_value.push_back('\0');
+        attr.string_value += normalize_content_string(std::move(entry.second));
+        attr.string_value.push_back('\0');
+    }
+    return attr;
+}
+
+StrMapEntries AttrValue::str_map_value() const {
+    StrMapEntries entries;
+    std::size_t begin = 0;
+    while (begin < string_value.size()) {
+        std::size_t key_end = string_value.find('\0', begin);
+        std::size_t value_end = string_value.find('\0', key_end + 1);
+        entries.emplace_back(string_value.substr(begin, key_end - begin),
+                             string_value.substr(key_end + 1, value_end - key_end - 1));
+        begin = value_end + 1;
+    }
+    return entries;
+}
+
+bool str_map_key(std::string_view key) {
+    if (key.empty()) {
+        return false;
+    }
+    for (char ch : key) {
+        if (!attr_name_char(ch)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::optional<long long> parse_decimal_int(std::string_view value) {
     if (!value.empty() && value.front() == '+') {
         value.remove_prefix(1);
@@ -107,6 +147,7 @@ bool AttrValue::operator==(const AttrValue& other) const {
     switch (kind) {
         case Kind::String:
         case Kind::IntList:
+        case Kind::StrMap:
             return string_value == other.string_value;
         case Kind::Int:
             return int_value == other.int_value;

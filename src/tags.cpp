@@ -185,6 +185,14 @@ void append_tag_attr(std::string& out, const AttrSpec& attr, const AttrList& att
     if (value == nullptr) {
         return;
     }
+    if (value->kind == AttrValue::Kind::StrMap) {
+        for (const auto& entry : value->str_map_value()) {
+            out += " " + attr.name + "-" + entry.first + "=\"";
+            append_escaped_attr(out, entry.second);
+            out.push_back('"');
+        }
+        return;
+    }
     out += " " + attr.name + "=\"";
     switch (value->kind) {
         case AttrValue::Kind::String:
@@ -196,6 +204,8 @@ void append_tag_attr(std::string& out, const AttrSpec& attr, const AttrList& att
             break;
         case AttrValue::Kind::Bool:
             out += value->bool_value ? "true" : "false";
+            break;
+        case AttrValue::Kind::StrMap:
             break;
     }
     out.push_back('"');

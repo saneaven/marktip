@@ -68,11 +68,27 @@ class DocumentReader {
         return numbers;
     }
 
+    static std::optional<StrMapEntries> str_map_from_input(Value values) {
+        StrMapEntries entries;
+        for (auto item : Input::items(values)) {
+            if (!Input::is_str(item.first) || !Input::is_str(item.second)) {
+                return std::nullopt;
+            }
+            std::string key = Input::string(item.first);
+            if (!str_map_key(key)) {
+                return std::nullopt;
+            }
+            entries.emplace_back(std::move(key), Input::string(item.second));
+        }
+        return entries;
+    }
+
     // --- the attr schema --------------------------------------------------------
     //
     // Attr reading keeps the values Markdown can act on; strict mode checks the losses a caller refuses.
 
-    // Scalars and declared int lists are the values the serializer can act on; every other key is dropped.
+    // Scalars, declared int lists and declared string maps are values the serializer can act on;
+    // every other key is dropped.
     // Stringifying unsupported values would store text the caller never wrote and lose the original value.
     // Null is omitted from AttrList.
     // The key sink keeps it distinct from an absent key for inheritance.
@@ -92,6 +108,11 @@ class DocumentReader {
                     auto numbers = int_list_from_input(value);
                     if (numbers) {
                         store_attr(out, std::move(name), AttrValue::int_list(std::move(*numbers)), specs);
+                    }
+                } else if (Input::is_dict(value) && attr_stores_str_map(specs, name)) {
+                    auto entries = str_map_from_input(value);
+                    if (entries) {
+                        store_attr(out, std::move(name), AttrValue::str_map(std::move(*entries)), specs);
                     }
                 }
                 continue;
@@ -150,6 +171,10 @@ class DocumentReader {
         if (attr_reads_int_list(spec) && Input::is_list(value)) {
             auto numbers = int_list_from_input(value);
             return numbers ? AttrInput(std::move(*numbers)) : AttrInput(OtherValue{});
+        }
+        if (attr_reads_str_map(spec) && Input::is_dict(value)) {
+            auto entries = str_map_from_input(value);
+            return entries ? AttrInput(std::move(*entries)) : AttrInput(OtherValue{});
         }
         return OtherValue{};
     }

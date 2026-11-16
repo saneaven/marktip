@@ -436,13 +436,24 @@ A heading written in tag form uses ordinary textblock rules and preserves hard b
 
 ### Attrs, exclusions and content
 
-`Attr(type, required=False, choices=None, default=None, uri=None, inherit=False)` accepts `str`, `int`, `bool` and `tm.IntList`.
+`Attr(type, required=False, choices=None, default=None, uri=None, inherit=False)` accepts `str`, `int`, `bool`, `tm.IntList` and `tm.StrMap`.
 Integers fit in a signed 64-bit value; `bool` stays distinct from `int`.
 `IntList` is a list of integers, written as a comma-separated attr such as `colwidth="100,200"`.
 `choices` limits the allowed values, and `required=True` requires an attr after unset values have been removed.
 An attr with `uri="link"` or `uri="image"` must be a `str` and cannot also declare a default.
 It uses the corresponding URI policy and rejects control characters at every strict level.
 `inherit=True` is for an attr of a declared mark, such as a style: see nested marks below.
+
+`StrMap` groups string-valued tag attrs by prefix: `attrs={"data": tm.Attr(tm.StrMap)}` reads `data-hp="30" data-name="리안"` as `{"data": {"hp": "30", "name": "리안"}}`.
+It works on marks, declared nodes and `core_attrs`, and any declared prefix can be used, including `aria`.
+Map keys keep their spelling and order; they must be non-empty and contain only ASCII letters, digits, `_`, `:`, `.` or `-`.
+Values use the same character-reference decoding, normalization and escaping as `str` attrs.
+Map entries are written in their stored order, with the map placed among other attrs in declaration order.
+An empty map or `None` is unset and omitted; `required=True` requires at least one entry.
+`StrMap` does not accept `choices`, `default` or `uri`.
+An owner cannot declare both a `StrMap` named `X` and another attr whose name starts with `X-`.
+The bare tag attr `X="..."` is `unknown_attr`; only `X-key="..."` supplies a map entry.
+Collecting Tiptap editor attrs into the map is the editor's responsibility.
 
 `None` means unset.
 A value equal to its declared `default` also means unset: the key is removed on input, never written, and never filled back in, including under `strict="exact"`.
@@ -461,6 +472,8 @@ Two marks conflict if either excludes the other; both strict dict levels and the
 Opening conflicting declared tags is an error even when their overlap contains no inline content.
 A self-exclusive mark nested inside itself replaces the outer mark for its extent and restores it afterward.
 The replacing mark keeps the outer mark's attrs declared with `inherit=True`, except those its own tag writes.
+For `StrMap`, inheritance copies the whole outer map when the inner tag has no entries for that prefix.
+An inner map replaces it as a whole; keys are not merged.
 With `TEXT_STYLE`, `<span color="red">a <span fontSize="12px">b</span></span>` gives `b` both `color` and `fontSize`,
 and `<span color="blue">` inside it would override the color.
 An attr without `inherit=True` is not carried over, and only reading Markdown is affected:
@@ -748,6 +761,9 @@ It deliberately does **not** validate, unless `strict` asks it to:
 - **`attrs` names and value types.**
   Keys are free-form.
   `str`, `int` and `bool` can be stored on free-form keys; a list of integers is stored only for an attr declared `tm.IntList`.
+  A dict is stored only for an attr declared `tm.StrMap`, with string keys and values and valid map keys as described above.
+  With strict validation off, any invalid key or non-string value drops the whole map.
+  Both strict levels report `invalid_attr_value` for a non-dict map value or an invalid map entry.
   Other values and `None` are dropped.
   Declared defaults are also removed.
   An attr with no markdown form is dropped at serialization — see [Refusing lossy conversions](#refusing-lossy-conversions).

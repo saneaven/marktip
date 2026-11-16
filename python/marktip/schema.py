@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ._core import IntList, Schema as _CompiledSchema
+from ._core import IntList, StrMap, Schema as _CompiledSchema
 
 
 @dataclass(frozen=True)
@@ -41,9 +41,9 @@ class NodeSpec:
 
 def _attr_from_dict(data: dict) -> Attr:
     name = data.get("type")
-    types = {"str": str, "int": int, "bool": bool, "IntList": IntList}
+    types = {"str": str, "int": int, "bool": bool, "IntList": IntList, "StrMap": StrMap}
     if name not in types:
-        raise ValueError("attr type must be 'str', 'int', 'bool' or 'IntList'")
+        raise ValueError("attr type must be 'str', 'int', 'bool', 'IntList' or 'StrMap'")
     return Attr(types[name], data.get("required", False), data.get("choices"), data.get("default"), data.get("uri"),
                 data.get("inherit", False))
 
@@ -79,8 +79,8 @@ def _attrs_key(attrs: dict[str, Attr]) -> tuple:
 
 def _attr_to_dict(attr: Attr) -> dict:
     type_ = attr.type
-    if all(type_ is not allowed for allowed in (str, int, bool, IntList)):
-        raise TypeError("Attr.type must be str, int, bool or IntList")
+    if all(type_ is not allowed for allowed in (str, int, bool, IntList, StrMap)):
+        raise TypeError("Attr.type must be str, int, bool, IntList or StrMap")
     choices = attr.choices
     if choices is not None and not isinstance(choices, (tuple, list)):
         raise TypeError("choices must be a tuple or list")

@@ -194,6 +194,21 @@ const AttrSpec* check_attr_name(const std::vector<AttrSpec>& specs, const std::s
                                 std::string_view owner_type, const char* kind, StrictMode mode,
                                 const PathStack& path, bool tag_form) {
     const AttrSpec* spec = find_attr_spec(specs, name);
+    if (tag_form) {
+        if (spec != nullptr && spec->rule == AttrRule::StrMap) {
+            spec = nullptr;
+        }
+        if (spec == nullptr) {
+            for (const AttrSpec& candidate : specs) {
+                if (candidate.rule == AttrRule::StrMap && name.size() > candidate.name.size() + 1 &&
+                    name.compare(0, candidate.name.size(), candidate.name) == 0 &&
+                    name[candidate.name.size()] == '-') {
+                    spec = &candidate;
+                    break;
+                }
+            }
+        }
+    }
     if (spec == nullptr || (tag_form && spec->form == MarkdownForm::Dropped)) {
         // Outside both dialects: a typo, or a key an app invented and expects to survive.
         throw InvalidNodeError("unknown_attr", name,
@@ -231,6 +246,15 @@ bool attr_reads_int_list(const AttrSpec& spec) {
 bool attr_stores_int_list(const std::vector<AttrSpec>& specs, std::string_view name) {
     const AttrSpec* spec = find_attr_spec(specs, name);
     return spec != nullptr && spec->rule == AttrRule::ColWidth && spec->form != MarkdownForm::Dropped;
+}
+
+bool attr_reads_str_map(const AttrSpec& spec) {
+    return spec.rule == AttrRule::StrMap;
+}
+
+bool attr_stores_str_map(const std::vector<AttrSpec>& specs, std::string_view name) {
+    const AttrSpec* spec = find_attr_spec(specs, name);
+    return spec != nullptr && attr_reads_str_map(*spec);
 }
 
 void check_attr_value(const AttrInput& value, const AttrSpec& spec, const PathStack& path) {
@@ -308,6 +332,11 @@ void check_attr_value(const AttrInput& value, const AttrSpec& spec, const PathSt
                 expected("a list of ints");
             }
             break;
+        case AttrRule::StrMap:
+            if (!std::holds_alternative<StrMapEntries>(value)) {
+                expected("a dict of strings with non-empty attr-name keys");
+            }
+            break;
         case AttrRule::NoSpan:
             if (number == nullptr) {
                 expected("an int");
@@ -352,6 +381,9 @@ void check_required_attrs(const AttrList& attrs, const std::vector<AttrSpec>& sp
 
 void store_attr(AttrList& attrs, std::string&& name, AttrValue&& value, const std::vector<AttrSpec>& specs) {
     if (value.kind == AttrValue::Kind::IntList && !attr_stores_int_list(specs, name)) {
+        return;
+    }
+    if (value.kind == AttrValue::Kind::StrMap && value.string_value.empty()) {
         return;
     }
     const AttrSpec* spec = find_attr_spec(specs, name);

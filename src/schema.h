@@ -37,6 +37,7 @@ enum class AttrRule {
     Size,       // str or int: Tiptap parses width/height out of HTML as a str, apps store an int
     ColWidth,   // list of ints
     NoSpan,     // int == 1: GFM tables have no cell spanning
+    StrMap,     // ordered string map
 };
 
 // A second axis, orthogonal to the value grammar: what a None means for this attr.

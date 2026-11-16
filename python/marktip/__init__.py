@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover - development-only CMake build fallback
     from_markdown = _module.from_markdown
     load = _module.load
 
-from .schema import Attr, IntList, MarkSpec, NodeSpec, Schema
+from .schema import Attr, IntList, StrMap, MarkSpec, NodeSpec, Schema
 from .presets import (
     BLOCK_MATH,
     DETAILS,
@@ -65,6 +65,7 @@ __all__ = [
     "Document",
     "Attr",
     "IntList",
+    "StrMap",
     "MarkSpec",
     "NodeSpec",
     "Schema",

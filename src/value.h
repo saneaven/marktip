@@ -12,8 +12,10 @@ namespace marktip {
 // The serializer clamps to this range; strict mode refuses instead.
 inline constexpr long long kMaxListStart = 999999999;
 
+using StrMapEntries = std::vector<std::pair<std::string, std::string>>;
+
 struct AttrValue {
-    enum class Kind { String, Int, Bool, IntList };
+    enum class Kind { String, Int, Bool, IntList, StrMap };
 
     Kind kind = Kind::String;
     std::string string_value;
@@ -24,8 +26,10 @@ struct AttrValue {
     static AttrValue integer(long long value);
     static AttrValue boolean(bool value);
     static AttrValue int_list(std::vector<long long> value);
+    static AttrValue str_map(StrMapEntries value);
 
     std::vector<long long> int_list_value() const;
+    StrMapEntries str_map_value() const;
 
     bool operator==(const AttrValue& other) const;
 };
@@ -42,6 +46,7 @@ struct Mark {
 std::string normalize_content_string(std::string value);
 std::optional<long long> parse_decimal_int(std::string_view value);
 std::optional<std::vector<long long>> parse_int_list(std::string_view value);
+bool str_map_key(std::string_view key);
 
 void set_attr(AttrList& attrs, std::string key, AttrValue value);
 const AttrValue* find_attr(const AttrList& attrs, std::string_view key);

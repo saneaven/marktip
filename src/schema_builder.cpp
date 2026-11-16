@@ -93,6 +93,20 @@ void refuse_inherit(const std::vector<AttrDeclaration>& declarations, const std:
     }
 }
 
+void check_str_map_names(const std::vector<AttrSpec>& specs) {
+    for (const AttrSpec& spec : specs) {
+        if (spec.rule != AttrRule::StrMap) {
+            continue;
+        }
+        std::string prefix = spec.name + "-";
+        for (const AttrSpec& other : specs) {
+            if (other.name.compare(0, prefix.size(), prefix) == 0) {
+                throw std::invalid_argument("attr '" + other.name + "' conflicts with StrMap attr '" + spec.name + "'");
+            }
+        }
+    }
+}
+
 std::vector<AttrSpec> compile_attrs(const std::vector<AttrDeclaration>& declarations) {
     std::vector<AttrSpec> specs;
     std::unordered_set<std::string> names;
@@ -102,6 +116,7 @@ std::vector<AttrSpec> compile_attrs(const std::vector<AttrDeclaration>& declarat
         }
         specs.push_back(compile_attr(declaration));
     }
+    check_str_map_names(specs);
     return specs;
 }
 
@@ -149,6 +164,7 @@ void merge_core_attrs(std::vector<AttrSpec>& attrs, std::vector<std::size_t>& or
             *existing = std::move(attr);
         }
     }
+    check_str_map_names(attrs);
 }
 
 std::vector<std::string> groups_from_declaration(const NodeDeclaration& declaration) {
@@ -228,6 +244,9 @@ std::string SchemaBuilder::fingerprint(const std::vector<MarkDeclaration>& marks
                     }
                     break;
                 }
+                case AttrValue::Kind::StrMap:
+                    // String maps cannot be declaration choices or defaults.
+                    break;
             }
         }
 
@@ -247,6 +266,7 @@ std::string SchemaBuilder::fingerprint(const std::vector<MarkDeclaration>& marks
                     case AttrRule::Size: byte(8); break;
                     case AttrRule::ColWidth: byte(9); break;
                     case AttrRule::NoSpan: byte(10); break;
+                    case AttrRule::StrMap: byte(11); break;
                 }
                 // One byte for both flags: a declaration that inherits nothing keeps the fingerprint it had.
                 byte(static_cast<std::uint8_t>((declaration.required ? 1 : 0) | (declaration.inherit ? 2 : 0)));

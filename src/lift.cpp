@@ -25,6 +25,9 @@ AttrInput decode_attr_input(const HtmlAttr& attr, const AttrSpec& spec) {
         return spec.rule == AttrRule::Bool ? AttrInput(true) : AttrInput(OtherValue {});
     }
     std::string value = decode_entities(*attr.value);
+    if (spec.rule == AttrRule::StrMap) {
+        return StrMapEntries {{std::string(attr.name.substr(spec.name.size() + 1)), std::move(value)}};
+    }
     if (spec.rule == AttrRule::Str || spec.rule == AttrRule::Align) {
         return value;
     }
@@ -67,6 +70,14 @@ AttrList decode_tag_attrs(const HtmlConstruct& tag, const std::vector<AttrSpec>&
             value = AttrValue::integer(std::get<long long>(input));
         } else if (std::holds_alternative<bool>(input)) {
             value = AttrValue::boolean(std::get<bool>(input));
+        } else if (std::holds_alternative<StrMapEntries>(input)) {
+            StrMapEntries entries = std::get<StrMapEntries>(std::move(input));
+            name = attr_spec.name;
+            if (const AttrValue* previous = find_attr(attrs, name)) {
+                StrMapEntries earlier = previous->str_map_value();
+                entries.insert(entries.begin(), earlier.begin(), earlier.end());
+            }
+            value = AttrValue::str_map(std::move(entries));
         } else {
             value = AttrValue::int_list(std::get<std::vector<long long>>(std::move(input)));
         }
