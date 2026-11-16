@@ -27,6 +27,12 @@ An upstream bump therefore has to re-check that `const ENTITY* entity_lookup(con
   Definitions-only top-level paragraphs retain a segment with `has_block = 0` when their record is removed.
   A null callback disables recording, and the callback array is valid only during the call.
   Patched hunks use `MARKTIP LOCAL PATCH` comments; the vendored version remains 0.5.3.
+- Table header cell count (md4c.c): a table whose header row does not have as many cells as its delimiter row is emitted as a paragraph,
+  as GFM specifies.
+  Upstream keeps the table and drops the header cells beyond the delimiter row's count.
+  The header is counted in pass 2 with the same cell boundaries `md_process_table_row()` uses,
+  so an escaped pipe or a pipe inside a code span does not separate cells.
+  Patched hunks use `MARKTIP LOCAL PATCH` comments.
 - Task markers after blockquotes (md4c.c): the checkbox test uses the incoming item's container,
   rather than the innermost old container that may still be a blockquote.
   This preserves the next sibling's checked state and removes its checkbox from the text.

@@ -4710,6 +4710,39 @@ abort:
     return ret;
 }
 
+/* MARKTIP LOCAL PATCH: Count the cells md_process_table_row() finds in a row, before any column limit. */
+static int
+md_count_table_row_cells(MD_CTX* ctx, OFF beg, OFF end, int* p_count)
+{
+    MD_LINE line;
+    OFF cell_beg = beg;
+    int count = 0;
+    int i;
+    int ret = 0;
+
+    line.beg = beg;
+    line.end = end;
+    MD_CHECK(md_analyze_inlines(ctx, &line, 1, TRUE));
+
+    for(i = ctx->table_cell_boundaries_head; i >= 0; i = ctx->marks[i].next) {
+        if(cell_beg < ctx->marks[i].end - 1)
+            count++;
+        cell_beg = ctx->marks[i].end;
+    }
+    if(cell_beg < end)
+        count++;
+    *p_count = count;
+
+abort:
+    for(i = ctx->ptr_stack.top; i >= 0; i = ctx->marks[i].next)
+        free(md_mark_get_ptr(ctx, i));
+    ctx->ptr_stack.top = -1;
+    ctx->table_cell_boundaries_head = -1;
+    ctx->table_cell_boundaries_tail = -1;
+
+    return ret;
+}
+
 static int
 md_process_table_block_contents(MD_CTX* ctx, int col_count, const MD_LINE* lines, MD_SIZE n_lines)
 {
@@ -4919,16 +4952,28 @@ md_process_leaf_block(MD_CTX* ctx, const MD_BLOCK* block)
     MD_ATTRIBUTE_BUILD lang_build = { 0 };
     int is_in_tight_list;
     int clean_fence_code_detail = FALSE;
+    MD_BLOCKTYPE type = block->type;
     int ret = 0;
 
     memset(&det, 0, sizeof(det));
+
+    /* MARKTIP LOCAL PATCH: GFM recognizes a table only when its header row has as many cells as its delimiter row.
+     * The header is split into cells only here, so a mismatched table is emitted as the paragraph it would have been. */
+    if(type == MD_BLOCK_TABLE) {
+        const MD_LINE* header = (const MD_LINE*)(block + 1);
+        int cell_count;
+
+        MD_CHECK(md_count_table_row_cells(ctx, header->beg, header->end, &cell_count));
+        if(cell_count != (int) block->data)
+            type = MD_BLOCK_P;
+    }
 
     if(ctx->n_containers == 0)
         is_in_tight_list = FALSE;
     else
         is_in_tight_list = !ctx->containers[ctx->n_containers-1].is_loose;
 
-    switch(block->type) {
+    switch(type) {
         case MD_BLOCK_H:
             det.header.level = block->data;
             break;
@@ -4953,11 +4998,11 @@ md_process_leaf_block(MD_CTX* ctx, const MD_BLOCK* block)
             break;
     }
 
-    if(!is_in_tight_list  ||  block->type != MD_BLOCK_P)
-        MD_ENTER_BLOCK(block->type, (void*) &det);
+    if(!is_in_tight_list  ||  type != MD_BLOCK_P)
+        MD_ENTER_BLOCK(type, (void*) &det);
 
     /* Process the block contents accordingly to is type. */
-    switch(block->type) {
+    switch(type) {
         case MD_BLOCK_HR:
             /* noop */
             break;
@@ -4983,8 +5028,8 @@ md_process_leaf_block(MD_CTX* ctx, const MD_BLOCK* block)
             break;
     }
 
-    if(!is_in_tight_list  ||  block->type != MD_BLOCK_P)
-        MD_LEAVE_BLOCK(block->type, (void*) &det);
+    if(!is_in_tight_list  ||  type != MD_BLOCK_P)
+        MD_LEAVE_BLOCK(type, (void*) &det);
 
 abort:
     if(clean_fence_code_detail) {
