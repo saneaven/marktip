@@ -92,6 +92,23 @@ def test_writing_the_declared_default_still_overrides_the_outer_value():
     ]
 
 
+def test_a_required_attr_is_satisfied_by_the_value_it_inherits():
+    schema = tm.Schema(marks=[tm.MarkSpec("tint", tag="span", attrs={
+        "color": tm.Attr(str, required=True, inherit=True),
+        "weight": tm.Attr(str, required=True),
+    })])
+
+    assert runs('<span color="red" weight="1">a <span weight="2">b</span></span>', schema) == [
+        ("a ", {"tint": {"color": "red", "weight": "1"}}),
+        ("b", {"tint": {"color": "red", "weight": "2"}}),
+    ]
+    missing = {'<span weight="1">a</span>': "color", '<span color="red" weight="1">a <span>b</span></span>': "weight"}
+    for markdown, field in missing.items():
+        with pytest.raises(tm.InvalidNodeError) as error:
+            tm.from_markdown(markdown, schema=schema)
+        assert (error.value.code, error.value.field) == ("missing_attr", field)
+
+
 def test_text_style_can_turn_the_merge_off_as_the_editor_option_does():
     schema = tm.Schema(marks=[tm.text_style(merge_nested_span_styles=False)])
 

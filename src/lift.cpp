@@ -49,8 +49,12 @@ AttrInput decode_attr_input(const HtmlAttr& attr, const AttrSpec& spec) {
     return number ? AttrInput(*number) : AttrInput(OtherValue {});
 }
 
+// `outer` holds the attrs of the open mark this tag replaces, when it replaces one of its own type.
+// The tag keeps that mark's inheriting attrs, except those it writes itself,
+// even when the written value is the declared default.
 AttrList decode_tag_attrs(const HtmlConstruct& tag, const std::vector<AttrSpec>& specs,
-                          std::string_view type, const char* kind, const PathStack& path) {
+                          std::string_view type, const char* kind, const PathStack& path,
+                          const AttrList* outer = nullptr) {
     AttrList attrs;
     std::vector<std::string_view> seen;
     for (const HtmlAttr& attr : tag.attrs) {
@@ -91,6 +95,15 @@ AttrList decode_tag_attrs(const HtmlConstruct& tag, const std::vector<AttrSpec>&
             set_attr(attrs, "alt", AttrValue::string(""));
         }
     }
+    if (outer != nullptr) {
+        for (const AttrSpec& attr_spec : specs) {
+            const AttrValue* inherited = attr_spec.inherit ? find_attr(*outer, attr_spec.name) : nullptr;
+            if (inherited != nullptr && find_attr(attrs, attr_spec.name) == nullptr &&
+                std::find(seen.begin(), seen.end(), attr_spec.name) == seen.end()) {
+                attrs.emplace_back(attr_spec.name, *inherited);
+            }
+        }
+    }
     check_required_attrs(attrs, specs, type, kind, path);
     AttrList ordered_attrs;
     for (const AttrSpec& attr_spec : specs) {
@@ -102,30 +115,6 @@ AttrList decode_tag_attrs(const HtmlConstruct& tag, const std::vector<AttrSpec>&
         }
     }
     return ordered_attrs;
-}
-
-// The mark replacing an open mark of its own type keeps that mark's inheriting attrs,
-// except those its own tag writes, even when the written value is the declared default.
-AttrList inherit_mark_attrs(const HtmlConstruct& tag, AttrList own, const AttrList& outer,
-                            const std::vector<AttrSpec>& specs) {
-    AttrList merged;
-    for (const AttrSpec& spec : specs) {
-        auto written = std::find_if(own.begin(), own.end(), [&](const auto& entry) {
-            return entry.first == spec.name;
-        });
-        if (written != own.end()) {
-            merged.push_back(std::move(*written));
-            continue;
-        }
-        bool in_tag = std::any_of(tag.attrs.begin(), tag.attrs.end(), [&](const HtmlAttr& attr) {
-            return attr.name == spec.name;
-        });
-        const AttrValue* inherited = spec.inherit && !in_tag ? find_attr(outer, spec.name) : nullptr;
-        if (inherited != nullptr) {
-            merged.emplace_back(spec.name, *inherited);
-        }
-    }
-    return merged;
 }
 
 AttrList carrier_attrs(std::string body, const NodeSpec& spec, const PathStack& path) {
@@ -651,15 +640,17 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
             }
             if (!token.closing) {
                 check_lift_depth(open.size() + 1);
-                Mark mark {spec.name, decode_tag_attrs(token, spec.attrs, spec.name, "mark", path)};
+                auto previous = effective.end();
                 if (excludes(spec.excludes, spec.name)) {
-                    auto previous = std::find_if(effective.begin(), effective.end(), [&](const Mark& current) {
+                    previous = std::find_if(effective.begin(), effective.end(), [&](const Mark& current) {
                         return current.type == spec.name;
                     });
-                    if (previous != effective.end()) {
-                        mark.attrs = inherit_mark_attrs(token, std::move(mark.attrs), previous->attrs, spec.attrs);
-                        effective.erase(previous);
-                    }
+                }
+                bool replaces = previous != effective.end();
+                Mark mark {spec.name, decode_tag_attrs(token, spec.attrs, spec.name, "mark", path,
+                                                       replaces ? &previous->attrs : nullptr)};
+                if (replaces) {
+                    effective.erase(previous);
                 }
                 check_mark_set(effective, mark, schema, path);
                 effective.push_back(mark);
