@@ -824,7 +824,9 @@ It provides the Python document and schema APIs, with TypeScript declarations.
 Tiptap JSON, stored documents and schema dicts have the same shape in both languages, so either language can read what the other stores.
 The package is built for bundlers and direct ES module use.
 Unbundled use needs a runtime that can import JSON modules with `with { type: "json" }`.
-The automated tests run on Node; browser and worker execution has not been tested.
+The automated tests run on Node.
+The package was also run by hand in Firefox 160: bundled with Vite on the main thread and in a module worker, and as direct ES modules.
+Other browsers have not been tried.
 
 ### Building the package
 
@@ -945,7 +947,9 @@ The differences from Python are:
   `undefined` object properties become absent keys; `NaN` and `Infinity` become `null` through `JSON.stringify`.
 - Wasm memory grows when needed and does not shrink; the largest document read determines its high-water mark.
 - The shared nesting cap is 512, including the limit on simultaneously open declared mark tags.
-  Stack margin at that cap was measured on Node only; browser engine stacks were not measured.
+  Stack margin at that cap was measured on Node only.
+  In Firefox 160 documents at the cap converted and wrote canonical Markdown, on the main thread and in a worker;
+  the margin there, and other browsers, were not measured.
 
 Measurements recorded on 2026-11-15 used an Intel Core Ultra 9 185H on Linux x86_64, Node 26.13.0 and an Emscripten 6.0.13 Release build.
 The wasm module was 611,095 bytes uncompressed.

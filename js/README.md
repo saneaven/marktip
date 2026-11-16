@@ -3,7 +3,9 @@
 Markdown to and from Tiptap/ProseMirror JSON, using the same C++ core as the Python package through WebAssembly.
 The package includes TypeScript declarations and is built for bundlers and direct ES module use.
 Unbundled use needs a runtime that can import JSON modules with `with { type: "json" }`.
-The automated tests run on Node; browser and worker execution has not been tested.
+The automated tests run on Node.
+The package was also run by hand in Firefox 160: bundled with Vite on the main thread and in a module worker, and as direct ES modules.
+Other browsers have not been tried.
 
 ```ts
 import * as tm from "marktip";

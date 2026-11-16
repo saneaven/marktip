@@ -90,6 +90,13 @@ for (const fixture of fixtures.errors) {
     });
 }
 
+test("error names do not depend on the class name a bundler may change", () => {
+    for (const name of ["MarktipError", "UnknownTypeError", "InvalidNodeError", "ParseError"]) {
+        class Renamed extends tm[name] {}
+        assert.equal(new Renamed("message").name, name);
+    }
+});
+
 test("documents reject methods after free and tolerate a second free", () => {
     const document = tm.fromMarkdown("text");
     document.free();

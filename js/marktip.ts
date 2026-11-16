@@ -98,13 +98,14 @@ const schemaFinalizer = new FinalizationRegistry<number>((handle) => { wasm!._mt
 const documentFinalizer = new FinalizationRegistry<number>((handle) => { wasm!._mt_document_free(handle); });
 
 export class MarktipError extends Error {
+    // Literal names: a bundler renames classes, and callers read error.name.
+    name = "MarktipError";
     code: string;
     path: string;
     detail: string;
 
     constructor(message: string, fields: ErrorFields = {}) {
         super(message);
-        this.name = new.target.name;
         this.code = fields.code ?? "";
         this.path = fields.path ?? "";
         this.detail = fields.detail ?? message;
@@ -112,6 +113,7 @@ export class MarktipError extends Error {
 }
 
 export class UnknownTypeError extends MarktipError {
+    name = "UnknownTypeError";
     type: string;
     kind: string;
 
@@ -123,6 +125,7 @@ export class UnknownTypeError extends MarktipError {
 }
 
 export class InvalidNodeError extends MarktipError {
+    name = "InvalidNodeError";
     field: string;
 
     constructor(message: string, fields: ErrorFields = {}) {
@@ -131,7 +134,9 @@ export class InvalidNodeError extends MarktipError {
     }
 }
 
-export class ParseError extends MarktipError {}
+export class ParseError extends MarktipError {
+    name = "ParseError";
+}
 
 function runtime(): WasmModule {
     if (!wasm) {
