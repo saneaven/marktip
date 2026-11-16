@@ -120,8 +120,7 @@ PYBIND11_MODULE(_core, module) {
     // an editor submits an AST, agents and imports submit Markdown strings,
     // and both end up stored.
     const std::string uri_policy_doc =
-        " Pass link_schemes/image_schemes an iterable of scheme names"
-        " to restrict link href / image src to that set."
+        " Pass link_schemes/image_schemes an iterable of scheme names to restrict link href / image src to that set."
         " None (the default) allows every scheme, () allows none, and comparison is case-insensitive."
         " Pass link_relative/image_relative one of 'allow' (the default), 'path_only' or 'reject'."
         " Those govern references carrying no scheme; 'path_only' rejects protocol-relative '//host/x'."
@@ -131,8 +130,8 @@ PYBIND11_MODULE(_core, module) {
     const std::string node_policy_doc =
         " Pass reject_node_types an iterable of known node type names to refuse those nodes."
         " None (the default) refuses none."
-        " A match raises InvalidNodeError with .code 'disallowed_node_type', .field 'type'"
-        " and .path locating the node.";
+        " A match raises InvalidNodeError with .code 'disallowed_node_type',"
+        " .field 'type' and .path locating the node.";
 
     // Held in locals rather than passed as temporaries:
     // pybind11 takes the doc as a bare const char* and only copies it while def() runs.
@@ -143,8 +142,8 @@ PYBIND11_MODULE(_core, module) {
         " None (the default) uses the built-in GFM schema."
         " Declared tag attrs, mark sets and content expressions are validated while reading."
         " Malformed declared tags raise InvalidNodeError with .code 'invalid_tag' and a document path."
-        " Set cjk_friendly=True to use CJK-friendly emphasis and strikethrough rules"
-        " (non-standard extension; the default follows GFM/CommonMark exactly)."
+        " Set cjk_friendly=True to use CJK-friendly emphasis and strikethrough rules (non-standard extension;"
+        " the default follows GFM/CommonMark exactly)."
         " Set html=False to parse raw HTML as literal text instead of htmlBlock/htmlInline nodes;"
         " <br> inside table cells still maps to hardBreak."
         " Declared tags are recognized even when html=False."
@@ -172,8 +171,9 @@ PYBIND11_MODULE(_core, module) {
         " With the default schema, the two levels differ over presentation attrs."
         " These are link target/rel/class, image width/height, orderedList type and tableCell colwidth."
         " 'content' type-checks them and drops them; 'exact' refuses them."
-        " Violations raise InvalidNodeError with .field set to the attr name and .code one of"
-        " 'unknown_attr' (a name outside both dialects), 'invalid_attr_value' (wrong type or out of range),"
+        " Violations raise InvalidNodeError with .field set to the attr name."
+        " Its .code is one of 'unknown_attr' (a name outside both dialects),"
+        " 'invalid_attr_value' (wrong type or out of range),"
         " 'unrepresentable' (well-formed, but GFM cannot carry it, e.g. colspan=2)"
         " or 'missing_attr' (a link with no href, an image with no src, which would serialize as '[a]()')."
         " Strict rejects excluded mark combinations and duplicate marks of the same type and attrs."
