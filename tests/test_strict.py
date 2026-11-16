@@ -623,11 +623,25 @@ def test_a_null_attr_is_dropped_rather_than_coerced():
     assert tm.from_dict(code_block(language=None, info="")).to_dict()["content"][0]["attrs"] == {"info": ""}
 
 
-def test_a_value_markdown_cannot_carry_is_dropped_rather_than_stringified():
-    # It used to arrive as "[100]" — a string the caller never wrote, standing in for a
-    # value that was lost anyway.
-    stored = tm.from_dict(cell(colwidth=[100], align="left")).to_dict()
-    assert stored["content"][0]["content"][0]["content"][0]["attrs"] == {"align": "left"}
+@pytest.mark.parametrize("level", ("off", "content"))
+def test_an_attr_markdown_cannot_carry_stays_in_the_document_and_out_of_the_markdown(level):
+    link_mark = {"type": "link", "attrs": {"href": "/x", "target": "_blank", "rel": "nofollow", "class": "c"}}
+    picture = {"type": "image", "attrs": {"src": "/i.png", "alt": "", "width": 100, "height": "20"}}
+    ast = doc(
+        p({"type": "text", "text": "a", "marks": [link_mark]}, picture),
+        *ordered(start=1, type="a")["content"],
+        *cell(colwidth=[100, 200], align="left")["content"],
+    )
+    document = tm.from_dict(ast, strict=level)
+    assert document.to_dict() == ast
+    assert document.dump()["doc"] == ast
+    assert document.to_markdown() == "[a](/x)![](/i.png)\n\n1. a\n\n| x |\n| :--- |"
+
+
+def test_a_list_on_an_attr_of_another_type_is_dropped_rather_than_stringified():
+    # It used to arrive as "[100]", a string the caller never wrote.
+    stored = tm.from_dict(image(src="/i.png", alt="", width=[100])).to_dict()
+    assert stored["content"][0]["content"][0]["attrs"] == {"src": "/i.png", "alt": ""}
 
 
 @pytest.mark.parametrize("level", LEVELS)

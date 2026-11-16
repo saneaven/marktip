@@ -245,7 +245,7 @@ bool attr_reads_int_list(const AttrSpec& spec) {
 
 bool attr_stores_int_list(const std::vector<AttrSpec>& specs, std::string_view name) {
     const AttrSpec* spec = find_attr_spec(specs, name);
-    return spec != nullptr && spec->rule == AttrRule::ColWidth && spec->form != MarkdownForm::Dropped;
+    return spec != nullptr && spec->rule == AttrRule::ColWidth;
 }
 
 bool attr_reads_str_map(const AttrSpec& spec) {

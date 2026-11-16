@@ -271,7 +271,7 @@ This differs from `html=False`: `html=False` preserves raw markup as escaped lit
 Node and mark *types* are always closed by the selected schema, but fields, attrs and content models are only closed on dict input when `strict` is enabled.
 The examples and core attr table below use the default schema.
 [Extending the schema](#extending-the-schema) adds carried attrs and types without changing that default.
-An attr the serializer never reads is dropped without a word, so a `colspan: 2` cell quietly becomes a plain one:
+An attr the serializer never reads is left out of the Markdown without a word, so a `colspan: 2` cell quietly becomes a plain one:
 
 ```python
 tm.from_dict(ast).to_markdown()                 # '| x |\n| --- |' — the colspan is gone
@@ -286,7 +286,7 @@ It is keyword-only and a `from_dict` option only.
 | `strict` | Keeps |
 | --- | --- |
 | `"off"` (default) | nothing is checked |
-| `"content"` | content and structure, including closed node fields and content models. Presentation an editor stamped on is type-checked and dropped |
+| `"content"` | content and structure, including closed node fields and content models. Presentation an editor stamped on is type-checked and left out of the Markdown |
 | `"exact"` | every attr the JSON carries, except declared defaults, which mean unset |
 
 Both enabled levels also enforce the schema's mark exclusions and refuse duplicate marks with equal type and attrs.
@@ -325,11 +325,14 @@ mark = {"type": "link", "attrs": {"href": "https://a", "target": "_blank",
                                   "rel": "noopener noreferrer nofollow",
                                   "class": None, "title": None}}
 
-tm.from_dict(ast, strict="content")             # fine — target and rel are dropped
+tm.from_dict(ast, strict="content")             # fine — target and rel are not written
 tm.from_dict(ast, strict="exact")               # InvalidNodeError: attr 'target' cannot be expressed
                                                 # in markdown: a markdown link carries only a
                                                 # destination and a title
 ```
+
+Dropped here means left out of the Markdown.
+The document keeps the attr, so `to_dict()` and `dump()` still carry it, and only `to_markdown()` omits it.
 
 Dropping that `target` costs the *author* nothing — the editor stamped it on and nobody wrote it.
 Dropping a `colspan` moves every cell after it under a different header, so `"content"` refuses that one too.
@@ -760,7 +763,7 @@ It deliberately does **not** validate, unless `strict` asks it to:
 
 - **`attrs` names and value types.**
   Keys are free-form.
-  `str`, `int` and `bool` can be stored on free-form keys; a list of integers is stored only for an attr declared `tm.IntList`.
+  `str`, `int` and `bool` can be stored on free-form keys; a list of integers is stored only for an attr declared `tm.IntList` and for a table cell's `colwidth`.
   A dict is stored only for an attr declared `tm.StrMap`, with string keys and values and valid map keys as described above.
   With strict validation off, any invalid key or non-string value drops the whole map.
   Both strict levels report `invalid_attr_value` for a non-dict map value or an invalid map entry.
