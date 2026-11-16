@@ -1,10 +1,12 @@
-export type AttrValue = string | number | boolean | readonly number[];
+// A value a declaration can name in `choices` or `default`; a map can be neither.
+export type DeclaredValue = string | number | boolean | readonly number[];
+export type AttrValue = DeclaredValue | Record<string, string>;
 
 export interface Attr {
-    type: "str" | "int" | "bool" | "IntList";
+    type: "str" | "int" | "bool" | "IntList" | "StrMap";
     required?: boolean;
-    choices?: readonly AttrValue[] | null;
-    default?: AttrValue | null;
+    choices?: readonly DeclaredValue[] | null;
+    default?: DeclaredValue | null;
     uri?: string | null;
     inherit?: boolean;
 }

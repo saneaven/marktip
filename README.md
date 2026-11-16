@@ -472,12 +472,12 @@ Two marks conflict if either excludes the other; both strict dict levels and the
 Opening conflicting declared tags is an error even when their overlap contains no inline content.
 A self-exclusive mark nested inside itself replaces the outer mark for its extent and restores it afterward.
 The replacing mark keeps the outer mark's attrs declared with `inherit=True`, except those its own tag writes.
-For `StrMap`, inheritance copies the whole outer map when the inner tag has no entries for that prefix.
-An inner map replaces it as a whole; keys are not merged.
 With `TEXT_STYLE`, `<span color="red">a <span fontSize="12px">b</span></span>` gives `b` both `color` and `fontSize`,
 and `<span color="blue">` inside it would override the color.
 An attr without `inherit=True` is not carried over, and only reading Markdown is affected:
 `to_markdown()` writes each run as one flat tag with all of its attrs.
+For `StrMap`, inheritance copies the whole outer map when the inner tag has no entries for that prefix.
+An inner map replaces it as a whole; keys are not merged.
 
 > **Changed in 0.8.1** — `Attr(inherit=True)` is new, and the `TEXT_STYLE` preset declares its attrs with it:
 > a nested `<span>` now keeps the outer span's styles, as Tiptap's TextStyle does when it reads HTML.
@@ -968,7 +968,7 @@ The differences from Python are:
 3. `Document` and `Schema` have `free()` and also register for automatic cleanup with `FinalizationRegistry`.
    A method called after `free()` raises a clear error; calling `free()` twice does nothing.
 4. `MarkSpec`, `NodeSpec` and `Attr` are types for plain objects, with the same shape as the schema dict.
-   Attr types are `"str"`, `"int"`, `"bool"` or `"IntList"`.
+   Attr types are `"str"`, `"int"`, `"bool"`, `"IntList"` or `"StrMap"`.
 5. Caller mistakes raise `TypeError` or `RangeError`, corresponding to Python's `TypeError` or `ValueError`.
    The boolean options `partial`, `keepSource`, `html`, `cjkFriendly` and `canonical` require a real boolean; Python also accepts `0`, `1` and `None`.
 6. JavaScript cannot represent every integer beyond ±2^53 exactly.
@@ -980,6 +980,7 @@ The differences from Python are:
 
 - Inputs must be values JSON can carry.
   `undefined` object properties become absent keys; `NaN` and `Infinity` become `null` through `JSON.stringify`.
+- JavaScript objects put integer-like keys first, so maps containing those keys can change entry order when passed through JavaScript.
 - Wasm memory grows when needed and does not shrink; the largest document read determines its high-water mark.
 - The shared nesting cap is 512, including the limit on simultaneously open declared mark tags.
   Stack margin at that cap was measured on Node only.

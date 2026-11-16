@@ -37,7 +37,7 @@ def owner_schema(owner, attrs):
 
 @pytest.mark.parametrize("html", (True, False))
 @pytest.mark.parametrize("owner", ("mark", "inline", "block", "core-node", "core-mark"))
-def test_goal_attrs_roundtrip_on_marks_declared_nodes_and_core_types(html, owner):
+def test_attrs_roundtrip_on_marks_declared_nodes_and_core_types(html, owner):
     attrs = {"class": tm.Attr(str), "data": tm.Attr(tm.StrMap)}
     values = {"class": "game.status", "data": {"hp": "30", "name": "리안"}}
     spelling = 'class="game.status" data-hp="30" data-name="리안"'

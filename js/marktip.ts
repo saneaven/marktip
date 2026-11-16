@@ -3,7 +3,7 @@ import { declarationToDict, normalizeMark, normalizeNode, normalizeCoreAttrs } f
 import type { AttrValue, CoreAttrs, MarkSpec, NodeSpec, SchemaDict } from "./declarations.js";
 import { optionsObject, optionNames } from "./options.js";
 
-export type { Attr, AttrValue, CoreAttrs, MarkSpec, NodeSpec, SchemaDict } from "./declarations.js";
+export type { Attr, AttrValue, CoreAttrs, DeclaredValue, MarkSpec, NodeSpec, SchemaDict } from "./declarations.js";
 export * from "./presets.js";
 
 type WasmModule = Awaited<ReturnType<typeof createModule>>;

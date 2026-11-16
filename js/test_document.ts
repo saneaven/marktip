@@ -36,6 +36,29 @@ test("version and repeated initialization", async () => {
     assert.equal(tm.version, fixtures.version);
 });
 
+test("plain object StrMap declarations roundtrip tag attrs as a nested object", () => {
+    const schema = new tm.Schema({ nodes: [{
+        name: "customDiv", kind: "block", content: "block+", tag: "custom-div",
+        attrs: { class: { type: "str" }, data: { type: "StrMap" } },
+    }] });
+    const source = '<custom-div class="game.status" data-hp="30" data-name="리안">\n\nx\n\n</custom-div>';
+    const document = tm.fromMarkdown(source, { schema });
+    let restored;
+    try {
+        const dict = document.toDict();
+        assert.deepEqual(dict, { type: "doc", content: [{
+            type: "customDiv", attrs: { class: "game.status", data: { hp: "30", name: "리안" } },
+            content: [{ type: "paragraph", content: [{ type: "text", text: "x" }] }],
+        }] });
+        restored = tm.fromDict(dict, { schema, strict: "exact" });
+        assert.equal(restored.toMarkdown({ canonical: true }), source);
+    } finally {
+        restored?.free();
+        document.free();
+        schema.free();
+    }
+});
+
 for (const fixture of fixtures.documents) {
     test(`document parity: ${fixture.id}`, () => {
         const options = optionsFor(fixture);

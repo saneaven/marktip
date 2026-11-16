@@ -22,4 +22,5 @@ schema.free();
 
 Use `partial: true` while receiving a stream and `keepSource: false` when source spelling is unnecessary.
 Schema declarations, presets, stored documents and conversion rules match the Python API, with camelCase names and one options object.
+Attr type names are `"str"`, `"int"`, `"bool"`, `"IntList"` and `"StrMap"`.
 See the [main README](https://github.com/saneaven/marktip#javascript-package) for build commands, storage and editing, the full API correspondence, errors and limits.

@@ -126,6 +126,7 @@ def schema_results(payload):
         ("defaults", {"marks": [{"name": "note", "attrs": {"tone": {"type": "str"}}}],
                       "nodes": [{"name": "mention", "kind": "inline", "attrs": {"id": {"type": "str"}}}]}),
         ("all-attr-types", pinned_schema().to_dict()),
+        ("str-map", payload["schemas"]["str-map"]),
         ("all-presets", all_presets.to_dict()),
         ("block-image", {"marks": [], "block_image": True}),
         ("empty-core-owner", {"marks": [], "core_attrs": {"paragraph": {}}}),
@@ -170,6 +171,9 @@ def schema_results(payload):
         ("bad-node-kind", {"marks": [], "nodes": [{"name": "custom", "kind": "other"}]}),
         ("bad-content", {"marks": [], "nodes": [{"name": "custom", "kind": "block", "content": "missing+"}]}),
         ("unknown-core-owner", {"marks": [], "core_attrs": {"missing": {"tone": {"type": "str"}}}}),
+        ("str-map-prefix-conflict", {"marks": [{"name": "status", "attrs": {
+            "data": {"type": "StrMap"}, "data-hp": {"type": "str"},
+        }}]}),
     ]
     payload["schemaErrors"] = [
         {"id": name, "declaration": declaration,
@@ -200,6 +204,13 @@ def generate():
         "overlays": tm.Schema(core_attrs={**tm.TEXT_ALIGN, **tm.LINK_ATTRS, **tm.IMAGE_SIZE, **tm.TABLE_SPANS}),
         "styles": tm.Schema(marks=[tm.TEXT_STYLE, tm.UNDERLINE]),
         "styles-unmerged": tm.Schema(marks=[tm.text_style(merge_nested_span_styles=False)]),
+        "str-map": tm.Schema(
+            marks=[tm.MarkSpec("status", tag="custom-span", attrs={"data": tm.Attr(tm.StrMap)})],
+            nodes=[tm.NodeSpec("customDiv", "block", content="block+", tag="custom-div", attrs={
+                "class": tm.Attr(str), "data": tm.Attr(tm.StrMap),
+            })],
+            core_attrs={"paragraph": {"aria": tm.Attr(tm.StrMap)}},
+        ),
     }
     payload = {
         "version": tm.__version__,
@@ -239,6 +250,11 @@ def generate():
     add_document("overlays/tag-forms", '<p textAlign="center">Aligned</p>\n\n'
                  '<a href="/docs" target="_self">Docs</a> '
                  '<img src="logo.png" width="100" height="80"/>', "overlays")
+    add_document("str-map/mark", '<custom-span data-hp=\'30\' data-name="리안" data-MixedCase="" '
+                 'data-2nd="&amp;&quot;&lt;&gt;&#124;&#96;&#10;">x</custom-span>', "str-map")
+    add_document("str-map/node", '<custom-div class="game.status" data-hp="30" data-name="리안">\n\n'
+                 'x\n\n</custom-div>', "str-map")
+    add_document("str-map/core", '<p aria-label="status" aria-description="리안">x</p>', "str-map")
 
     source = '<callout tone="note">\n\n<summary><ruby><u>body</u></ruby></summary>\n\n</callout>'
     for length in (0, 1, 8, 20, 22, 31, 37, 40, len(source) - 4, len(source)):
@@ -254,7 +270,7 @@ def generate():
         "options": {"partial": True, "keepSource": False}, "expected": snapshot(document),
     })
 
-    for schema_name in ("default", "empty", "declared", "pinned", "overlays"):
+    for schema_name in ("default", "empty", "declared", "pinned", "overlays", "str-map"):
         fingerprint = tm.from_markdown("", schema=schemas[schema_name]).dump()["schema"]
         payload["fingerprints"].append({"schema": schema_name, "expected": fingerprint})
     assert payload["fingerprints"][0]["expected"] == "d4657f55662f817f"
@@ -286,7 +302,20 @@ def generate():
          "default", {"image_schemes": ["https"]}),
         ("relative-image", "fromMarkdown", "![image](/image.png)", "default", {"image_relative": "reject"}),
         ("rejected-node", "fromMarkdown", "# Title", "default", {"reject_node_types": ["heading"]}),
+        ("str-map-valueless-entry", "fromMarkdown", '<custom-span data-hp>x</custom-span>', "str-map", {}),
+        ("str-map-repeated-entry", "fromMarkdown", '<custom-span data-hp="30" data-hp="20">x</custom-span>',
+         "str-map", {}),
+        ("str-map-bare-attr", "fromMarkdown", '<custom-span data="hp=30">x</custom-span>', "str-map", {}),
+        ("str-map-empty-key", "fromMarkdown", '<custom-span data-="30">x</custom-span>', "str-map", {}),
+        ("str-map-unknown-prefix", "fromMarkdown", '<custom-span aria-label="x">x</custom-span>', "str-map", {}),
     ]
+    for strict in ("content", "exact"):
+        for name, value in (("non-dict", "label"), ("non-string-value", {"label": 1}),
+                            ("empty-key", {"": "x"}), ("invalid-key", {"two words": "x"})):
+            errors.append((f"str-map-{name}-{strict}", "fromDict", {
+                "type": "doc", "content": [{"type": "paragraph", "attrs": {"aria": value},
+                                            "content": [{"type": "text", "text": "x"}]}],
+            }, "str-map", {"strict": strict}))
     for name, operation, value, schema_name, options in errors:
         function = tm.from_dict if operation == "fromDict" else tm.from_markdown
         schema = schemas[schema_name]

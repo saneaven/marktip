@@ -4,8 +4,11 @@ await tm.init();
 
 const tone: tm.Attr = { type: "str", choices: ["note", "warning"], default: "note" };
 const shade: tm.Attr = { type: "str", inherit: true };
-const mark: tm.MarkSpec = { name: "review", tag: "review", attrs: { tone, shade }, excludes: ["bold"] };
-const node: tm.NodeSpec = { name: "callout", kind: "block", content: "block+", attrs: { tone } };
+const data: tm.Attr = { type: "StrMap" };
+const mark: tm.MarkSpec = { name: "review", tag: "review", attrs: { tone, shade, data }, excludes: ["bold"] };
+const node: tm.NodeSpec = { name: "callout", kind: "block", content: "block+", attrs: { tone, data } };
+const mapValue: tm.AttrValue = { hp: "30", name: "리안" };
+const mapNode: tm.TiptapNode = { type: "callout", attrs: { data: mapValue } };
 const schema = new tm.Schema({
     marks: [mark, tm.UNDERLINE, tm.HIGHLIGHT, tm.SUBSCRIPT, tm.SUPERSCRIPT, tm.TEXT_STYLE],
     nodes: [node, tm.MENTION, ...tm.DETAILS, tm.INLINE_MATH, tm.BLOCK_MATH],
@@ -46,7 +49,7 @@ const edited = tm.fromDict(document.toDict(), { schema, strict: "exact", base: l
 tm.fromDict(document.toDict(), { schema, strict: "content" }).free();
 const markdown: string = edited.toMarkdown({ canonical: true });
 const version: string = tm.version;
-JSON.stringify({ same, marks, nodes, coreAttrs, blockImage, style, alignment, link, markdown, version });
+JSON.stringify({ same, marks, nodes, coreAttrs, blockImage, style, alignment, link, markdown, version, mapNode });
 
 try {
     tm.fromDict({ type: "unrecognized" });
