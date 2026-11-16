@@ -227,6 +227,7 @@ def generate():
     add_document("options/html", "a <span>x</span> b", "default", html=False)
     add_document("options/no-source", "\nTitle\n=====\n\n* first\n", "default", keep_source=False)
     add_document("text/leading-bom", "\ufeffHello\n", "default")
+    add_document("text/control-characters", "before\u0001\u0008\u000c\u001fafter\n", "default")
     add_document("overlays/tag-forms", '<p textAlign="center">Aligned</p>\n\n'
                  '<a href="/docs" target="_self">Docs</a> '
                  '<img src="logo.png" width="100" height="80"/>', "overlays")
@@ -271,6 +272,11 @@ def generate():
         ("unmatched-tag", "fromMarkdown", "</callout>", "declared", {}),
         ("bad-tag-attr", "fromMarkdown", '<callout unknown="value">\n\n</callout>', "declared", {}),
         ("relative-link", "fromMarkdown", "[link](/path)", "default", {"link_relative": "reject"}),
+        ("link-schemes", "fromMarkdown", "[link](http://example.test/page)",
+         "default", {"link_schemes": ["https"]}),
+        ("image-schemes", "fromMarkdown", "![image](http://example.test/image.png)",
+         "default", {"image_schemes": ["https"]}),
+        ("relative-image", "fromMarkdown", "![image](/image.png)", "default", {"image_relative": "reject"}),
         ("rejected-node", "fromMarkdown", "# Title", "default", {"reject_node_types": ["heading"]}),
     ]
     for name, operation, value, schema_name, options in errors:

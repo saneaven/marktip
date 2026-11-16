@@ -52,7 +52,8 @@ doc = tm.from_markdown("a <u>x</u> b", html=False)
 
 Pass `partial=True` to read an open declared tag as closed where its parent ends.
 The resulting tree is the same as if its closing tag were there, including the usual completion of missing content.
-Closing tags without an opening tag, attr errors inside complete tags, and content-model violations still raise errors.
+Closing tags without an opening tag, attr errors inside complete tags, and content-model violations still raise errors;
+a container's closing tag is still an error while a container opened inside it is still open.
 `partial` is keyword-only and defaults to `False`.
 Incomplete tags such as `<callout tone="no`, `</call`, and `<mention id="1"` are read as text even with `partial=True`, like `**bo`.
 Where that text does not fit its parent's content model, the input raises `invalid_content` until the tag is complete; this affects tag-form tables and lists and containers with narrow content models.
@@ -185,6 +186,7 @@ The frontend can render the stored `doc` without running marktip.
 - Adding a block after an original unclosed code fence or an HTML block such as an unclosed `<script>` can put the added block inside it on readback.
 - The remembered text of a document read with `partial=True` can contain open declared tags.
   That text needs `partial=True` to be read again; `to_markdown(canonical=True)` writes the closing tags.
+  On readback with `partial=True`, a block added after an open top-level container is read as inside it.
 - An original block beginning with spaces can be absorbed into a list if it is moved directly after that list or if the block between them is deleted; two original indented code blocks that become neighbours after deletion or movement can read back as one code block.
 - Reference definitions inside a quote, list, or the start of a paragraph disappear when that containing block is rewritten.
   Other unchanged blocks using those definitions can then re-read their reference links as literal text.
@@ -930,7 +932,9 @@ The differences from Python are:
 4. `MarkSpec`, `NodeSpec` and `Attr` are types for plain objects, with the same shape as the schema dict.
    Attr types are `"str"`, `"int"`, `"bool"` or `"IntList"`.
 5. Caller mistakes raise `TypeError` or `RangeError`, corresponding to Python's `TypeError` or `ValueError`.
+   The boolean options `partial`, `keepSource`, `html`, `cjkFriendly` and `canonical` require a real boolean; Python also accepts `0`, `1` and `None`.
 6. JavaScript cannot represent every integer beyond ±2^53 exactly.
+   JavaScript has one number type, so `1.0` reaches the core as the integer `1`; Python treats a float as another kind of value.
 7. With strict checking off, coercing a non-string `type` or `text` uses each host's text conversion: Python `str()` or the JSON literal in JavaScript.
    Errors for wrongly typed scalars in a damaged stored form are also each host's own.
 
