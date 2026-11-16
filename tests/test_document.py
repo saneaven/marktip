@@ -56,9 +56,11 @@ MAX_NODE_DEPTH = 512
 def test_markdown_at_the_depth_limit_reads_back_from_its_own_dict_and_dump():
     # doc, the blockquotes, list, item, paragraph, text: the text sits exactly at the limit.
     doc = tm.from_markdown(">" * (MAX_NODE_DEPTH - 4) + " - x")
+    canonical = doc.to_markdown(canonical=True)
 
-    assert tm.from_dict(doc.to_dict()).to_dict() == doc.to_dict()
-    assert tm.load(doc.dump()).to_dict() == doc.to_dict()
+    # Compared as Markdown: `==` on dicts this deep exceeds the interpreter's recursion limit before Python 3.12.
+    assert tm.from_dict(doc.to_dict()).to_markdown(canonical=True) == canonical
+    assert tm.load(doc.dump()).to_markdown(canonical=True) == canonical
 
 
 def test_paragraph_wrapped_around_list_item_text_counts_toward_the_depth_limit():
