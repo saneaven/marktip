@@ -448,6 +448,10 @@ With `strict="off"`, the node is written outside the code span and that mark is 
 Inline content in a Markdown-form heading or a Markdown table cell keeps that context's single-line rules.
 A heading written in tag form uses ordinary textblock rules and preserves hard breaks and literal newlines outside Markdown table cells.
 
+> **Changed in 0.8.3** — an inline container carries its own marks, as an inline atom does.
+> A mark around a container used to be moved onto the text inside it, so `to_markdown(canonical=True)` and an editor round trip wrote it inside the container tag.
+> A mark crossing a container boundary used to be split and now raises `invalid_tag`.
+
 ### Attrs, exclusions and content
 
 `Attr(type, required=False, choices=None, default=None, uri=None, inherit=False)` accepts `str`, `int`, `bool`, `tm.IntList` and `tm.StrMap`.
@@ -497,6 +501,8 @@ An inner map replaces it as a whole; keys are not merged.
 Mark replacement and attr inheritance stop at inline container boundaries.
 A mark inside a container cannot inherit attrs from a mark outside it, including attrs declared with both `required=True` and `inherit=True`.
 Those required attrs must be supplied inside the boundary.
+
+> **Changed in 0.8.3** — a mark tag inside an inline container no longer inherits from a mark outside it.
 
 > **Changed in 0.8.2** — an attr declared with both `required=True` and `inherit=True` is satisfied by the value it inherits.
 > The inner tag used to raise `missing_attr` before inheritance.

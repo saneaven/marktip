@@ -1,6 +1,6 @@
 {
   "name": "marktip",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "Markdown and Tiptap JSON conversion through the marktip WebAssembly core",
   "type": "module",
   "exports": {
