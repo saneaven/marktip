@@ -34,7 +34,8 @@ struct NodeTypePolicy {
     std::vector<std::string> rejected;
 };
 
-// Applies node-type and URI policies before ordering marks, preserving the input positions in policy errors.
+// Check policies on the input tree so errors retain their paths.
+void check_document_policies(const Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy);
 void finalize_document(Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy);
 
 RelativePolicy relative_policy_from_string(std::string_view value, const char* arg_name);

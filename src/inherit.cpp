@@ -1,7 +1,6 @@
 #include "inherit.h"
 
 #include <algorithm>
-#include <functional>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -11,12 +10,12 @@
 namespace marktip {
 namespace {
 
-bool has_key(const std::vector<std::string>& keys, const std::string& name) {
+bool has_key(const AttrKeys& keys, const std::string& name) {
     return std::find(keys.begin(), keys.end(), name) != keys.end();
 }
 
 bool same_attrs(const AttrList& current, const AttrList& original, const std::vector<AttrSpec>& specs,
-                const std::vector<std::string>& present) {
+                const AttrKeys& present) {
     for (const AttrSpec& spec : specs) {
         if (!attr_is_carried(spec) || !has_key(present, spec.name)) {
             continue;
@@ -30,7 +29,7 @@ bool same_attrs(const AttrList& current, const AttrList& original, const std::ve
     return true;
 }
 
-void inherit_attrs(AttrList& current, const AttrList& original, const std::vector<std::string>& present) {
+void inherit_attrs(AttrList& current, const AttrList& original, const AttrKeys& present) {
     for (const auto& attr : original) {
         if (!has_key(present, attr.first)) {
             set_attr(current, attr.first, attr.second);
@@ -38,27 +37,10 @@ void inherit_attrs(AttrList& current, const AttrList& original, const std::vecto
     }
 }
 
-void combine_hash(std::size_t& hash, std::size_t value) {
-    hash ^= value + 0x9e3779b9u + (hash << 6) + (hash >> 2);
-}
-
-// Attrs are checked after lookup because an editor may omit any of their keys.
-std::size_t block_hash(const Document& document, std::size_t index) {
-    const Node& node = document.node(index);
-    std::size_t hash = std::hash<std::string> {}(node.type);
-    combine_hash(hash, std::hash<std::string> {}(node.text));
-    combine_hash(hash, node.marks.size());
-    std::size_t marks = 0;
-    for (const Mark& mark : node.marks) {
-        marks += std::hash<std::string> {}(mark.type);
-    }
-    combine_hash(hash, marks);
-    combine_hash(hash, node.content.size());
-    for (std::size_t child : node.content) {
-        combine_hash(hash, block_hash(document, child));
-    }
-    return hash;
-}
+struct MarkPair {
+    std::size_t original;
+    const AttrKeys* present;
+};
 
 class BlockComparison {
 public:
@@ -89,10 +71,10 @@ public:
         Node& current = document_.node(current_index);
         const Node& original = base_.node(original_index);
         inherit_attrs(current.attrs, original.attrs, present_[current_index].node);
-        std::vector<std::size_t> pairs = *mark_pairs(current_index, original_index);
+        std::vector<MarkPair> pairs = *mark_pairs(current_index, original_index);
         for (std::size_t i = 0; i < current.marks.size(); ++i) {
             Mark& mark = current.marks[i];
-            inherit_attrs(mark.attrs, original.marks[pairs[i]].attrs, present_[current_index].marks[i]);
+            inherit_attrs(mark.attrs, original.marks[pairs[i].original].attrs, *pairs[i].present);
         }
         for (std::size_t i = 0; i < current.content.size(); ++i) {
             fill(current.content[i], original.content[i]);
@@ -104,23 +86,30 @@ private:
     const Document& base_;
     const InputAttrKeys& present_;
 
-    std::optional<std::vector<std::size_t>> mark_pairs(std::size_t current_index,
-                                                      std::size_t original_index) const {
+    std::optional<std::vector<MarkPair>> mark_pairs(std::size_t current_index, std::size_t original_index) const {
         const Node& current = document_.node(current_index);
         const Node& original = base_.node(original_index);
         if (current.marks.size() != original.marks.size()) {
             return std::nullopt;
         }
-        std::vector<std::size_t> pairs;
+        std::vector<MarkPair> pairs;
         pairs.reserve(current.marks.size());
         std::vector<bool> used(original.marks.size());
-        for (std::size_t i = 0; i < current.marks.size(); ++i) {
-            const Mark& mark = current.marks[i];
+        const auto& input_marks = present_[current_index].marks;
+        for (auto it = current.marks.begin(); it != current.marks.end(); ++it) {
+            const Mark& mark = *it;
             const MarkSpec& spec = *document_.schema().mark(mark.type);
+            auto occurrence = std::count_if(current.marks.begin(), it, [&](const Mark& previous) {
+                return previous.type == mark.type;
+            });
+            auto input_mark = std::find_if(input_marks.begin(), input_marks.end(), [&](const auto& entry) {
+                return entry.first == mark.type && occurrence-- == 0;
+            });
+            const AttrKeys& present = input_mark->second;
             std::size_t j = 0;
             for (; j < original.marks.size(); ++j) {
                 if (!used[j] && mark.type == original.marks[j].type &&
-                    same_attrs(mark.attrs, original.marks[j].attrs, spec.attrs, present_[current_index].marks[i])) {
+                    same_attrs(mark.attrs, original.marks[j].attrs, spec.attrs, present)) {
                     break;
                 }
             }
@@ -128,7 +117,7 @@ private:
                 return std::nullopt;
             }
             used[j] = true;
-            pairs.push_back(j);
+            pairs.push_back({j, &present});
         }
         return pairs;
     }

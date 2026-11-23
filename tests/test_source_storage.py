@@ -119,6 +119,17 @@ def test_equal_separately_built_schemas_keep_base_and_stored_spelling():
     assert restored.to_markdown() == markdown
 
 
+def test_load_keeps_stored_mark_order():
+    schema = tm.Schema(marks=[tm.MarkSpec("note")])
+    document = tm.from_markdown("<note>**x**</note>", schema=schema)
+    stored = document.dump()
+    stored["doc"]["content"][0]["content"][0]["marks"].reverse()
+
+    restored = tm.load(stored, schema=schema)
+    assert restored.dump() == stored
+    assert tm.from_dict(stored["doc"], schema=schema) == document
+
+
 def test_the_implicit_default_schema_has_the_same_fingerprint_as_an_empty_declaration():
     markdown = "\nTitle\n=====\n"
     implicit = tm.from_markdown(markdown)

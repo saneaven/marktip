@@ -34,8 +34,10 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
         }
         inheritance_base = &py::cast<const Document&>(base);
     }
-    return DocumentReader<PythonInput>::from_dict(root, std::move(selected_schema), node_policy, policy, mode,
-                                                  inheritance_base);
+    DictDocument document = DocumentReader<PythonInput>::from_dict(root, std::move(selected_schema), mode,
+                                                                   inheritance_base);
+    py::gil_scoped_release release;
+    return std::move(document).finish(node_policy, policy);
 }
 
 Document load_py(py::dict data, py::object schema) {

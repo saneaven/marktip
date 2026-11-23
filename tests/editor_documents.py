@@ -1,0 +1,182 @@
+"""Hand-built editor trees for the canonical round-trip contract."""
+
+import marktip as tm
+
+
+def node(type_, *children, attrs=None, marks=()):
+    result = {"type": type_}
+    if children:
+        result["content"] = list(children)
+    if attrs:
+        result["attrs"] = attrs
+    if marks:
+        result["marks"] = list(marks)
+    return result
+
+
+def text(value, *marks):
+    result = node("text", marks=marks)
+    result["text"] = value
+    return result
+
+
+def mark(type_, **attrs):
+    return node(type_, attrs=attrs)
+
+
+def paragraph(*children):
+    return node("paragraph", *children)
+
+
+def heading(*children):
+    return node("heading", *children, attrs={"level": 2})
+
+
+def code_block(value, **attrs):
+    return node("codeBlock", text(value), attrs=attrs)
+
+
+def bullet_list(*items, tight=True):
+    return node("bulletList", *items, attrs={"tight": tight})
+
+
+def list_item(*children):
+    return node("listItem", *children)
+
+
+def table(col_count, *rows):
+    attrs = {} if col_count is None else {"colCount": col_count}
+    return node("table", *(node("tableRow", *row) for row in rows), attrs=attrs)
+
+
+def cell(*children, header=False, **attrs):
+    return node("tableHeader" if header else "tableCell", *children, attrs=attrs)
+
+
+def case(case_id, *blocks, schema=None, base=None, refuses=False):
+    markdown_options = {} if schema is None else {"schema": schema}
+    dict_options = dict(markdown_options)
+    if base is not None:
+        dict_options["base"] = tm.from_markdown(base, **markdown_options)
+    return case_id, node("doc", *blocks), dict_options, markdown_options, refuses
+
+
+BOLD = mark("bold")
+ITALIC = mark("italic")
+STRIKE = mark("strike")
+CODE = mark("code")
+LINK = mark("link", href="/target")
+NOTE = mark("note", label="important")
+HARD_BREAK = node("hardBreak")
+
+NOTE_SCHEMA = tm.Schema(marks=[tm.MarkSpec("note", attrs={"label": tm.Attr(str)})])
+HEADING_SCHEMA = tm.Schema(core_attrs={"heading": {}})
+PARAGRAPH_SCHEMA = tm.Schema(core_attrs={"paragraph": {}})
+INLINE_CONTAINER_SCHEMA = tm.Schema(nodes=[tm.NodeSpec("span", "inline", content="inline*")])
+MATH_SCHEMA = tm.Schema(nodes=[
+    tm.NodeSpec("inlineMath", "inline", math="inline", body="latex", attrs={"latex": tm.Attr(str)}),
+])
+
+
+EDITOR_DOCUMENTS = (
+    # Text and lines.
+    case("cr-and-crlf-in-text", paragraph(text("a\rb\r\nc"))),
+    case("paragraph-line-edge-spaces", paragraph(text(" \tfirst \t\n\tsecond \t")), paragraph(text("word "))),
+    case("hard-break-edge-spaces", paragraph(text("first \t"), HARD_BREAK, text("\t second"))),
+    case("heading-and-cell-edge-spaces", heading(text(" title \t")),
+         table(1, [cell(paragraph(text(" data \t")), header=True)])),
+    case("link-keeps-edge-spaces", paragraph(text(" label ", LINK))),
+    case("declared-mark-keeps-edge-spaces", paragraph(text(" label ", NOTE)), schema=NOTE_SCHEMA),
+    case("consecutive-soft-breaks", paragraph(text("a\n\nb"))),
+    case("paragraph-edge-soft-breaks", paragraph(text("\na\n"))),
+    case("soft-breaks-next-to-hard-break", paragraph(text("a\n"), HARD_BREAK, text("\nb"))),
+    case("paragraph-edge-hard-breaks", paragraph(HARD_BREAK, text("a"), HARD_BREAK)),
+    case("table-cell-edge-hard-breaks",
+         table(1, [cell(paragraph(HARD_BREAK, text("a"), HARD_BREAK), header=True)])),
+    case("newline-in-code-span", paragraph(text("a\nb", CODE))),
+    case("breaks-in-headings", heading(text("a"), HARD_BREAK, text("b")), heading(text("a\nb"))),
+    case("breaks-in-tagged-headings", heading(text("a"), HARD_BREAK, text("b")), heading(text("a\nb")),
+         schema=HEADING_SCHEMA),
+
+    # Marks and their boundaries.
+    case("bold-inside-italic", paragraph(text("italic and ", ITALIC), text("bold", BOLD, ITALIC),
+                                       text(" text", ITALIC))),
+    case("new-emphasis-marks-in-editor-order", paragraph(text("all", BOLD, ITALIC, STRIKE))),
+    case("adjacent-plain-and-marked-text", paragraph(text("a"), text("b "), text("c", BOLD), text("d", BOLD))),
+    case("strike-trailing-space", paragraph(text("a"), text("b ", STRIKE), text("c"))),
+    case("italic-space-after-bold-letter", paragraph(text("a", BOLD), text(" ", BOLD, ITALIC), text("b"))),
+    case("bold-quoted-letter-between-letters", paragraph(text("a"), text('"b"', BOLD), text("c"))),
+    case("bold-colon-before-word", paragraph(text("Note:", BOLD), text("text"))),
+    case("emphasis-on-hard-break", paragraph(text("a", BOLD), node("hardBreak", marks=(BOLD,)), text("b"))),
+    case("link-on-emphasis-edge", paragraph(text("a"), text('"b"', LINK, BOLD), text("c"))),
+    case("declared-mark-on-emphasis-edge", paragraph(text("a"), text('"b"', BOLD, NOTE), text("c")),
+         schema=NOTE_SCHEMA),
+    case("bold-repeated-inside-inline-container",
+         paragraph(node("span", text("(x)", BOLD), marks=(BOLD,))), schema=INLINE_CONTAINER_SCHEMA),
+    case("link-repeated-inside-inline-container",
+         paragraph(node("span", text("x", LINK), marks=(LINK,))), schema=INLINE_CONTAINER_SCHEMA),
+
+    # Blocks and attrs.
+    case("empty-list-item", bullet_list(list_item())),
+    case("empty-task-item", node("taskList", node("taskItem", attrs={"checked": True}), attrs={"tight": True})),
+    case("empty-table-cell", table(1, [cell(paragraph(text("A")), header=True)], [cell()])),
+    case("empty-blockquote", node("blockquote")),
+    case("sole-empty-paragraph", paragraph()),
+    case("trailing-empty-paragraph", paragraph(text("before")), paragraph()),
+    case("trailing-empty-tagged-paragraph", paragraph(text("before")), paragraph(), schema=PARAGRAPH_SCHEMA),
+    case("empty-bullet-list", node("bulletList", attrs={"tight": True})),
+    case("empty-table", table(0)),
+    case("missing-tight", node("bulletList", list_item(paragraph(text("item"))))),
+    case("single-block-loose-list", bullet_list(list_item(paragraph(text("item"))), tight=False)),
+    case("tight-list-needing-a-blank-line", bullet_list(list_item(paragraph(text("one")), paragraph(text("two"))))),
+    case("tight-list-with-thematic-break", bullet_list(list_item(node("horizontalRule"), paragraph(text("after"))))),
+    case("table-without-header-row", table(1, [cell(paragraph(text("one")))], [cell(paragraph(text("two")))])),
+    case("table-body-alignment", table(1, [cell(paragraph(text("one")), header=True, align="left")],
+                                      [cell(paragraph(text("two")), align="right")])),
+    case("table-cell-with-two-paragraphs", table(1, [cell(paragraph(text("one")), header=True)],
+                                               [cell(paragraph(text("two")), paragraph(text("three")))])),
+    case("ragged-table", table(2, [cell(paragraph(text("one")), header=True)],
+                              [cell(paragraph(text("two"))), cell(paragraph(text("three")))])),
+    case("missing-list-start-and-task-checked",
+         node("orderedList", node("taskItem", paragraph(text("item"))), attrs={"tight": True})),
+    case("missing-heading-level", node("heading", text("title"))),
+    case("missing-image-alt", paragraph(node("image", attrs={"src": "/image.png"}))),
+    case("missing-table-column-count", table(None, [cell(paragraph(text("cell")), header=True)])),
+    case("empty-link-and-image-titles", paragraph(text("link", mark("link", href="/target", title="")),
+                                                 node("image", attrs={"src": "/image.png", "alt": "", "title": ""}))),
+    case("empty-fence-language-and-info", code_block("x\n", language="", info="")),
+    case("fence-info-without-language", code_block("x\n", info="python")),
+    case("fence-language-disagrees-with-info", code_block("x\n", language="python", info="ruby")),
+
+    # Writer spellings.
+    case("three-consecutive-hard-breaks", paragraph(text("a"), HARD_BREAK, HARD_BREAK, HARD_BREAK, text("b"))),
+    case("all-space-code-span", paragraph(text("  ", CODE))),
+    case("pipe-led-table-delimiter-in-paragraph", paragraph(text("a | b\n| --- | --- |"))),
+    case("colon-led-table-delimiter-in-paragraph", paragraph(text("a | b\n:--- | ---"))),
+    case("plain-url-text", paragraph(text("visit https://example.com today"))),
+    case("plain-www-text", paragraph(text("visit www.example.com today"))),
+    case("plain-email-text", paragraph(text("write to hello@example.com today"))),
+    case("backtick-in-link-destination-before-code-span",
+         paragraph(text("link", mark("link", href="/a`b")), text(" "), text("code", CODE))),
+    case("empty-link-destination-with-title", paragraph(text("link", mark("link", href="", title="title")))),
+    case("fence-info-with-options", code_block("x\n", language="python", info="python numbered")),
+    case("code-block-without-final-newline", code_block("x")),
+    case("loose-list-with-quote", bullet_list(list_item(paragraph(text("one")),
+                                                        node("blockquote", paragraph(text("two")))), tight=False)),
+
+    # Text or structure that strict content will refuse.
+    case("touching-strike-inside-italic", paragraph(text("ab"), text("c", ITALIC, STRIKE)), refuses=True),
+    case("touching-crossed-bold-and-italic", paragraph(text("a", BOLD), text("b", BOLD, ITALIC), text("c", ITALIC)),
+         refuses=True),
+    case("heading-in-pipe-table-cell", table(1, [cell(heading(text("title")), header=True)]), refuses=True),
+
+    # The remembered table spelling and two atomic node forms.
+    case("filled-table-cell-keeps-source",
+         table(2, [cell(paragraph(text("Heading")), header=True, align="left"),
+                   cell(paragraph(text("B")), header=True, align="right")],
+               [cell(paragraph(text("x")), align="left"), cell(paragraph(), align="right")]),
+         base="|   Heading   |   B |\n| :-- | ---: |\n| x |    |\n"),
+    case("inline-math-and-raw-html", paragraph(node("inlineMath", attrs={"latex": "x + y"}), text(" "),
+                                              node("htmlInline", attrs={"html": "<!-- comment -->"})),
+         schema=MATH_SCHEMA),
+)

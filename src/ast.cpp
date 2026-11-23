@@ -3,8 +3,59 @@
 #include "schema.h"
 
 #include <algorithm>
+#include <functional>
 
 namespace marktip {
+namespace {
+
+bool same_node(const Document& left, std::size_t left_index, const Document& right, std::size_t right_index) {
+    const Node& a = left.node(left_index);
+    const Node& b = right.node(right_index);
+    if (a.type != b.type || a.text != b.text || !equal_attrs(a.attrs, b.attrs) ||
+        a.marks != b.marks || a.content.size() != b.content.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.content.size(); ++i) {
+        if (!same_node(left, a.content[i], right, b.content[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void combine_hash(std::size_t& hash, std::size_t value) {
+    hash ^= value + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+}
+
+}  // namespace
+
+bool same_document(const Document& left, const Document& right) {
+    return left.schema().fingerprint() == right.schema().fingerprint() && same_node(left, 0, right, 0);
+}
+
+std::size_t document_hash(const Document& document) {
+    std::size_t hash = std::hash<std::string> {}(document.schema().fingerprint());
+    combine_hash(hash, block_hash(document, 0));
+    return hash;
+}
+
+// Inheritance checks attrs and marks after lookup because input may omit attr keys or reorder marks.
+std::size_t block_hash(const Document& document, std::size_t index) {
+    const Node& node = document.node(index);
+    std::size_t hash = std::hash<std::string> {}(node.type);
+    combine_hash(hash, std::hash<std::string> {}(node.text));
+    combine_hash(hash, node.marks.size());
+    std::size_t marks = 0;
+    for (const Mark& mark : node.marks) {
+        marks += std::hash<std::string> {}(mark.type);
+    }
+    combine_hash(hash, marks);
+    combine_hash(hash, node.content.size());
+    for (std::size_t child : node.content) {
+        combine_hash(hash, block_hash(document, child));
+    }
+    return hash;
+}
 
 Document::Document() : Document(32) {}
 

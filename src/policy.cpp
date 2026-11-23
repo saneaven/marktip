@@ -4,6 +4,7 @@
 #include "compiler.h"
 #include "errors.h"
 #include "entities.h"
+#include "normalize.h"
 #include "path.h"
 #include "schema.h"
 
@@ -318,13 +319,14 @@ void enforce_node_type_policy(const Document& document, const NodeTypePolicy& po
 
 }  // namespace
 
-void finalize_document(Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy) {
+void check_document_policies(const Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy) {
     enforce_node_type_policy(document, node_policy);
     enforce_uri_policy(document, uri_policy);
-    // URI errors must retain the input mark indices, so marks are ordered after policy checks.
-    if (document.schema().has_declared_marks() || document.schema().has_link_tag()) {
-        document.order_marks();
-    }
+}
+
+void finalize_document(Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy) {
+    check_document_policies(document, node_policy, uri_policy);
+    normalize_document(document);
 }
 
 }  // namespace marktip

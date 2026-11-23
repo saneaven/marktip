@@ -54,6 +54,10 @@ private:
     std::optional<Spelling> spelling_;
 };
 
+bool same_document(const Document& left, const Document& right);
+std::size_t document_hash(const Document& document);
+std::size_t block_hash(const Document& document, std::size_t index);
+
 void normalize_task_list(Document& document, std::size_t index);
 
 }  // namespace marktip

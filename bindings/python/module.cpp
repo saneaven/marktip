@@ -107,6 +107,8 @@ PYBIND11_MODULE(_core, module) {
         }), py::arg("declaration"));
 
     py::class_<marktip::Document>(module, "Document")
+        .def("__eq__", &marktip::same_document, py::is_operator())
+        .def("__hash__", &marktip::document_hash)
         .def("to_dict", &marktip::to_dict_py, "Convert the document AST to a Tiptap-style JSON dict.")
         .def("dump", &marktip::dump_py, "Return JSON-serializable content, spelling and schema.")
         .def("to_markdown",

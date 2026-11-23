@@ -1,5 +1,6 @@
 #include "value.h"
 
+#include <algorithm>
 #include <charconv>
 
 #include "tags.h"
@@ -157,8 +158,16 @@ bool AttrValue::operator==(const AttrValue& other) const {
     return false;
 }
 
+bool equal_attrs(const AttrList& left, const AttrList& right) {
+    return left.size() == right.size() && std::all_of(left.begin(), left.end(), [&](const auto& attr) {
+        return std::any_of(right.begin(), right.end(), [&](const auto& other) {
+            return attr.first == other.first && attr.second == other.second;
+        });
+    });
+}
+
 bool Mark::operator==(const Mark& other) const {
-    return type == other.type && attrs == other.attrs;
+    return type == other.type && equal_attrs(attrs, other.attrs);
 }
 
 void set_attr(AttrList& attrs, std::string key, AttrValue value) {

@@ -391,6 +391,76 @@ def test_declared_attrs_distinguish_absent_null_and_changed_values(owner, value,
         assert document.to_markdown() == tm.from_dict(submitted, schema=schema).to_markdown()
 
 
+def test_reordered_marks_inherit_the_keys_of_their_type_and_occurrence():
+    schema = tm.Schema(marks=[tm.MarkSpec("note", attrs={"id": tm.Attr(str), "label": tm.Attr(str)}, excludes=())])
+    markdown = "<note id='one' label='first'><note id='two' label='second'>**x**</note></note>\n"
+    base = tm.from_markdown(markdown, schema=schema)
+    submitted = base.to_dict()
+    marks = submitted["content"][0]["content"][0]["marks"]
+    bold, first, second = marks
+    second["attrs"].pop("label")
+    marks[:] = [second, bold, first]
+
+    document = tm.from_dict(submitted, schema=schema, base=base, strict="content")
+    assert document.to_markdown() == markdown
+    assert document.to_dict()["content"][0]["content"][0]["marks"] == [
+        bold, {"type": "note", "attrs": {"id": "two", "label": "second"}}, first,
+    ]
+
+
+def test_inherited_tag_link_attr_reorders_marks():
+    schema = tm.Schema(core_attrs={"link": {"target": tm.Attr(str)}})
+    markdown = '<a href="/x" target="_self">**x**</a>'
+    base = tm.from_markdown(markdown, schema=schema)
+    submitted = base.to_dict()
+    marks = submitted["content"][0]["content"][0]["marks"]
+    marks.reverse()
+    marks[0]["attrs"].pop("target")
+
+    document = tm.from_dict(submitted, schema=schema, base=base, strict="content")
+    assert document == base
+    assert tm.from_markdown(document.to_markdown(canonical=True), schema=schema) == document
+    assert tm.from_dict(document.to_dict(), schema=schema, strict="content") == document
+
+
+def test_inherited_tag_link_attr_keeps_adjacent_code_runs_together():
+    schema = tm.Schema(core_attrs={"link": {"target": tm.Attr(str)}})
+    runs = [
+        {"type": "text", "text": value, "marks": [
+            {"type": "code"}, {"type": "link", "attrs": {"href": "/x", "target": "_self"}},
+        ]}
+        for value in ("a", "b")
+    ]
+    base = tm.from_dict({"type": "doc", "content": [{"type": "paragraph", "content": runs}]},
+                        schema=schema, strict="content")
+    submitted = base.to_dict()
+    marks = submitted["content"][0]["content"][1]["marks"]
+    marks.reverse()
+    marks[0]["attrs"].pop("target")
+
+    document = tm.from_dict(submitted, schema=schema, base=base, strict="content")
+    assert document == base
+    assert document.to_markdown(canonical=True) == '<a href="/x" target="_self">`ab`</a>'
+
+
+def test_uri_policy_checks_input_marks_before_reordering_and_inheritance():
+    schema = tm.Schema(marks=[tm.MarkSpec("note", attrs={"url": tm.Attr(str, uri="link")})])
+    markdown = "<note url='http://example.com'>**x**</note>\n"
+    base = tm.from_markdown(markdown, schema=schema)
+    submitted = base.to_dict()
+    marks = submitted["content"][0]["content"][0]["marks"]
+    marks.reverse()
+    with pytest.raises(tm.InvalidNodeError) as error:
+        tm.from_dict(submitted, schema=schema, base=base, link_schemes=("https",), strict="content")
+    assert error.value.code == "disallowed_scheme"
+    assert error.value.path == "content[0].content[0].marks[0]"
+
+    marks[0].pop("attrs")
+    document = tm.from_dict(submitted, schema=schema, base=base, link_schemes=("https",), strict="content")
+    assert document == base
+    assert document.to_markdown() == markdown
+
+
 def test_a_supplied_default_value_is_not_an_absent_key():
     schema = tm.Schema(nodes=[tm.NodeSpec("embed", "block", attrs={"label": tm.Attr(str, default="default")})])
     base = tm.from_markdown("<embed label='custom'/>\n", schema=schema)

@@ -47,15 +47,18 @@ def block_schema(*, block_image=False):
     ])
 
 
-def editor_dict(value):
+def editor_dict(value, *, fill_empty=False, add_colspan=True):
     result = copy.deepcopy(value)
 
     def visit(node):
         attrs = node.get("attrs", {})
         for name in ("tight", "align", "colCount", "info"):
             attrs.pop(name, None)
-        if node["type"] in ("tableCell", "tableHeader"):
+        if add_colspan and node["type"] in ("tableCell", "tableHeader"):
             node.setdefault("attrs", {})["colspan"] = 1
+        if fill_empty and node["type"] in ("tableCell", "tableHeader", "listItem", "taskItem"):
+            if not node.get("content"):
+                node["content"] = [{"type": "paragraph"}]
         node.get("marks", []).reverse()
         for child in node.get("content", []):
             visit(child)

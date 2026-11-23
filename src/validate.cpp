@@ -12,14 +12,6 @@
 namespace marktip {
 namespace {
 
-bool equal_attrs(const AttrList& left, const AttrList& right) {
-    return left.size() == right.size() && std::all_of(left.begin(), left.end(), [&](const auto& attr) {
-        return std::any_of(right.begin(), right.end(), [&](const auto& other) {
-            return attr.first == other.first && attr.second == other.second;
-        });
-    });
-}
-
 // The schema is small enough that a linear scan beats anything cleverer,
 // and both readers need the same lookup: nullptr when the type does not declare that attr.
 const AttrSpec* find_attr_spec(const std::vector<AttrSpec>& specs, std::string_view name) {

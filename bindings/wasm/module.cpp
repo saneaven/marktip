@@ -135,8 +135,8 @@ EMSCRIPTEN_KEEPALIVE std::uint32_t mt_from_dict(const char* data, std::size_t le
         auto schema = select_schema(schema_handle);
         ConversionOptions options = read_options(options_json.root(), *schema, true);
         const Document* base = base_handle == 0 ? nullptr : &documents.at(base_handle);
-        return retain(DocumentReader<JsonInput>::from_dict(root_dict(input), std::move(schema),
-                                                           options.nodes, options.uri, options.strict, base));
+        return retain(DocumentReader<JsonInput>::from_dict(root_dict(input), std::move(schema), options.strict, base)
+                          .finish(options.nodes, options.uri));
     });
 }
 

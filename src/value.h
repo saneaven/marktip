@@ -36,6 +36,8 @@ struct AttrValue {
 
 using AttrList = std::vector<std::pair<std::string, AttrValue>>;
 
+bool equal_attrs(const AttrList& left, const AttrList& right);
+
 struct Mark {
     std::string type;
     AttrList attrs;

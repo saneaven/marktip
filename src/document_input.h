@@ -11,11 +11,27 @@
 #include "ast.h"
 #include "compiler.h"
 #include "inherit.h"
+#include "normalize.h"
 #include "policy.h"
 #include "schema.h"
 #include "validate.h"
 
 namespace marktip {
+
+struct DictDocument {
+    Document document;
+    const Document* base;
+    InputAttrKeys present;
+
+    Document finish(const NodeTypePolicy& node_policy, const UriPolicy& uri_policy) && {
+        finalize_document(document, node_policy, uri_policy);
+        if (base != nullptr) {
+            inherit_attrs_and_spelling(document, *base, present);
+            normalize_inherited_attrs(document);
+        }
+        return std::move(document);
+    }
+};
 
 // Input provides Value, type predicates and lookup(dict, key) -> optional<Value>, with absent distinct from null.
 // from_dict and load require roots that already passed is_dict; lookup is called only on checked dicts.
@@ -229,14 +245,14 @@ class DocumentReader {
         std::size_t mark_index = 0;
         for (Value mark_handle : Input::elements(mark_list)) {
             path.push_back({"marks", mark_index});
-            std::vector<std::string>* mark_keys = nullptr;
-            if (keys != nullptr) {
-                keys->marks.emplace_back();
-                mark_keys = &keys->marks.back();
-            }
-            Mark mark = mark_from_input(expect_dict(mark_handle, "mark", "marks", path), schema, mode, path, mark_keys);
+            AttrKeys mark_keys;
+            Mark mark = mark_from_input(expect_dict(mark_handle, "mark", "marks", path), schema, mode, path,
+                                        keys != nullptr ? &mark_keys : nullptr);
             if (mode != StrictMode::Off) {
                 check_mark_set(node.marks, mark, schema, path);
+            }
+            if (keys != nullptr) {
+                keys->marks.emplace_back(mark.type, std::move(mark_keys));
             }
             node.marks.push_back(std::move(mark));
             path.pop_back();
@@ -333,28 +349,25 @@ class DocumentReader {
         return spec;
     }
 
-public:
-    static Document from_dict(Value root, std::shared_ptr<const Schema> selected_schema,
-                               const NodeTypePolicy& node_policy, const UriPolicy& policy, StrictMode mode,
-                               const Document* base = nullptr) {
-        const Document* inheritance_base = base != nullptr &&
-            base->schema().fingerprint() == selected_schema->fingerprint() ? base : nullptr;
+    static Document read_dict(Value root, std::shared_ptr<const Schema> schema, StrictMode mode, InputAttrKeys* keys) {
         PathStack path;
         path.reserve(32);
-
         std::string type = required_type(root, "root node", path);
         check_root_type(type, path);
 
-        Document document(std::move(selected_schema));
-        if (inheritance_base != nullptr) {
-            InputAttrKeys present;
-            fill_node_from_input(document, 0, root, "root node", 0, mode, path, &present);
-            inherit_attrs_and_spelling(document, *inheritance_base, present);
-        } else {
-            fill_node_from_input(document, 0, root, "root node", 0, mode, path);
-        }
-        finalize_document(document, node_policy, policy);
+        Document document(std::move(schema));
+        fill_node_from_input(document, 0, root, "root node", 0, mode, path, keys);
         return document;
+    }
+
+public:
+    static DictDocument from_dict(Value root, std::shared_ptr<const Schema> schema, StrictMode mode,
+                                  const Document* base) {
+        const Document* inheritance_base = base != nullptr &&
+            base->schema().fingerprint() == schema->fingerprint() ? base : nullptr;
+        InputAttrKeys present;
+        Document document = read_dict(root, std::move(schema), mode, inheritance_base != nullptr ? &present : nullptr);
+        return {std::move(document), inheritance_base, std::move(present)};
     }
 
     static Document load(Value data, std::shared_ptr<const Schema> schema) {
@@ -365,7 +378,8 @@ public:
         }
         PathStack path;
         Value content = expect_dict(Input::lookup(data, "doc"), "stored document", "doc", path);
-        Document document = from_dict(content, std::move(schema), NodeTypePolicy {}, UriPolicy {}, StrictMode::Off);
+        Document document = read_dict(content, std::move(schema), StrictMode::Off, nullptr);
+        check_document_policies(document, NodeTypePolicy {}, UriPolicy {});
         auto source_value = Input::lookup(data, "source");
         if (!source_value) {
             return document;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "ast.h"
@@ -8,9 +9,11 @@
 namespace marktip {
 
 // Original JSON keys, including keys whose null or default values were not stored in the AST.
+using AttrKeys = std::vector<std::string>;
+
 struct NodeAttrKeys {
-    std::vector<std::string> node;
-    std::vector<std::vector<std::string>> marks;
+    AttrKeys node;
+    std::vector<std::pair<std::string, AttrKeys>> marks;
 };
 
 using InputAttrKeys = std::vector<NodeAttrKeys>;

@@ -9,6 +9,73 @@ def test_from_markdown_returns_document():
     assert isinstance(doc, tm.Document)
 
 
+@pytest.mark.parametrize("owner", ("node", "mark"))
+def test_document_equality_ignores_attr_key_order(owner):
+    image = {
+        "type": "image",
+        "attrs": {"src": "x.png", "alt": "x"},
+        "marks": [{"type": "link", "attrs": {"href": "/x", "title": "x"}}],
+    }
+    ast = {"type": "doc", "content": [{"type": "paragraph", "content": [image]}]}
+    first = tm.from_dict(ast, strict="content")
+    item = image if owner == "node" else image["marks"][0]
+    item["attrs"] = dict(reversed(item["attrs"].items()))
+    second = tm.from_dict(ast, strict="content")
+
+    assert first == second
+    assert hash(first) == hash(second)
+
+
+def test_document_equality_compares_stored_mark_order():
+    schema = tm.Schema(marks=[tm.UNDERLINE])
+    document = tm.from_markdown("<u>**x**</u>", schema=schema)
+    dump = document.dump()
+    dump["doc"]["content"][0]["content"][0]["marks"].reverse()
+
+    assert tm.load(dump, schema=schema) != document
+
+
+def test_document_equality_ignores_remembered_spelling():
+    first = tm.from_markdown("*x*")
+    second = tm.from_markdown("_x_")
+
+    assert first.to_markdown() != second.to_markdown()
+    assert first == second
+    assert hash(first) == hash(second)
+    assert {first: "x"}[second] == "x"
+
+
+def test_document_equality_compares_schema_fingerprints():
+    schema = tm.Schema(marks=[tm.UNDERLINE])
+    equivalent_schema = tm.Schema.from_dict(schema.to_dict())
+    first = tm.from_markdown("x", schema=schema)
+    second = tm.from_markdown("x", schema=equivalent_schema)
+    different = tm.from_markdown("x")
+
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.to_dict() == different.to_dict()
+    assert first != different
+
+
+def test_document_equality_compares_attrs_markdown_does_not_carry():
+    first = tm.from_markdown("[x](/x)")
+    ast = first.to_dict()
+    ast["content"][0]["content"][0]["marks"][0]["attrs"]["target"] = "_blank"
+    second = tm.from_dict(ast, strict="content")
+
+    assert first.to_markdown(canonical=True) == second.to_markdown(canonical=True)
+    assert first != second
+
+
+def test_document_equality_returns_not_implemented_for_other_types():
+    document = tm.from_markdown("x")
+    ast = document.to_dict()
+
+    assert document.__eq__(ast) is NotImplemented
+    assert document != ast
+
+
 def test_from_dict_roundtrips_and_deep_copies():
     ast = {
         "type": "doc",
