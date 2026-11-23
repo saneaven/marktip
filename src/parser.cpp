@@ -296,6 +296,19 @@ public:
                 normalize_task_list(document_, stack_.back());
                 pop_node();
                 return 0;
+            case MD_BLOCK_CODE: {
+                Node& code = current();
+                if (!code.content.empty()) {
+                    // MD4C reports a line terminator after every code line.
+                    std::string& text = document_.node(code.content.back()).text;
+                    text.pop_back();
+                    if (text.empty()) {
+                        code.content.pop_back();
+                    }
+                }
+                pop_node();
+                return 0;
+            }
             case MD_BLOCK_LI:
             case MD_BLOCK_TH:
             case MD_BLOCK_TD:

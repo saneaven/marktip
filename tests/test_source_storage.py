@@ -104,6 +104,19 @@ def test_an_editor_save_keeps_absent_attrs_after_load_drops_spelling():
     assert "source" not in saved
 
 
+def test_inherited_fence_info_is_normalized_after_matching():
+    markdown = "```python\nx\n```"
+    stored = tm.from_markdown(markdown, keep_source=False).dump()
+    stored["doc"]["content"][0]["attrs"]["info"] = "ruby"
+    base = tm.load(stored)
+    edited = base.to_dict()
+    edited["content"][0].pop("attrs")
+
+    saved = tm.from_dict(edited, strict="content", base=base)
+    assert saved.to_dict()["content"][0]["attrs"] == {"language": "python", "info": "python"}
+    assert saved == tm.from_markdown(markdown)
+
+
 def test_equal_separately_built_schemas_keep_base_and_stored_spelling():
     original_schema = block_schema()
     equivalent_schema = tm.Schema.from_dict(json.loads(json.dumps(original_schema.to_dict())))

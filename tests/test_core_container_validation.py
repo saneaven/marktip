@@ -88,6 +88,8 @@ def test_default_container_overlay_values_are_unset_and_keep_the_markdown_form(o
     schema = tm.Schema(core_attrs={owner: {"tone": tm.Attr(str, default="note")}})
     ast, _ = container_case(owner, {"tone": "note"})
     expected, _ = container_case(owner, {})
+    if owner == "orderedList":
+        expected["content"][0]["attrs"]["start"] = 1
     document = tm.from_dict(ast, schema=schema, strict="exact")
     assert document.to_dict() == expected
     assert document.to_markdown(canonical=True) == tm.from_dict(expected, strict="exact").to_markdown(canonical=True)
@@ -155,7 +157,8 @@ def test_declared_cell_spans_and_widths_are_carried_by_the_tag(owner, field, val
     schema = tm.Schema(core_attrs={owner: {field: attr}})
     ast = doc(node("table", node("tableRow", node(owner, p(), attrs={field: value}))))
     document = tm.from_dict(ast, schema=schema, strict="exact")
-    assert document.to_dict() == ast
+    expected = doc({**ast["content"][0], "attrs": {"colCount": 1}})
+    assert document.to_dict() == expected
     written = document.to_markdown(canonical=True)
     rendered = "100,200" if field == "colwidth" else "2"
     assert f' {field}="{rendered}"' in written
@@ -187,9 +190,10 @@ def test_any_active_table_owner_allows_block_cells_and_promotes_the_whole_table(
     children = [node("embed"), p("after")] if multiple else [node("callout", p())]
     ast = doc(node("table", node("tableRow", node(cell_type, *children))))
     document = tm.from_dict(ast, schema=schema, strict="exact")
-    assert document.to_dict() == ast
+    expected = doc({**ast["content"][0], "attrs": {"colCount": 1}})
+    assert document.to_dict() == expected
     written = document.to_markdown(canonical=True)
-    assert written.startswith("<table")
+    assert written.startswith('<table colCount="1">')
     assert "<tr>" in written
     assert ("<th>" if cell_type == "tableHeader" else "<td>") in written
-    assert tm.from_markdown(written, schema=schema).to_dict() == ast
+    assert tm.from_markdown(written, schema=schema).to_dict() == expected

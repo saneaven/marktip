@@ -65,24 +65,26 @@ bool uses_tag_form(const Mark& mark, const MarkSpec& spec) {
     return !spec.core || (!spec.tag.empty() && has_tag_attr(mark.attrs, spec.attrs));
 }
 
+std::string_view fence_info_word(std::string_view line) {
+    constexpr auto whitespace = " \t\r\n\f\v";
+    // MD4C skips only spaces before taking the first fence word.
+    std::size_t begin = line.find_first_not_of(' ');
+    if (begin == std::string_view::npos) {
+        return {};
+    }
+    return line.substr(begin, line.find_first_of(whitespace, begin) - begin);
+}
+
 CodeInfo code_info(const AttrList& attrs) {
-    auto first_word = [](std::string_view line) {
-        constexpr auto whitespace = " \t\r\n\f\v";
-        std::size_t begin = line.find_first_not_of(whitespace);
-        if (begin == std::string_view::npos) {
-            return std::string_view {};
-        }
-        return line.substr(begin, line.find_first_of(whitespace, begin) - begin);
-    };
     std::string language = attr_string(attrs, "language");
     std::string info = attr_string(attrs, "info");
     const char* field = language.empty() ? "info" : "language";
 
     // A newline in the emitted info would move its tail into the code body.
     info.erase(std::min(info.size(), info.find_first_of("\r\n")));
-    std::string value = language.empty() || language == first_word(info) ? std::move(info) : std::move(language);
+    std::string value = language.empty() || language == fence_info_word(info) ? std::move(info) : std::move(language);
     value.erase(std::min(value.size(), value.find_first_of("\r\n")));
-    std::string word(first_word(value));
+    std::string word(fence_info_word(value));
     return {std::move(value), std::move(word), field};
 }
 

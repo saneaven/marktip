@@ -292,7 +292,7 @@ def test_heading_level_range(value, expected, level):
 def test_oversized_integer_attr_is_dropped_off_and_reported_with_a_path_under_strict(level):
     ast = doc(node("heading", level=10**100))
     if level == "off":
-        assert tm.from_dict(ast, strict=level).to_dict() == doc({"type": "heading", "content": [text()]})
+        assert tm.from_dict(ast, strict=level).to_dict() == doc(node("heading", level=1))
     else:
         with pytest.raises(tm.InvalidNodeError) as excinfo:
             tm.from_dict(ast, strict=level)
@@ -617,10 +617,8 @@ def test_a_null_required_attr_fails_exactly_like_an_absent_one(level):
 
 
 def test_a_null_attr_is_dropped_rather_than_coerced():
-    # from_dict keeps str, int and bool and drops every other value, so a null never
-    # becomes a "" that to_dict() then hands back as if the caller had written it.
-    assert "attrs" not in tm.from_dict(code_block(language=None)).to_dict()["content"][0]
-    assert tm.from_dict(code_block(language=None, info="")).to_dict()["content"][0]["attrs"] == {"info": ""}
+    assert tm.from_dict(link(href="/x", target=None)).to_dict() == link(href="/x")
+    assert tm.from_dict(link(href="/x", target="")).to_dict() == link(href="/x", target="")
 
 
 @pytest.mark.parametrize("level", ("off", "content"))
@@ -633,8 +631,10 @@ def test_an_attr_markdown_cannot_carry_stays_in_the_document_and_out_of_the_mark
         *cell(colwidth=[100, 200], align="left")["content"],
     )
     document = tm.from_dict(ast, strict=level)
-    assert document.to_dict() == ast
-    assert document.dump()["doc"] == ast
+    *blocks, table = ast["content"]
+    expected = doc(*blocks, {**table, "attrs": {"colCount": 1}})
+    assert document.to_dict() == expected
+    assert document.dump()["doc"] == expected
     assert document.to_markdown() == "[a](/x)![](/i.png)\n\n1. a\n\n| x |\n| :--- |"
 
 

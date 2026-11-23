@@ -46,8 +46,6 @@ public:
     std::size_t append_node(Node node);
     std::size_t append_child(std::size_t parent, Node node);
 
-    void order_marks();
-
 private:
     std::shared_ptr<const Schema> schema_;
     std::vector<Node> nodes_;
@@ -57,6 +55,7 @@ private:
 bool same_document(const Document& left, const Document& right);
 std::size_t document_hash(const Document& document);
 std::size_t block_hash(const Document& document, std::size_t index);
+std::string plain_text(const Document& document, const Node& node);
 
 void normalize_task_list(Document& document, std::size_t index);
 

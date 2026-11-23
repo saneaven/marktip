@@ -85,7 +85,8 @@ def test_a_declared_block_must_be_the_only_child_of_a_table_cell(schema, cell_ty
     assert (error.code, error.field, error.path) == (
         "unrepresentable", "content", f"content[0].content[0].content[0].content[{position}]",
     )
-    assert tm.from_dict(ast, schema=schema, strict="off").to_dict() == ast
+    expected = document({**ast["content"][0], "attrs": {"colCount": 1}})
+    assert tm.from_dict(ast, schema=schema, strict="off").to_dict() == expected
 
 
 def test_off_skips_block_content_and_marks_checks(schema):

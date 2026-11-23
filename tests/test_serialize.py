@@ -45,7 +45,7 @@ def test_serialize_lists_code_and_table():
                     {"type": "taskItem", "attrs": {"checked": False}, "content": [{"type": "text", "text": "write tests"}]},
                 ],
             },
-            {"type": "codeBlock", "attrs": {"language": "cpp"}, "content": [{"type": "text", "text": "return 0;\n"}]},
+            {"type": "codeBlock", "attrs": {"language": "cpp"}, "content": [{"type": "text", "text": "return 0;"}]},
             {
                 "type": "table",
                 "content": [

@@ -53,12 +53,12 @@ def cell(*children, header=False, **attrs):
     return node("tableHeader" if header else "tableCell", *children, attrs=attrs)
 
 
-def case(case_id, *blocks, schema=None, base=None, refuses=False):
+def case(case_id, *blocks, schema=None, base=None, refuses=False, normalized=None):
     markdown_options = {} if schema is None else {"schema": schema}
     dict_options = dict(markdown_options)
     if base is not None:
         dict_options["base"] = tm.from_markdown(base, **markdown_options)
-    return case_id, node("doc", *blocks), dict_options, markdown_options, refuses
+    return case_id, node("doc", *blocks), dict_options, markdown_options, refuses, normalized
 
 
 BOLD = mark("bold")
@@ -72,6 +72,7 @@ HARD_BREAK = node("hardBreak")
 NOTE_SCHEMA = tm.Schema(marks=[tm.MarkSpec("note", attrs={"label": tm.Attr(str)})])
 HEADING_SCHEMA = tm.Schema(core_attrs={"heading": {}})
 PARAGRAPH_SCHEMA = tm.Schema(core_attrs={"paragraph": {}})
+TAGGED_PARAGRAPH_SCHEMA = tm.Schema(core_attrs={"paragraph": {"textAlign": tm.Attr(str)}})
 INLINE_CONTAINER_SCHEMA = tm.Schema(nodes=[tm.NodeSpec("span", "inline", content="inline*")])
 MATH_SCHEMA = tm.Schema(nodes=[
     tm.NodeSpec("inlineMath", "inline", math="inline", body="latex", attrs={"latex": tm.Attr(str)}),
@@ -81,19 +82,42 @@ MATH_SCHEMA = tm.Schema(nodes=[
 EDITOR_DOCUMENTS = (
     # Text and lines.
     case("cr-and-crlf-in-text", paragraph(text("a\rb\r\nc"))),
+    case("cr-and-crlf-in-code-block", code_block("a\rb\r\nc"), normalized=node("doc", code_block("a\nb\nc"))),
     case("paragraph-line-edge-spaces", paragraph(text(" \tfirst \t\n\tsecond \t")), paragraph(text("word "))),
     case("hard-break-edge-spaces", paragraph(text("first \t"), HARD_BREAK, text("\t second"))),
     case("heading-and-cell-edge-spaces", heading(text(" title \t")),
          table(1, [cell(paragraph(text(" data \t")), header=True)])),
-    case("link-keeps-edge-spaces", paragraph(text(" label ", LINK))),
-    case("declared-mark-keeps-edge-spaces", paragraph(text(" label ", NOTE)), schema=NOTE_SCHEMA),
+    case("trim-link-marked-edge-spaces", paragraph(text(" label ", LINK)),
+         normalized=node("doc", paragraph(text("label", LINK)))),
+    case("trim-declared-marked-edge-spaces", paragraph(text(" label ", NOTE)), schema=NOTE_SCHEMA,
+         normalized=node("doc", paragraph(text("label", NOTE)))),
     case("consecutive-soft-breaks", paragraph(text("a\n\nb"))),
     case("paragraph-edge-soft-breaks", paragraph(text("\na\n"))),
     case("soft-breaks-next-to-hard-break", paragraph(text("a\n"), HARD_BREAK, text("\nb"))),
-    case("paragraph-edge-hard-breaks", paragraph(HARD_BREAK, text("a"), HARD_BREAK)),
+    case("paragraph-edge-hard-breaks", paragraph(HARD_BREAK, text("a"), HARD_BREAK),
+         normalized=node("doc", paragraph(HARD_BREAK, text("a")))),
+    case("leading-hard-break-in-paragraph", paragraph(HARD_BREAK, text("a")),
+         normalized=node("doc", paragraph(HARD_BREAK, text("a")))),
+    case("two-leading-hard-breaks-in-paragraph", paragraph(HARD_BREAK, HARD_BREAK, text("a")),
+         normalized=node("doc", paragraph(HARD_BREAK, HARD_BREAK, text("a")))),
+    case("leading-hard-break-in-list-item", bullet_list(list_item(paragraph(HARD_BREAK, text("a")))),
+         normalized=node("doc", bullet_list(list_item(paragraph(HARD_BREAK, text("a")))))),
+    case("two-leading-hard-breaks-in-list-item", bullet_list(list_item(paragraph(HARD_BREAK, HARD_BREAK, text("a")))),
+         normalized=node("doc", bullet_list(list_item(paragraph(HARD_BREAK, HARD_BREAK, text("a")))))),
+    case("trailing-link-marked-hard-break", paragraph(text("a", LINK), node("hardBreak", marks=(LINK,))),
+         normalized=node("doc", paragraph(text("a", LINK)))),
+    case("trailing-hard-break-in-tagged-paragraph",
+         node("paragraph", text("a"), HARD_BREAK, attrs={"textAlign": "center"}), schema=TAGGED_PARAGRAPH_SCHEMA,
+         normalized=node("doc", node("paragraph", text("a"), attrs={"textAlign": "center"}))),
     case("table-cell-edge-hard-breaks",
-         table(1, [cell(paragraph(HARD_BREAK, text("a"), HARD_BREAK), header=True)])),
+         table(1, [cell(paragraph(HARD_BREAK, text("a"), HARD_BREAK), header=True)]),
+         normalized=node("doc", table(1, [cell(paragraph(HARD_BREAK, text("a")), header=True)]))),
+    case("blanks-and-soft-break-after-hard-break-in-pipe-cell",
+         table(1, [cell(paragraph(text("a"), HARD_BREAK, text(" ", BOLD), text("\nb")), header=True)]),
+         normalized=node("doc", table(1, [cell(paragraph(text("a"), HARD_BREAK, text("b")), header=True)]))),
     case("newline-in-code-span", paragraph(text("a\nb", CODE))),
+    case("code-marked-hard-break", paragraph(text("a", CODE), node("hardBreak", marks=(CODE,)), text("b", CODE)),
+         normalized=node("doc", paragraph(text("a", CODE), HARD_BREAK, text("b", CODE)))),
     case("breaks-in-headings", heading(text("a"), HARD_BREAK, text("b")), heading(text("a\nb"))),
     case("breaks-in-tagged-headings", heading(text("a"), HARD_BREAK, text("b")), heading(text("a\nb")),
          schema=HEADING_SCHEMA),
@@ -147,6 +171,8 @@ EDITOR_DOCUMENTS = (
     case("empty-fence-language-and-info", code_block("x\n", language="", info="")),
     case("fence-info-without-language", code_block("x\n", info="python")),
     case("fence-language-disagrees-with-info", code_block("x\n", language="python", info="ruby")),
+    case("tab-led-fence-info", code_block("x", info="\tpy options"),
+         normalized=node("doc", code_block("x", info="\tpy options"))),
 
     # Writer spellings.
     case("three-consecutive-hard-breaks", paragraph(text("a"), HARD_BREAK, HARD_BREAK, HARD_BREAK, text("b"))),

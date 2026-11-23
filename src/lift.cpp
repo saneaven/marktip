@@ -320,9 +320,6 @@ MARKTIP_NOINLINE void process_blocks(Document& document, std::size_t index, cons
                 for (std::size_t line : parsed.content) {
                     body += document.node(line).text;
                 }
-                if (!body.empty() && body.back() == '\n') {
-                    body.pop_back();
-                }
             }
         } else if (display_math != nullptr && parsed.type == "paragraph" && parsed.content.size() == 1) {
             const Node& span = document.node(parsed.content.front());

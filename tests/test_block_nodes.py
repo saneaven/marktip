@@ -156,7 +156,7 @@ def test_block_containers_nest_around_atoms_containers_and_textblocks(html, leve
     (p(text("neighbor")), "neighbor"),
     (node("heading", text("neighbor"), attrs={"level": 2}), "## neighbor"),
     (node("horizontalRule"), "---"),
-    (node("codeBlock", text("neighbor\n")), "```\nneighbor\n```"),
+    (node("codeBlock", text("neighbor")), "```\nneighbor\n```"),
     (node("blockquote", p(text("neighbor"))), "> neighbor"),
     (node("bulletList", node("listItem", p(text("neighbor"))), attrs={"tight": True}), "- neighbor"),
     (node("table", node("tableRow", node("tableHeader", p(text("neighbor")))), attrs={"colCount": 1}),
@@ -258,6 +258,20 @@ def test_textblock_body_keeps_inline_marks_and_hard_breaks(html, level):
                        marks=[tm.MarkSpec("underline", tag="u")])
     child = node("summary", text("title", mark("bold"), mark("underline")), node("hardBreak"), text("body"))
     roundtrip(doc(child), schema, "<summary><u>**title**</u>\\\nbody</summary>", html, level)
+
+
+def test_declared_textblock_keeps_required_whitespace_text():
+    schema = tm.Schema(nodes=[tm.NodeSpec("caption", "block", tag="custom-caption", content="text+")])
+    markdown = "<custom-caption> </custom-caption>"
+    ast = doc(node("caption", text(" ")))
+
+    parsed = tm.from_markdown(markdown, schema=schema)
+    assert parsed.to_dict() == ast
+    assert parsed.to_markdown(canonical=True) == markdown
+
+    created = tm.from_dict(ast, schema=schema, strict="content")
+    assert created == parsed
+    assert created.to_markdown(canonical=True) == markdown
 
 
 @pytest.mark.parametrize("html", HTML)

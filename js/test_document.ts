@@ -279,7 +279,7 @@ test("oversized scalar attrs are omitted under strict off", () => {
     const document = tm.fromDict(ast);
     try {
         assert.deepEqual(document.toDict(), {
-            type: "doc", content: [{ type: "heading", content: [{ type: "text", text: "x" }] }],
+            type: "doc", content: [{ type: "heading", attrs: { level: 1 }, content: [{ type: "text", text: "x" }] }],
         });
     } finally {
         document.free();

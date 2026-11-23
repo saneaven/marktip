@@ -97,6 +97,20 @@ def test_explicit_null_clears_table_alignment_and_rewrites_the_table(html):
     assert_canonical_readback(document, html=html)
 
 
+def test_normalized_tagged_paragraph_matches_when_its_attrs_are_omitted():
+    schema = tm.Schema(core_attrs={"paragraph": {"textAlign": tm.Attr(str)}})
+    markdown = 'Intro\n\n<p textAlign="center">\nHello\n</p>\n\nOutro'
+    base = tm.from_markdown(markdown, schema=schema)
+    submitted = base.to_dict()
+    expected = {**paragraph("Hello"), "attrs": {"textAlign": "center"}}
+    assert submitted["content"][1] == expected
+    submitted["content"][1].pop("attrs")
+
+    document = tm.from_dict(submitted, schema=schema, strict="content", base=base)
+    assert document.to_dict()["content"][1] == expected
+    assert document.to_markdown() == markdown
+
+
 MANY_BLOCKS = [
     "# Heading ###",
     "[linked][r] and *emphasis*",

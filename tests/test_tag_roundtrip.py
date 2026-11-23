@@ -468,7 +468,7 @@ def test_tag_names_match_exactly_with_no_case_or_prefix_match(html, name):
     (r"\<u>x\</u>", doc(p(text("<u>x</u>")))),
     ("&lt;u&gt;x&lt;/u&gt;", doc(p(text("<u>x</u>")))),
     ("`<u>x</u>`", doc(p(text("<u>x</u>", mark("code"))))),
-    ("```\n<u>x</u>\n```", doc({"type": "codeBlock", "content": [text("<u>x</u>\n")]})),
+    ("```\n<u>x</u>\n```", doc({"type": "codeBlock", "content": [text("<u>x</u>")]})),
 ])
 def test_tag_shapes_in_escaped_text_entities_and_code_are_not_lifted(html, markdown, expected):
     assert tm.from_markdown(markdown, schema=underline_schema(), html=html).to_dict() == expected

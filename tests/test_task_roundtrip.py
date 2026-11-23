@@ -40,7 +40,7 @@ def quote(value):
 
 
 def code_block():
-    return {"type": "codeBlock", "content": [text("code\n")]}
+    return {"type": "codeBlock", "content": [text("code")]}
 
 
 def assert_roundtrip(ast, markdown):

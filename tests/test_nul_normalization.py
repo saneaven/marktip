@@ -43,7 +43,7 @@ def test_markdown_plain_and_inline_code_replace_nul_once():
 @pytest.mark.parametrize("markdown", ["```\na\0b\n```", "    a\0b\n"])
 def test_markdown_code_blocks_replace_nul_once_and_stay_stable(markdown):
     parsed = tm.from_markdown(markdown)
-    expected = f"a{REPLACEMENT}b\n"
+    expected = f"a{REPLACEMENT}b"
     assert parsed.to_dict()["content"][0]["content"][0]["text"] == expected
     assert_no_nul(parsed.to_dict())
 
@@ -98,7 +98,7 @@ def test_nul_is_replaced_in_text_and_code_block_content():
     assert value["content"][0]["content"][0]["text"] == f"a{REPLACEMENT}b"
     assert value["content"][1]["attrs"] == {
         "language": f"py{REPLACEMENT}typed",
-        "info": f"py{REPLACEMENT}info",
+        "info": f"py{REPLACEMENT}typed",
     }
     assert value["content"][1]["content"][0]["text"] == f"c{REPLACEMENT}d"
 

@@ -76,10 +76,7 @@ def lifted_children(body, context):
     if body == "one_line":
         children = [text("x", "underline")]
     else:
-        children = [text("\nfoo " if body == "multiline" else "foo ", "underline"),
-                    text("bar", "bold", "underline")]
-        if body == "closing_line":
-            children.append(text("\n", "underline"))
+        children = [text("foo ", "underline"), text("bar", "bold", "underline")]
     if context == "after_paragraph":
         children.insert(0, text("before\n"))
     return children
@@ -162,7 +159,7 @@ def test_declared_tag_line_is_a_lazy_quote_or_list_continuation(tag, html, conte
 def test_four_space_indented_declared_tags_stay_code(tag, html):
     schema = tm.Schema(marks=[tm.MarkSpec("underline", tag=tag)])
     body = f"<{tag}>foo **bar**</{tag}>"
-    expected = document([{"type": "codeBlock", "content": [text(body + "\n")]}], "root")
+    expected = document([{"type": "codeBlock", "content": [text(body)]}], "root")
     assert tm.from_markdown("    " + body, schema=schema, html=html).to_dict() == expected
 
 

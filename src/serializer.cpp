@@ -1048,7 +1048,7 @@ private:
         }
         if (spec.shape == Shape::BlockAtom) {
             if (const AttrValue* body = fence_body(spec, node.attrs, ctx == InlineContext::TableCell)) {
-                return add_indent(render_fenced_code(body->string_value + "\n", spec.fence), indent);
+                return add_indent(render_fenced_code(body->string_value, spec.fence), indent);
             }
             return add_indent(open_node_tag(spec, node.attrs), indent);
         }
@@ -1253,9 +1253,7 @@ private:
         }
         out.push_back('\n');
         out += code;
-        if (out.back() != '\n') {
-            out.push_back('\n');
-        }
+        out.push_back('\n');
         out += fence;
         return out;
     }
@@ -1546,33 +1544,7 @@ private:
     }
 
     std::string plain_text(const Node& node) {
-        const std::string& type = node.type;
-        if (type == "text") {
-            return node.text;
-        }
-        if (type == "hardBreak") {
-            return "\n";
-        }
-        // The attr is the payload when the key is present, even if its value is empty.
-        // When it is absent, fall through to the children:
-        // from_dict accepts and stores content on these nodes,
-        // and returning "" here would drop it — the silent loss the closed schema exists to prevent.
-        // Callers use this as the fallback for the very same attr (see the htmlBlock and image
-        // branches above), so returning the attr unconditionally would just recurse to "".
-        if (type == "htmlInline" || type == "htmlBlock") {
-            if (find_attr(node.attrs, "html") != nullptr) {
-                return attr_string(node.attrs, "html");
-            }
-        } else if (type == "image") {
-            if (find_attr(node.attrs, "alt") != nullptr) {
-                return attr_string(node.attrs, "alt");
-            }
-        }
-        std::string out;
-        for_each_child(node, [&](const Node& child) {
-            out += plain_text(child);
-        });
-        return out;
+        return marktip::plain_text(document_, node);
     }
 
     template <typename Fn>

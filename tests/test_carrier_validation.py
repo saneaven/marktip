@@ -19,29 +19,44 @@ def document(attrs):
 
 
 @pytest.mark.parametrize("strict", ["content", "exact"])
-@pytest.mark.parametrize("attrs, field", [
-    ({"language": "math"}, "language"),
-    ({"info": "math"}, "info"),
-    ({"info": "math numbered"}, "info"),
-    ({"language": "math", "info": "python"}, "language"),
-    ({"language": "", "info": "math"}, "info"),
+@pytest.mark.parametrize("attrs, field, info", [
+    ({"language": "math"}, "language", "math"),
+    ({"info": "math"}, "info", "math"),
+    ({"info": "math numbered"}, "info", "math numbered"),
+    ({"language": "math", "info": "python"}, "language", "math"),
+    ({"language": "", "info": "math"}, "info", "math"),
 ])
-def test_strict_rejects_a_core_code_block_with_a_declared_fence_prefix(schema, strict, attrs, field):
+def test_strict_rejects_a_core_code_block_with_a_declared_fence_prefix(schema, strict, attrs, field, info):
     with pytest.raises(tm.InvalidNodeError) as excinfo:
         tm.from_dict(document(attrs), schema=schema, strict=strict)
     error = excinfo.value
     assert (error.code, error.field, error.path) == ("unrepresentable", field, "content[1]")
-    assert tm.from_dict(document(attrs), schema=schema, strict="off").to_dict() == document(attrs)
+    assert tm.from_dict(document(attrs), schema=schema, strict="off").to_dict() == document({
+        "language": "math", "info": info,
+    })
 
 
 @pytest.mark.parametrize("strict", ["content", "exact"])
-@pytest.mark.parametrize("attrs", [
-    {"language": "python", "info": "math"},
-    {"info": "mathematics"},
-    {"language": "Math"},
+@pytest.mark.parametrize("attrs, word", [
+    ({"language": "python", "info": "math"}, "python"),
+    ({"info": "mathematics"}, "mathematics"),
+    ({"language": "Math"}, "Math"),
 ])
-def test_fence_collision_matches_the_effective_whole_first_word(schema, strict, attrs):
+def test_fence_collision_matches_the_effective_whole_first_word(schema, strict, attrs, word):
     ast = document(attrs)
+    assert tm.from_dict(ast, schema=schema, strict=strict).to_dict() == document({"language": word, "info": word})
+
+
+@pytest.mark.parametrize("strict", ["content", "exact"])
+def test_tab_led_info_stays_a_core_code_block_even_with_a_declared_fence(strict):
+    schema = tm.Schema(nodes=[tm.NodeSpec("mermaid", "block", fence="mermaid", body="source",
+                                         attrs={"source": tm.Attr(str)})])
+    markdown = "```\tmermaid\ngraph\n```"
+    ast = {"type": "doc", "content": [{
+        "type": "codeBlock", "attrs": {"info": "\tmermaid"},
+        "content": [{"type": "text", "text": "graph"}],
+    }]}
+    assert tm.from_markdown(markdown, schema=schema).to_dict() == ast
     assert tm.from_dict(ast, schema=schema, strict=strict).to_dict() == ast
 
 

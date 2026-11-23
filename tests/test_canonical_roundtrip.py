@@ -18,6 +18,13 @@ def _value(value):
     return value
 
 
+def _non_whitespace(text):
+    for char in text:
+        category = unicodedata.category(char)
+        if category != "Zs" and char not in "\t\n\f\r":
+            yield char, category
+
+
 def _signature(document, schema):
     declarations = {} if schema is None else {mark.name: mark.attrs for mark in schema.marks}
     overlays = {} if schema is None else schema.core_attrs
@@ -43,13 +50,11 @@ def _signature(document, schema):
         children = node.get("content", ())
         if kind == "text":
             code = ("code", ()) in marks
-            for char in node["text"]:
-                category = unicodedata.category(char)
-                if category != "Zs" and char not in "\t\n\f\r":
-                    value = ("code", char) if code else char
-                    yield (), value, marks if code or category[0] not in "PS" else frozenset()
+            for char, category in _non_whitespace(node["text"]):
+                value = ("code", char) if code else char
+                yield (), value, marks if code or category[0] not in "PS" else frozenset()
         elif kind == "codeBlock":
-            body = "".join(child["text"] for child in children).rstrip("\n")
+            body = "".join(char for child in children for char, _ in _non_whitespace(child["text"]))
             yield (), (kind, body), marks
         elif kind == "image":
             yield (), (kind, attrs["src"], attrs.get("alt") or "", attrs.get("title") or ""), marks
@@ -122,17 +127,6 @@ RUN_MASKS = tuple("".join(str(mask) for mask in masks) for masks in product(rang
 
 # Keep the failing case IDs fixed so each completed plan item exposes its XPASSes.
 XFAIL_GROUPS = (
-    ("T1 normalizes CR and CRLF to LF", ["cr-and-crlf-in-text"]),
-    ("T2 normalizes line-edge spaces and tabs that change on reread",
-     _spec_ids(ALL_SPECS, "40") + _spec_ids(("markdown-html-false",), "642") + [
-         "paragraph-line-edge-spaces", "hard-break-edge-spaces", "heading-and-cell-edge-spaces",
-     ]),
-    ("T3 normalizes consecutive or edge soft breaks that change on reread",
-     _spec_ids(ALL_SPECS, "39") + [
-         "consecutive-soft-breaks", "paragraph-edge-soft-breaks", "soft-breaks-next-to-hard-break",
-     ]),
-    ("T4 removes paragraph-edge hard breaks that disappear on reread", ["paragraph-edge-hard-breaks"]),
-    ("T5 normalizes a code span's newline to a space", ["newline-in-code-span"]),
     ("T6 preserves heading breaks where the schema can write them",
      _spec_ids(ALL_SPECS, "81 82 95") + ["breaks-in-headings", "breaks-in-tagged-headings"]),
     ("M1 aligns emphasis order and continuation with the reader",
@@ -172,14 +166,6 @@ XFAIL_GROUPS = (
     ("B6 normalizes the header, alignment and paragraphs of a pipe table",
      ["table-without-header-row", "table-body-alignment", "table-cell-with-two-paragraphs"]),
     ("B7 pads a short table row as the reader does", ["ragged-table"]),
-    ("B8 fills missing attrs or drops empty ones as the reader does",
-     _spec_ids(EDITOR_SPECS, "24 34 142 143 144 146", "198 199 200 201 205") + [
-         "missing-list-start-and-task-checked", "missing-heading-level", "missing-image-alt",
-         "missing-table-column-count", "empty-link-and-image-titles", "empty-fence-language-and-info",
-         "fence-info-without-language", "fence-language-disagrees-with-info",
-     ]),
-    ("W7 keeps code stored without a final newline stable",
-     ["code-block-without-final-newline"]),
     ("W8 preserves loose lists that are read back as tight",
      _spec_ids(MARKDOWN_SPECS, "5 109 254 264 270 271 286 287 288 290") + ["loose-list-with-quote"]),
     ("E1 rejects touching emphasis that loses marks or becomes literal punctuation",
@@ -325,11 +311,11 @@ def test_canonical_from_editor_spec(markdown):
 
 
 @pytest.mark.parametrize(
-    "x,dict_options,markdown_options,refuses",
-    [_case(case_id, x, dict_options, markdown_options, refuses)
-     for case_id, x, dict_options, markdown_options, refuses in EDITOR_DOCUMENTS],
+    "x,dict_options,markdown_options,refuses,normalized",
+    [_case(case_id, x, dict_options, markdown_options, refuses, normalized)
+     for case_id, x, dict_options, markdown_options, refuses, normalized in EDITOR_DOCUMENTS],
 )
-def test_canonical_from_editor_document(x, dict_options, markdown_options, refuses):
+def test_canonical_from_editor_document(x, dict_options, markdown_options, refuses, normalized):
     if refuses:
         with pytest.raises(tm.InvalidNodeError) as error:
             tm.from_dict(x, strict="content", **dict_options)
@@ -341,6 +327,8 @@ def test_canonical_from_editor_document(x, dict_options, markdown_options, refus
     if "base" in dict_options:
         _base_spelling(document, dict_options["base"].to_markdown())
     _canonical_roundtrip(document, **markdown_options)
+    if normalized is not None:
+        assert document.to_dict() == normalized
 
 
 def _three_run_documents():

@@ -17,6 +17,7 @@ struct CodeInfo {
     const char* field;
 };
 
+std::string_view fence_info_word(std::string_view line);
 CodeInfo code_info(const AttrList& attrs);
 const AttrValue* carrier_body(const NodeSpec& spec, const AttrList& attrs);
 const AttrValue* fence_body(const NodeSpec& spec, const AttrList& attrs, bool table_cell);

@@ -84,7 +84,7 @@ def test_block_tag_lines_in_list_items(schema, html, tight):
 
 @pytest.mark.parametrize("html", [True, False])
 def test_four_space_indented_block_tag_is_code(schema, html):
-    expected = document({"type": "codeBlock", "content": [text("<embed/>\n")]})
+    expected = document({"type": "codeBlock", "content": [text("<embed/>")]})
     assert tm.from_markdown("    <embed/>", schema=schema, html=html).to_dict() == expected
 
 

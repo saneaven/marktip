@@ -107,6 +107,32 @@ std::size_t Document::append_child(std::size_t parent, Node node) {
     return index;
 }
 
+std::string plain_text(const Document& document, const Node& node) {
+    const std::string& type = node.type;
+    if (type == "text") {
+        return node.text;
+    }
+    if (type == "hardBreak") {
+        return "\n";
+    }
+    // An explicit payload wins even when empty.
+    // Its absence lets content supply the fallback.
+    if (type == "htmlInline" || type == "htmlBlock") {
+        if (find_attr(node.attrs, "html") != nullptr) {
+            return attr_string(node.attrs, "html");
+        }
+    } else if (type == "image") {
+        if (find_attr(node.attrs, "alt") != nullptr) {
+            return attr_string(node.attrs, "alt");
+        }
+    }
+    std::string out;
+    for (std::size_t child : node.content) {
+        out += plain_text(document, document.node(child));
+    }
+    return out;
+}
+
 void normalize_task_list(Document& document, std::size_t index) {
     Node& list = document.node(index);
     if (list.type != "bulletList") {
@@ -150,12 +176,6 @@ void order_marks(std::vector<Mark>& marks, const Schema& schema) {
     // The lift maintains this order, so its nodes need only a linear check here.
     if (!std::is_sorted(marks.begin(), marks.end(), before)) {
         std::stable_sort(marks.begin(), marks.end(), before);
-    }
-}
-
-void Document::order_marks() {
-    for (Node& node : nodes_) {
-        marktip::order_marks(node.marks, *schema_);
     }
 }
 
