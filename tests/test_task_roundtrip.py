@@ -92,7 +92,7 @@ def test_ordered_task_item_starting_with_a_quote_keeps_the_checkbox_on_its_own_l
 
 @pytest.mark.parametrize("paragraph, markdown", [
     (p(text("first\nsecond")), "- [x] first\n  second"),
-    (p(text("first"), {"type": "hardBreak"}, text("second")), "- [x] first  \n  second"),
+    (p(text("first"), {"type": "hardBreak"}, text("second")), "- [x] first\\\n  second"),
 ])
 def test_task_item_multiline_paragraphs_keep_soft_and_hard_breaks(paragraph, markdown):
     assert_roundtrip(doc(task_list(task_item(True, paragraph))), markdown)

@@ -98,7 +98,7 @@ def test_raw_html_in_a_list_ends_before_the_next_carrier(level, wrapped, followi
 ])
 def test_textblock_continuation_line_markers_stay_text(html, level, marker, escaped):
     ast = doc(node("lead", text("first"), node("hardBreak"), text(f"{marker} next")))
-    roundtrip(ast, schema(), f"<lead>first  \n{escaped} next</lead>", html, level)
+    roundtrip(ast, schema(), f"<lead>first\\\n{escaped} next</lead>", html, level)
 
 
 @pytest.mark.parametrize("html", HTML)

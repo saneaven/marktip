@@ -186,7 +186,7 @@ def test_written_tags_roundtrip_in_core_containers(html, level, context):
 def test_written_breaks_keep_their_tag_marks(html, level):
     tagged = mark("underline")
     ast = doc(p(text("a", tagged), {"type": "hardBreak", "marks": [tagged]}, text("b", tagged)))
-    roundtrip(ast, underline_schema(), "<u>a  \nb</u>", html, level)
+    roundtrip(ast, underline_schema(), "<u>a\\\nb</u>", html, level)
     ast = doc({"type": "table", "attrs": {"colCount": 1}, "content": [{"type": "tableRow", "content": [
         {"type": "tableHeader", "content": [p(text("a", tagged),
                                                 {"type": "hardBreak", "marks": [tagged]}, text("b", tagged))]},

@@ -257,7 +257,7 @@ def test_textblock_body_keeps_inline_marks_and_hard_breaks(html, level):
     schema = tm.Schema(nodes=[tm.NodeSpec("summary", kind="block", content="inline*")],
                        marks=[tm.MarkSpec("underline", tag="u")])
     child = node("summary", text("title", mark("bold"), mark("underline")), node("hardBreak"), text("body"))
-    roundtrip(doc(child), schema, "<summary><u>**title**</u>  \nbody</summary>", html, level)
+    roundtrip(doc(child), schema, "<summary><u>**title**</u>\\\nbody</summary>", html, level)
 
 
 @pytest.mark.parametrize("html", HTML)

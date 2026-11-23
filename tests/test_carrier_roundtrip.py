@@ -190,6 +190,16 @@ def test_inline_math_uses_dollars_in_inline_contexts(html, level, context):
     roundtrip(ast, inline_schema(), markdown, html, level)
 
 
+def test_autolink_escape_before_inline_math():
+    schema = inline_schema()
+    markdown = r"**https\://e.com.**$x$"
+    document = tm.from_markdown(markdown, schema=schema)
+
+    written = document.to_markdown(canonical=True)
+    assert written == markdown
+    assert tm.from_markdown(written, schema=schema) == document
+
+
 @pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize("body", (r"\alpha + \beta", "x &amp; y", " x + y ", "x\\\\"))
@@ -252,7 +262,7 @@ def test_inline_math_uses_textblock_tags_as_written_boundaries(html):
 def test_inline_math_between_hard_breaks_keeps_its_line_boundaries(html):
     ast = doc(p(text("before"), node("hardBreak"), node("inlineMath", attrs={"latex": "x"}),
                 node("hardBreak"), text("after")))
-    roundtrip(ast, inline_schema(), "before  \n$x$  \nafter", html, "exact")
+    roundtrip(ast, inline_schema(), "before\\\n$x$\\\nafter", html, "exact")
 
 
 @pytest.mark.parametrize("html", HTML)

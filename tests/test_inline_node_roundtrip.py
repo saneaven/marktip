@@ -244,7 +244,7 @@ def test_hard_breaks_at_container_and_atom_edges_are_preserved(html, level):
     schema = inline_schema()
     br = node("hardBreak")
     ast = doc(p(text("a"), br, node("mention"), br, node("wrap", br, text("x"), br), br, text("b")))
-    roundtrip(ast, schema, "a  \n<mention/>  \n<wrap>  \nx  \n</wrap>  \nb", html, level)
+    roundtrip(ast, schema, "a\\\n<mention/>\\\n<wrap>\\\nx\\\n</wrap>\\\nb", html, level)
 
 
 @pytest.mark.parametrize("html", HTML)

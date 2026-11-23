@@ -110,85 +110,253 @@ std::string escape_dollars(std::string value) {
     return out;
 }
 
-std::string escape_autolinks(std::string_view value) {
-    // Raw <a> tags do not suppress MD4C's permissive autolinks inside them.
-    std::string out;
-    out.reserve(value.size());
-    for (std::size_t i = 0; i < value.size(); ++i) {
-        char ch = value[i];
-        if (ch == '@' || (ch == ':' && value.substr(i + 1, 2) == "//") ||
-            (ch == '.' && i >= 3 && value.substr(i - 3, 3) == "www")) {
-            out.push_back('\\');
-        }
-        out.push_back(ch);
-    }
-    return out;
+bool ascii_alnum(char ch) {
+    return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
 }
 
-// Escape characters that would start a new block construct at the beginning of a
-// paragraph line ('-', '+', '>', setext underlines, ordered-list markers).
-std::string escape_line_starts(const std::string& value) {
-    std::vector<std::string> lines = split_lines(value);
+bool autolink_space(std::string_view value, std::size_t at) {
+    unsigned char ch = value[at];
+    if (ch < 0x80) {
+        return ch == ' ' || (ch >= '\t' && ch <= '\r');
+    }
+    if (ch == 0xc2) {
+        return value.substr(at, 2) == u8"\u00a0";
+    }
+    std::string_view bytes = value.substr(at, 3);
+    return bytes == u8"\u1680" || (bytes >= u8"\u2000" && bytes <= u8"\u200a") ||
+           bytes == u8"\u202f" || bytes == u8"\u205f" || bytes == u8"\u3000";
+}
+
+bool autolink_left_boundary(std::string_view value, std::size_t begin) {
+    if (begin == 0 || std::string_view("({[").find(value[begin - 1]) != std::string_view::npos) {
+        return true;
+    }
+    std::size_t previous = begin - 1;
+    while (previous > 0 && (static_cast<unsigned char>(value[previous]) & 0xc0) == 0x80) {
+        --previous;
+    }
+    return autolink_space(value, previous);
+}
+
+bool autolink_candidate(std::string_view value, std::size_t trigger) {
+    std::size_t begin = trigger;
+    std::size_t end = trigger + 1;
+    bool email = value[trigger] == '@';
+    if (email) {
+        if (begin == 0 || value.size() - trigger <= 3 ||
+            !ascii_alnum(value[begin - 1]) || !ascii_alnum(value[end])) {
+            return false;
+        }
+        while (begin > 0) {
+            if (ascii_alnum(value[begin - 1])) {
+                --begin;
+            } else if (begin >= 2 && ascii_alnum(value[begin - 2]) && ascii_alnum(value[begin]) &&
+                       std::string_view(".-_+").find(value[begin - 1]) != std::string_view::npos) {
+                --begin;
+            } else {
+                break;
+            }
+        }
+    } else if (value[trigger] == ':') {
+        if (value.substr(end, 2) != "//") {
+            return false;
+        }
+        for (std::string_view scheme : {"http", "https", "ftp"}) {
+            if (trigger >= scheme.size() && value.substr(trigger - scheme.size(), scheme.size()) == scheme) {
+                begin = trigger - scheme.size();
+                break;
+            }
+        }
+        if (begin == trigger) {
+            return false;
+        }
+        end += 2;
+    } else {
+        if (trigger < 3 || value.substr(trigger - 3, 3) != "www") {
+            return false;
+        }
+        begin = trigger - 3;
+    }
+    if (!autolink_left_boundary(value, begin)) {
+        return false;
+    }
+
+    // MD4C's host, path and query rules apply to the escaped bytes.
+    // Escaped parentheses and '#' stop the scan before a query bracket or fragment.
+    struct Part {
+        char prefix;
+        char separator;
+        std::string_view inside;
+        std::string_view anywhere;
+        std::size_t minimum;
+    };
+    constexpr Part parts[] = {
+        {'\0', '.', ".-_", "", 2},
+        {'/', '/', "/._", "+-", 0},
+        {'?', '&', "&.-+_=", "", 1},
+    };
+    for (const Part& part : parts) {
+        auto accepts = [&](char ch) {
+            return ascii_alnum(ch) || part.anywhere.find(ch) != std::string_view::npos;
+        };
+        if (part.prefix != '\0') {
+            if (end == value.size() || value[end] != part.prefix ||
+                (part.minimum != 0 && (end + 1 == value.size() || !ascii_alnum(value[end + 1])))) {
+                continue;
+            }
+            ++end;
+        }
+        std::size_t components = 0;
+        std::size_t length = 0;
+        while (end < value.size()) {
+            char ch = value[end];
+            if (accepts(ch)) {
+                components = std::max<std::size_t>(1, components);
+                ++length;
+            } else if (length != 0 && ch == part.separator && end + 1 < value.size() && accepts(value[end + 1])) {
+                ++components;
+                length = 0;
+            } else if (part.inside.find(ch) != std::string_view::npos && ascii_alnum(value[end - 1]) &&
+                       end + 1 < value.size() && ascii_alnum(value[end + 1])) {
+                ++length;
+            } else {
+                break;
+            }
+            ++end;
+        }
+        if (part.prefix == '/' && end < value.size() && value[end] == '/') {
+            ++end;
+        }
+        if (components < part.minimum) {
+            return false;
+        }
+        if (email) {
+            break;
+        }
+    }
+    return end == value.size() || autolink_space(value, end) ||
+           std::string_view(")}].!?,;").find(value[end]) != std::string_view::npos;
+}
+
+void escape_autolinks(std::string& run, std::size_t start = 0) {
+    std::string_view value = std::string_view(run).substr(start);
+    std::size_t www = value.find("www.");
+    if (www != std::string_view::npos) {
+        www += 3;
+    }
+    std::size_t trigger = std::min({value.find('@'), value.find("://"), www});
+    if (trigger == std::string_view::npos) {
+        return;
+    }
+
+    std::string escaped;
+    std::size_t begin = 0;
+    for (; trigger != std::string_view::npos; trigger = value.find_first_of("@:.", trigger + 1)) {
+        if (autolink_candidate(value, trigger)) {
+            if (escaped.empty()) {
+                escaped.reserve(value.size() + 1);
+            }
+            escaped.append(value.substr(begin, trigger - begin));
+            escaped.push_back('\\');
+            begin = trigger;
+        }
+    }
+    if (!escaped.empty()) {
+        escaped.append(value.substr(begin));
+        run.replace(start, std::string::npos, escaped);
+    }
+}
+
+// Stored text has no NUL, and the marker's nondigit after adjacent NULs keeps it distinct from math tokens through escaping.
+constexpr std::string_view kHtmlLineMarker("\0\0h\0", 4);
+
+// Escape block starts on paragraph lines,
+// including list markers, quote markers, setext underlines and table delimiter rows.
+std::string escape_line_starts(std::string value) {
     std::string out;
-    for (std::size_t li = 0; li < lines.size(); ++li) {
-        std::string& line = lines[li];
+    std::size_t copied = 0;
+    std::size_t marker = value.find(kHtmlLineMarker);
+    auto copy_until = [&](std::size_t end) {
+        while (marker < end) {
+            out.append(value, copied, marker - copied);
+            copied = marker + kHtmlLineMarker.size();
+            marker = value.find(kHtmlLineMarker, copied);
+        }
+        out.append(value, copied, end - copied);
+        copied = end;
+    };
+    std::size_t next_line = 0;
+    for (std::size_t li = 0; next_line < value.size(); ++li) {
+        std::size_t line_begin = next_line;
+        std::size_t newline = value.find('\n', line_begin);
+        next_line = newline == std::string::npos ? value.size() : newline + 1;
+        std::string_view line = std::string_view(value).substr(line_begin, newline - line_begin);
+        if (line.substr(0, kHtmlLineMarker.size()) == kHtmlLineMarker) {
+            continue;
+        }
         std::size_t start = 0;
         while (start < line.size() && start < 3 && line[start] == ' ') {
             ++start;
         }
+        bool table_delimiter = false;
+        if (li == 1) {
+            std::size_t first = line.find_first_not_of(" \t");
+            if (first != std::string_view::npos && (line[first] == '|' || line[first] == ':')) {
+                start = first;
+                table_delimiter = true;
+            }
+        }
+        std::size_t escape = std::string_view::npos;
         if (start < line.size()) {
             char first = line[start];
-            if (first == '-' || first == '+' || first == '>') {
-                line.insert(start, 1, '\\');
+            if (table_delimiter || first == '-' || first == '+' || first == '>') {
+                escape = start;
             } else if (first == '=') {
-                if (line.find_first_not_of("= \t", start) == std::string::npos) {
-                    line.insert(start, 1, '\\');
+                if (line.find_first_not_of("= \t", start) == std::string_view::npos) {
+                    escape = start;
                 }
             } else if (first >= '0' && first <= '9') {
                 std::size_t digits_end = line.find_first_not_of("0123456789", start);
-                if (digits_end != std::string::npos && digits_end - start <= 9 && line[digits_end] == '.' &&
+                if (digits_end != std::string_view::npos && digits_end - start <= 9 && line[digits_end] == '.' &&
                     (digits_end + 1 == line.size() || line[digits_end + 1] == ' ' ||
                      line[digits_end + 1] == '\t')) {
-                    line.insert(digits_end, 1, '\\');
+                    escape = digits_end;
                 }
             }
         }
-        if (li != 0) {
-            out.push_back('\n');
+        if (escape != std::string_view::npos) {
+            if (out.empty()) {
+                out.reserve(value.size() + 1);
+            }
+            copy_until(line_begin + escape);
+            out.push_back('\\');
         }
-        out += line;
     }
+    if (out.empty()) {
+        if (marker == std::string::npos) {
+            return value;
+        }
+        out.reserve(value.size());
+    }
+    copy_until(value.size());
     return out;
 }
 
-std::string escape_link_destination(std::string_view value) {
-    bool needs_angle = false;
-    for (char ch : value) {
-        if (ch == ' ' || ch == '\t' || ch == '(' || ch == ')') {
-            needs_angle = true;
-            break;
-        }
-    }
-
+std::string escape_link_destination(std::string_view value, bool has_title) {
+    bool needs_angle = (value.empty() && has_title) || value.find_first_of(" \t()") != std::string_view::npos;
     std::string out;
+    out.reserve(value.size());
     if (needs_angle) {
         out.push_back('<');
-        for (char ch : value) {
-            if (ch == '<' || ch == '>') {
-                out.push_back('\\');
-            }
-            out.push_back(ch);
-        }
-        out.push_back('>');
-        return out;
     }
-
-    out.reserve(value.size());
     for (char ch : value) {
-        if (ch == ')' || ch == '\\') {
+        if (ch == '\\' || ch == '`' || (needs_angle && (ch == '<' || ch == '>'))) {
             out.push_back('\\');
         }
         out.push_back(ch);
+    }
+    if (needs_angle) {
+        out.push_back('>');
     }
     return out;
 }
@@ -209,7 +377,8 @@ std::string code_span(std::string_view value) {
     std::size_t ticks = std::max<std::size_t>(1, max_run(value, '`') + 1);
     std::string fence(ticks, '`');
     bool pad = !value.empty() && (value.front() == '`' || value.back() == '`' ||
-                                  value.front() == ' ' || value.back() == ' ');
+                                  value.front() == ' ' || value.back() == ' ') &&
+               value.find_first_not_of(' ') != std::string_view::npos;
     return fence + (pad ? " " : "") + std::string(value) + (pad ? " " : "") + fence;
 }
 
@@ -244,7 +413,7 @@ std::string apply_marks(std::string rendered, const std::vector<Mark>& marks, co
             }
             std::string href = mark_attr_string(*it, "href");
             std::string title = mark_attr_string(*it, "title");
-            rendered = "[" + rendered + "](" + escape_link_destination(href) +
+            rendered = "[" + rendered + "](" + escape_link_destination(href, !title.empty()) +
                        (title.empty() ? "" : " \"" + escape_title(title) + "\"") + ")";
         } else {
             rendered = open_tag(schema, *it) + rendered + close_tag(schema, *it);
@@ -429,7 +598,7 @@ std::string close_delimiter(const Mark& mark, const Schema& schema) {
         }
         std::string href = mark_attr_string(mark, "href");
         std::string title = mark_attr_string(mark, "title");
-        return "](" + escape_link_destination(href) +
+        return "](" + escape_link_destination(href, !title.empty()) +
                (title.empty() ? "" : " \"" + escape_title(title) + "\"") + ")";
     }
     return close_tag(schema, mark);
@@ -569,28 +738,21 @@ private:
     bool extended_;
     bool node_forms_;
     bool math_;
+    bool mark_html_line_starts_ = false;
     std::vector<MathToken> math_tokens_;
 
-    std::string escape_text(std::string_view value, bool table_cell, bool tag_link = false) {
+    std::string escape_text(std::string_view value, bool table_cell) {
         std::string escaped = escape_inline(value, table_cell);
-        if (tag_link) {
-            escaped = escape_autolinks(escaped);
-        }
         if (math_) {
             escaped = escape_dollars(std::move(escaped));
         }
         return escaped;
     }
 
-    bool has_tag_link(const std::vector<Mark>& marks) const {
-        if (schema_.has_link_tag()) {
-            for (const Mark& mark : marks) {
-                if (mark.type == "link") {
-                    return uses_tag_form(mark, *schema_.mark(mark.type));
-                }
-            }
-        }
-        return false;
+    bool has_markdown_link(const std::vector<Mark>& marks) const {
+        return std::any_of(marks.begin(), marks.end(), [&](const Mark& mark) {
+            return mark.type == "link" && (!schema_.has_link_tag() || !uses_tag_form(mark, *schema_.mark(mark.type)));
+        });
     }
 
     std::string math_token(const Node& node, const NodeSpec& spec) {
@@ -863,6 +1025,16 @@ private:
         return out;
     }
 
+    std::string render_textblock(const Node& node, InlineContext ctx, const NodeSpec* spec = nullptr) {
+        mark_html_line_starts_ = true;
+        std::string rendered = render_inlines(node, ctx);
+        mark_html_line_starts_ = false;
+        if (spec != nullptr) {
+            rendered = open_node_tag(*spec, node.attrs) + rendered + close_node_tag(*spec, node.attrs);
+        }
+        return escape_line_starts(std::move(rendered));
+    }
+
     std::string render_declared(const Node& node, const NodeSpec& spec, int indent,
                                 InlineContext ctx = InlineContext::Default) {
         if (spec.shape == Shape::BlockContainer) {
@@ -872,8 +1044,7 @@ private:
             return join_block_pieces(std::move(pieces), false);
         }
         if (spec.shape == Shape::TextBlock) {
-            return add_indent(escape_line_starts(open_node_tag(spec, node.attrs) + render_inlines(node, ctx) +
-                                                close_node_tag(spec, node.attrs)), indent);
+            return add_indent(render_textblock(node, ctx, &spec), indent);
         }
         if (spec.shape == Shape::BlockAtom) {
             if (const AttrValue* body = fence_body(spec, node.attrs, ctx == InlineContext::TableCell)) {
@@ -894,7 +1065,7 @@ private:
             return render_doc(node);
         }
         if (type == "paragraph") {
-            return add_indent(escape_line_starts(render_inlines(node)), indent);
+            return add_indent(render_textblock(node, InlineContext::Default), indent);
         }
         if (type == "heading") {
             long long level = std::clamp<long long>(attr_int(node.attrs, "level", 1), 1, 6);
@@ -1060,17 +1231,29 @@ private:
         return render_fenced_code(plain_text(node), code_info(node.attrs).value);
     }
 
-    std::string render_fenced_code(std::string code, std::string language) {
-        // A backtick inside the info string closes a backtick fence,
-        // so those switch to tildes — which have no such restriction, and lose nothing.
-        // The parser reaches this too: "~~~py`x" is a valid tilde fence,
-        // and its info string comes back out through here.
-        char fence_char = language.find('`') == std::string::npos ? '`' : '~';
+    std::string render_fenced_code(std::string code, std::string info) {
+        // A backtick in the info string requires a tilde fence.
+        char fence_char = info.find('`') == std::string::npos ? '`' : '~';
         std::size_t fence_len = std::max<std::size_t>(3, max_run(code, fence_char) + 1);
         std::string fence(fence_len, fence_char);
 
-        std::string out = fence + language + "\n" + code;
-        if (out.empty() || out.back() != '\n') {
+        std::string out;
+        out.reserve(2 * fence_len + info.size() + code.size() + 2);
+        out += fence;
+        // A leading tilde in the info string would extend a tilde fence.
+        if (!info.empty() && info.front() == fence_char) {
+            out.push_back(' ');
+        }
+        // MD4C decodes backslash escapes in fence attrs.
+        for (char ch : info) {
+            if (ch == '\\') {
+                out.push_back('\\');
+            }
+            out.push_back(ch);
+        }
+        out.push_back('\n');
+        out += code;
+        if (out.back() != '\n') {
             out.push_back('\n');
         }
         out += fence;
@@ -1175,15 +1358,14 @@ private:
                                       const std::vector<Mark>& enclosing) {
         const std::string& type = node.type;
         if (type == "text") {
-            bool tag_link = !in_code && has_tag_link(node.marks);
             if (ctx == InlineContext::Heading && node.text.find('\n') != std::string::npos) {
                 // ATX headings are single-line; literal newlines (e.g. carried
                 // over from setext input) demote to spaces.
                 std::string flattened = node.text;
                 std::replace(flattened.begin(), flattened.end(), '\n', ' ');
-                return in_code ? flattened : escape_text(flattened, false, tag_link);
+                return in_code ? flattened : escape_text(flattened, false);
             }
-            return in_code ? node.text : escape_text(node.text, ctx == InlineContext::TableCell, tag_link);
+            return in_code ? node.text : escape_text(node.text, ctx == InlineContext::TableCell);
         }
         if (type == "hardBreak") {
             if (ctx == InlineContext::TableCell) {
@@ -1192,7 +1374,7 @@ private:
             if (ctx == InlineContext::Heading) {
                 return " ";
             }
-            return "  \n";
+            return "\\\n";
         }
         if (type == "image") {
             if (node_forms_) {
@@ -1203,11 +1385,27 @@ private:
             std::string src = attr_string(node.attrs, "src");
             std::string alt = attr_string(node.attrs, "alt", plain_text(node));
             std::string title = attr_string(node.attrs, "title");
-            return "![" + escape_text(alt, ctx == InlineContext::TableCell) + "](" + escape_link_destination(src) +
+            return "![" + escape_text(alt, ctx == InlineContext::TableCell) + "](" +
+                   escape_link_destination(src, !title.empty()) +
                    (title.empty() ? "" : " \"" + escape_title(title) + "\"") + ")";
         }
         if (type == "htmlInline") {
-            return attr_string(node.attrs, "html", plain_text(node));
+            std::string html = attr_string(node.attrs, "html", plain_text(node));
+            std::size_t newline = mark_html_line_starts_ ? html.find('\n') : std::string::npos;
+            if (newline == std::string::npos || newline + 1 == html.size()) {
+                return html;
+            }
+            std::string marked;
+            marked.reserve(html.size() + kHtmlLineMarker.size());
+            std::size_t start = 0;
+            do {
+                marked.append(html, start, newline + 1 - start);
+                marked += kHtmlLineMarker;
+                start = newline + 1;
+                newline = html.find('\n', start);
+            } while (newline != std::string::npos && newline + 1 < html.size());
+            marked.append(html, start, std::string::npos);
+            return marked;
         }
         if (node_forms_) {
             const NodeSpec& spec = *schema_.node(type);
@@ -1253,12 +1451,7 @@ private:
             return render_inline(node, ctx);
         }
 
-        return render_inline_segment(node.content, ctx, enclosing);
-    }
-
-    std::string render_inline_segment(const std::vector<std::size_t>& content, InlineContext ctx,
-                                      const std::vector<Mark>& enclosing) {
-        std::vector<InlineRun> runs = build_runs(content, ctx, enclosing);
+        std::vector<InlineRun> runs = build_runs(node.content, ctx, enclosing);
         expel_boundary_whitespace(runs);
         return emit_runs(runs, schema_);
     }
@@ -1286,8 +1479,11 @@ private:
             bool in_code = has_mark(marks, "code");
             bool code_node = in_code && node_forms_ && declared_inline_spec(first) != nullptr;
             in_code = in_code && !code_node;
+            bool escape_links = !in_code && !has_markdown_link(marks) && !has_markdown_link(enclosing);
             std::size_t group_end = code_node ? i + 1 : content.size();
+            InlineRun run;
             std::string group;
+            std::size_t text_begin = 0;
             std::size_t j = i;
             while (j < group_end) {
                 const Node& child = document_.node(content[j]);
@@ -1297,11 +1493,20 @@ private:
                 if (in_code && node_forms_ && declared_inline_spec(child) != nullptr) {
                     break;
                 }
+                bool ends_text = escape_links && child.type != "text";
+                if (ends_text) {
+                    escape_autolinks(group, text_begin);
+                }
                 group += render_inline_content(child, ctx, in_code, enclosing);
+                if (ends_text) {
+                    text_begin = group.size();
+                }
                 ++j;
             }
+            if (escape_links) {
+                escape_autolinks(group, text_begin);
+            }
 
-            InlineRun run;
             for (const Mark& mark : marks) {
                 if (mark.type != "code") {
                     run.marks.push_back(mark);
@@ -1327,6 +1532,9 @@ private:
             in_code = false;
         }
         std::string rendered = render_inline_content(node, ctx, in_code, {});
+        if (!in_code && node.type == "text" && !has_markdown_link(node.marks)) {
+            escape_autolinks(rendered);
+        }
         std::vector<Mark> ordered;
         const std::vector<Mark>* marks = &node.marks;
         if (extended_) {

@@ -31,7 +31,7 @@ def test_serialize_hand_written_tiptap_doc():
         ],
     }
 
-    assert tm.from_dict(ast).to_markdown(canonical=True) == "## API\n\n*Fast* **parser** at [home](https://example.com)  \n![Logo](logo.png)"
+    assert tm.from_dict(ast).to_markdown(canonical=True) == "## API\n\n*Fast* **parser** at [home](https://example.com)\\\n![Logo](logo.png)"
 
 
 def test_serialize_lists_code_and_table():
@@ -94,6 +94,37 @@ def test_serialize_escapes_raw_html_and_entities_in_text():
     }
 
     assert tm.from_markdown(tm.from_dict(ast).to_markdown(canonical=True)).to_dict() == ast
+
+
+@pytest.mark.parametrize(
+    "line", ("-b", "+b", "= =", "| - | - |"), ids=("dash", "plus", "setext", "table-delimiter"),
+)
+def test_canonical_preserves_line_starts_in_inline_html(line):
+    markdown = f"A <!-- a\n{line}\nc -->"
+    document = tm.from_markdown(markdown)
+
+    written = document.to_markdown(canonical=True)
+    assert written == markdown
+    assert tm.from_markdown(written) == document
+
+
+def test_canonical_preserves_line_starts_in_bold_inline_html():
+    markdown = "A **a<!-- a\n-b\nc -->z**"
+    document = tm.from_markdown(markdown)
+
+    written = document.to_markdown(canonical=True)
+    assert written == markdown
+    assert tm.from_markdown(written) == document
+
+
+def test_canonical_preserves_line_starts_in_inline_container_html():
+    schema = tm.Schema(nodes=[tm.NodeSpec("wrap", "inline", content="inline*")])
+    markdown = "A <wrap><!-- a\n= =\nc --></wrap>"
+    document = tm.from_markdown(markdown, schema=schema)
+
+    written = document.to_markdown(canonical=True)
+    assert written == markdown
+    assert tm.from_markdown(written, schema=schema) == document
 
 
 def test_serialize_hard_break_in_table_cell_as_br():

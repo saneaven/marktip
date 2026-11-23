@@ -146,7 +146,7 @@ def test_handwritten_empty_paragraph_tag_uses_general_textblock_reading(html):
 @pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize("children, written", [
-    ((text("a"), node("hardBreak"), text("b")), '<h2 textAlign="center">a  \nb</h2>'),
+    ((text("a"), node("hardBreak"), text("b")), '<h2 textAlign="center">a\\\nb</h2>'),
     ((text("a\nb"),), '<h2 textAlign="center">a\nb</h2>'),
 ])
 def test_heading_with_a_set_overlay_preserves_breaks_and_newlines(html, level, children, written):
@@ -197,7 +197,7 @@ def test_link_tag_attrs_use_markdown_order_then_overlay_declaration_order(html, 
 @pytest.mark.parametrize("value, escaped", [("https://e.com/docs", r"https\://e.com/docs"),
                                            ("www.example.com", r"www\.example.com"),
                                            ("support@example.com", r"support\@example.com")])
-def test_tag_link_text_escapes_autolink_triggers_and_outside_text_keeps_its_bytes(html, value, escaped):
+def test_tag_link_and_plain_text_escape_autolink_triggers(html, value, escaped):
     schema = tm.Schema(core_attrs={"link": {"target": tm.Attr(str)}})
     link = mark("link", href="https://example.com", target="_self")
     ast = doc(p(text("before "), text(f"visit {value} today", link, mark("bold")), text(" after")))
@@ -205,7 +205,18 @@ def test_tag_link_text_escapes_autolink_triggers_and_outside_text_keeps_its_byte
     parsed = roundtrip(ast, schema, markdown, html, "exact")
     assert parsed.to_dict()["content"][0]["content"][1]["marks"] == [mark("bold"), link]
     outside = doc(p(text(f"visit {value} today")))
-    assert tm.from_dict(outside, schema=schema).to_markdown(canonical=True) == tm.from_dict(outside).to_markdown(canonical=True)
+    written = tm.from_dict(outside, schema=schema).to_markdown(canonical=True)
+    assert written == tm.from_dict(outside).to_markdown(canonical=True) == f"visit {escaped} today"
+
+
+def test_autolink_escape_inside_cjk_tag_link():
+    schema = tm.Schema(core_attrs={"link": {"target": tm.Attr(str)}})
+    markdown = r'<a href="/target" target="_self">가*https\://e.com.*나</a>'
+    document = tm.from_markdown(markdown, schema=schema, cjk_friendly=True)
+
+    written = document.to_markdown(canonical=True)
+    assert written == markdown
+    assert tm.from_markdown(written, schema=schema, cjk_friendly=True) == document
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -223,8 +234,21 @@ def test_markdown_form_link_text_keeps_its_existing_bytes_when_tag_form_is_activ
     schema = tm.Schema(core_attrs={"link": {"target": tm.Attr(str, default="_blank")}})
     link = mark("link", href="https://example.com")
     ast = doc(p(text(f"visit {value} today", link)))
-    baseline = tm.from_dict(ast, strict="exact").to_markdown(canonical=True)
-    roundtrip(ast, schema, baseline, html, "exact")
+    markdown = f"[visit {value} today](https://example.com)"
+    assert tm.from_dict(ast, strict="exact").to_markdown(canonical=True) == markdown
+    roundtrip(ast, schema, markdown, html, "exact")
+
+
+@pytest.mark.parametrize("html", HTML)
+@pytest.mark.parametrize("child, markdown", [
+    (text("see http://x.com", mark("link", href="u")), "[see http://x.com](u)"),
+    (text("mail a@b.com now", mark("link", href="u")), "[mail a@b.com now](u)"),
+    (text("go www.x.com now", mark("link", href="u")), "[go www.x.com now](u)"),
+    (text("see http://x.com", mark("bold"), mark("link", href="u")), "**[see http://x.com](u)**"),
+    (node("image", attrs={"src": "u", "alt": "see http://x.com"}), "![see http://x.com](u)"),
+])
+def test_markdown_link_and_image_labels_keep_autolink_text_unescaped(html, child, markdown):
+    roundtrip(doc(p(child)), None, markdown, html, "exact")
 
 
 @pytest.mark.parametrize("html", HTML)

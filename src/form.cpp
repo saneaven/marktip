@@ -66,20 +66,23 @@ bool uses_tag_form(const Mark& mark, const MarkSpec& spec) {
 }
 
 CodeInfo code_info(const AttrList& attrs) {
-    std::string value = attr_string(attrs, "language");
-    const char* field = "language";
-    if (value.empty()) {
-        value = attr_string(attrs, "info");
-        field = "info";
-    }
-    // An info string is a single line.
-    // Everything after a newline would land in the code content on reparse,
-    // so the tail is dropped rather than emitted.
+    auto first_word = [](std::string_view line) {
+        constexpr auto whitespace = " \t\r\n\f\v";
+        std::size_t begin = line.find_first_not_of(whitespace);
+        if (begin == std::string_view::npos) {
+            return std::string_view {};
+        }
+        return line.substr(begin, line.find_first_of(whitespace, begin) - begin);
+    };
+    std::string language = attr_string(attrs, "language");
+    std::string info = attr_string(attrs, "info");
+    const char* field = language.empty() ? "info" : "language";
+
+    // A newline in the emitted info would move its tail into the code body.
+    info.erase(std::min(info.size(), info.find_first_of("\r\n")));
+    std::string value = language.empty() || language == first_word(info) ? std::move(info) : std::move(language);
     value.erase(std::min(value.size(), value.find_first_of("\r\n")));
-    constexpr const char* whitespace = " \t\r\n\f\v";
-    std::size_t begin = value.find_first_not_of(whitespace);
-    std::size_t end = begin == std::string::npos ? begin : value.find_first_of(whitespace, begin);
-    std::string word = begin == std::string::npos ? std::string {} : value.substr(begin, end - begin);
+    std::string word(first_word(value));
     return {std::move(value), std::move(word), field};
 }
 
