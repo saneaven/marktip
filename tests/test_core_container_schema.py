@@ -113,8 +113,8 @@ def test_any_list_owner_activates_ul_ol_and_li_tags(owner, html):
 def test_tagged_ordered_list_gets_default_start():
     schema = tm.Schema(core_attrs={"orderedList": {"tone": tm.Attr(str)}})
     document = tm.from_markdown('<ol tone="note">\n<li>\nitem\n</li>\n</ol>', schema=schema)
-    assert document.to_dict()["content"][0]["attrs"] == {"start": 1, "tone": "note"}
-    assert document.to_markdown(canonical=True).startswith('<ol start="1" tone="note">')
+    assert document.to_dict()["content"][0]["attrs"] == {"start": 1, "tight": True, "tone": "note"}
+    assert document.to_markdown(canonical=True).startswith('<ol start="1" tight="true" tone="note">')
 
 
 @pytest.mark.parametrize("owner", LIST_TYPES)

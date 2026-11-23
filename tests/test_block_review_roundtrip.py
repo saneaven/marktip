@@ -61,7 +61,7 @@ def roundtrip(ast, declarations, markdown, html, level):
 @pytest.mark.parametrize("level", LEVELS)
 def test_table_inside_a_list_container_ends_before_the_closing_tag(html, level):
     ast = loose_list(node("callout", table()))
-    markdown = "- <callout>\n  | h |\n  | --- |\n  | v |\n\n  </callout>\n\n- after"
+    markdown = "- <callout>\n\n  | h |\n  | --- |\n  | v |\n\n  </callout>\n\n- after"
     roundtrip(ast, schema(), markdown, html, level)
 
 
@@ -84,7 +84,7 @@ def test_raw_html_in_a_list_ends_before_the_next_carrier(level, wrapped, followi
     if following_atom:
         body += "<embed/>"
     if wrapped:
-        body = "<callout>\n  " + body + ("\n  " if following_atom else "") + "</callout>"
+        body = "<callout>\n\n  " + body + ("\n\n  " if following_atom else "") + "</callout>"
     roundtrip(ast, schema(), "- " + body + "\n\n- after", True, level)
 
 

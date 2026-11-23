@@ -167,7 +167,7 @@ def test_readable_fence_separates_tables_in_a_list_item(html):
     ast = doc(node("bulletList",
                    node("listItem", table, node("blockMath", attrs={"latex": "x"}), table),
                    node("listItem", p(text("after"))), attrs={"tight": False}))
-    markdown = ("- | h |\n  | --- |\n  | v |\n\n  ```math\n  x\n  ```\n"
+    markdown = ("- | h |\n  | --- |\n  | v |\n\n  ```math\n  x\n  ```\n\n"
                 "  | h |\n  | --- |\n  | v |\n\n- after")
     roundtrip(ast, block_schema(), markdown, html, "exact")
 

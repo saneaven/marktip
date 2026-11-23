@@ -165,6 +165,7 @@ public:
     bool has_declared_marks() const;
     bool has_declared_nodes() const;
     bool has_core_attrs() const;
+    bool has_node_forms() const;
     bool has_link_tag() const;
     bool has_link_uri() const;
     bool has_uri_attrs() const;

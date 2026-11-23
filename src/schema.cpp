@@ -147,6 +147,10 @@ bool Schema::has_core_attrs() const {
     return core_attrs_;
 }
 
+bool Schema::has_node_forms() const {
+    return declared_nodes_ || core_attrs_;
+}
+
 bool Schema::has_link_tag() const {
     return link_tag_;
 }

@@ -585,7 +585,7 @@ def test_an_edited_block_does_not_inherit_an_absent_attr():
     submitted = editor_dict(base.to_dict())
     submitted["content"][0]["content"][0]["content"][0]["content"][0]["text"] = "changed"
     document = tm.from_dict(submitted, base=base)
-    assert "tight" not in document.to_dict()["content"][0].get("attrs", {})
+    assert document.to_dict()["content"][0]["attrs"]["tight"] is True
     assert document.to_markdown() == "- changed\n- second"
     assert_canonical_readback(document)
 

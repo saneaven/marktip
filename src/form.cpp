@@ -16,6 +16,13 @@ bool has_tag_attr(const AttrList& attrs, const std::vector<AttrSpec>& specs) {
 
 namespace {
 
+bool omits_empty_paragraph(const Node& parent) {
+    std::string_view type = parent.type;
+    return parent.content.size() == 1 &&
+           (type == "listItem" || type == "taskItem" || type == "tableCell" || type == "tableHeader" ||
+            type == "blockquote");
+}
+
 bool different_cell_alignment(const Node& header, const Node& cell) {
     const AttrValue* column_align = find_attr(header.attrs, "align");
     const AttrValue* cell_align = find_attr(cell.attrs, "align");
@@ -96,6 +103,111 @@ bool uses_tag_form(const Document& document, const Node& node, const NodeSpec& s
 
 bool uses_tag_form(const Mark& mark, const MarkSpec& spec) {
     return !spec.core || (!spec.tag.empty() && has_tag_attr(mark.attrs, spec.attrs));
+}
+
+const NodeSpec* block_child_form(const Document& document, const Node& child, const Node* parent,
+                                 ContentModel inherited, bool table_cell) {
+    const NodeSpec& spec = *document.schema().node(child.type);
+    if (!spec.core) {
+        return &spec;
+    }
+    switch (inherited) {
+        case ContentModel::ListItems:
+        case ContentModel::OrderedListItems:
+        case ContentModel::TaskItems:
+            if (child.type == "listItem" || child.type == "taskItem") return &spec;
+            break;
+        case ContentModel::Rows:
+            if (child.type == "tableRow") return &spec;
+            break;
+        case ContentModel::Cells:
+            if (is_table_cell(child.type)) return &spec;
+            break;
+        default:
+            break;
+    }
+    if (parent != nullptr && child.type == "paragraph" && child.content.empty() && !spec.tag.empty() &&
+        !omits_empty_paragraph(*parent)) {
+        return &spec;
+    }
+    return (table_cell && uses_cell_textblock_tag(spec)) || uses_tag_form(document, child, spec) ? &spec : nullptr;
+}
+
+BlockKind block_kind(const Node& node, const NodeSpec* spec, const Schema& schema) {
+    if (spec != nullptr) {
+        if (spec->shape == Shape::TextBlock) {
+            return BlockKind::TextBlock;
+        }
+        if (spec->shape == Shape::BlockAtom) {
+            return BlockKind::TagLine;
+        }
+        if (spec->shape == Shape::InlineAtom || spec->shape == Shape::InlineContainer) {
+            return BlockKind::Inline;
+        }
+    }
+    const std::string& type = node.type;
+    if (type == "paragraph") {
+        return BlockKind::Paragraph;
+    }
+    if (type == "image") {
+        return schema.block_image() ? BlockKind::Image : BlockKind::Inline;
+    }
+    if (type == "text" || type == "hardBreak" || type == "htmlInline") {
+        return BlockKind::Inline;
+    }
+    if (type == "htmlBlock") {
+        return BlockKind::Html;
+    }
+    if (type == "blockquote") {
+        return BlockKind::Blockquote;
+    }
+    if (type == "table") {
+        return BlockKind::Table;
+    }
+    if (type == "heading") {
+        return BlockKind::Heading;
+    }
+    if (type == "codeBlock") {
+        return BlockKind::FencedCode;
+    }
+    if (type == "horizontalRule") {
+        return BlockKind::ThematicBreak;
+    }
+    if (type == "orderedList" && attr_int(node.attrs, "start", 1) != 1) {
+        return BlockKind::NonInterruptingList;
+    }
+    return BlockKind::Other;
+}
+
+// Blank lines separate blocks where Markdown requires them.
+bool needs_blank_between(BlockKind prev, BlockKind next) {
+    if (prev == BlockKind::Heading || prev == BlockKind::FencedCode || prev == BlockKind::ThematicBreak) {
+        return false;
+    }
+    if (prev == BlockKind::TextBlock || next == BlockKind::TextBlock) {
+        return true;
+    }
+    if (prev == BlockKind::Html ||
+        (prev == BlockKind::Table &&
+         (next == BlockKind::Heading || next == BlockKind::FencedCode || next == BlockKind::TagLine))) {
+        return true;
+    }
+    if (prev == BlockKind::TagLine || next == BlockKind::TagLine) {
+        return false;
+    }
+    if ((prev == BlockKind::Image && (next == BlockKind::Paragraph || next == BlockKind::Image)) ||
+        (prev == BlockKind::Paragraph && next == BlockKind::Image)) {
+        return false;
+    }
+    if (next == BlockKind::Paragraph || next == BlockKind::Image || next == BlockKind::Table ||
+        next == BlockKind::Html) {
+        return true;
+    }
+    if ((prev == BlockKind::Paragraph || prev == BlockKind::Image) &&
+        next == BlockKind::NonInterruptingList) {
+        return true;
+    }
+    return prev == BlockKind::Blockquote && next == BlockKind::Blockquote;
 }
 
 std::string_view fence_info_word(std::string_view line) {

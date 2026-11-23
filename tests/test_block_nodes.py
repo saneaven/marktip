@@ -197,14 +197,14 @@ def test_block_shapes_can_be_the_first_block_in_tight_and_loose_list_items(html,
     ast = doc(node(list_type,
                    node(item_type, shape_node(shape), attrs=first_attrs),
                    node(item_type, p(text("after")), attrs=second_attrs), attrs=list_attrs))
-    inside = carrier(shape).replace("\n\n", "\n") if shape == "container" else carrier(shape)
+    inside = carrier(shape).replace("\n\n", "\n") if tight else carrier(shape)
     lines = inside.split("\n")
     continuation = 2 if family == "task" else len(first_marker)
     if family == "task" and shape != "textblock":
         first = first_marker.rstrip() + "\n" + " " * continuation + lines[0]
     else:
         first = first_marker + lines[0]
-    first += "".join("\n" + " " * continuation + line for line in lines[1:])
+    first += "".join("\n" + (" " * continuation + line if line else "") for line in lines[1:])
     markdown = first + ("\n" if tight else "\n\n") + second_marker + "after"
     roundtrip(ast, block_schema(), markdown, html, level)
 
@@ -412,7 +412,7 @@ def test_implicit_details_roundtrip_in_quotes_and_loose_list_items(html, level, 
             attrs = {"tight": False}
         ast = doc(node(family, node(item, child, attrs=first_attrs),
                        node(item, p(text("after")), attrs=second_attrs), attrs=attrs))
-        lines = ("", "<summary>Title</summary>", "", "Body", "</details>")
+        lines = ("", "<summary>Title</summary>", "", "Body", "", "</details>")
         continuation = 2 if context == "task" else len(first_marker)
         opening = first_marker.rstrip() + "\n  <details>" if context == "task" else first_marker + "<details>"
         markdown = opening + "".join(

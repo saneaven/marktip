@@ -120,9 +120,7 @@ class _BaseSpellingMismatch(AssertionError):
     pass
 
 
-MARKDOWN_SPECS = ("markdown-html-true", "markdown-html-false")
 EDITOR_SPECS = ("editor",)
-ALL_SPECS = (*MARKDOWN_SPECS, *EDITOR_SPECS)
 RUN_MASKS = tuple("".join(str(mask) for mask in masks) for masks in product(range(8), repeat=3))
 
 # Keep the failing case IDs fixed so each completed plan item exposes its XPASSes.
@@ -138,22 +136,6 @@ XFAIL_GROUPS = (
       "bold-colon-before-word", "emphasis-on-hard-break"]),
     ("M4 removes the duplicate mark inside the container",
      ["bold-repeated-inside-inline-container", "link-repeated-inside-inline-container"]),
-    ("B5 normalizes a missing tight attr on lists with empty items",
-     _spec_ids(EDITOR_SPECS, "280 281 282 283 284 315")),
-    ("B5 removes the blank line after a heading that changes list tightness",
-     _spec_ids(ALL_SPECS, "300")),
-    ("B5 removes the blank line after a thematic break that changes list tightness",
-     ["tight-list-with-thematic-break"]),
-    ("B5 normalizes a missing tight attr or one that differs from the reader's",
-     _spec_ids(EDITOR_SPECS, """
-         4 5 7 9 38 42 57 60 61 94 99 108 109 175 235
-         254 255 256 257 258 259 260 262 263 264 265 267 268 270 271 273 274
-         276 277 278 279 286 287 288 290 291 292 293 294 295 296 297 298 299
-         301 302 303 305 306 307 308 309 310 311 312 313 314 316 317 318 319
-         320 321 322 323 324 325 326
-     """, "279 280") + ["missing-tight", "single-block-loose-list", "tight-list-needing-a-blank-line"]),
-    ("W8 preserves loose lists that are read back as tight",
-     _spec_ids(MARKDOWN_SPECS, "5 109 254 264 270 271 286 287 288 290") + ["loose-list-with-quote"]),
     ("E1 rejects touching emphasis that loses marks or becomes literal punctuation",
      ["touching-strike-inside-italic", "touching-crossed-bold-and-italic"], pytest.raises.Exception),
     # Masks use bold=1, italic=2 and strike=4 in run order.

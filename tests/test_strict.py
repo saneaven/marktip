@@ -632,6 +632,7 @@ def test_an_attr_markdown_cannot_carry_stays_in_the_document_and_out_of_the_mark
     )
     document = tm.from_dict(ast, strict=level)
     *blocks, _ = ast["content"]
+    blocks[1]["attrs"]["tight"] = True
     expected = doc(*blocks, {"type": "table", "attrs": {"colCount": 1}, "content": [
         {"type": "tableRow", "content": [node("tableHeader", colwidth=[100, 200], align="left")]},
     ]})

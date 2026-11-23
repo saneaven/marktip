@@ -444,11 +444,6 @@ enum class InlineContext { Default, TableCell, Heading };
 // Spelled roots also use "+" when both other bullet markers are occupied by neighbours.
 enum class ListFamily { None, Bullet, Ordered };
 
-enum class BlockKind {
-    Paragraph, TextBlock, Image, Inline, TagLine, Html, Blockquote, Table, Heading, FencedCode,
-    NonInterruptingList, Other
-};
-
 struct BlockPiece {
     BlockPiece(std::string&& text, BlockKind kind, ListFamily family)
         : text(std::move(text)), kind(kind), family(family) {}
@@ -691,7 +686,7 @@ public:
     explicit MarkdownWriter(const Document& document)
         : document_(document), schema_(document.schema()),
           extended_(schema_.has_declared_marks() || schema_.has_link_tag()),
-          node_forms_(schema_.has_declared_nodes() || schema_.has_core_attrs()),
+          node_forms_(schema_.has_node_forms()),
           math_(schema_.has_math()) {}
 
     std::string render(bool canonical) {
@@ -833,66 +828,6 @@ private:
         return join_block_pieces(block_pieces(node, indent, false), false);
     }
 
-    static bool omits_empty_paragraph(const Node& parent) {
-        std::string_view type = parent.type;
-        return parent.content.size() == 1 &&
-               (type == "listItem" || type == "taskItem" || type == "tableCell" || type == "tableHeader" ||
-                type == "blockquote");
-    }
-
-    const NodeSpec* declared_form(const Node& node, const Node* parent = nullptr,
-                                  InlineContext ctx = InlineContext::Default) const {
-        const NodeSpec& spec = *schema_.node(node.type);
-        bool tag_empty_paragraph = parent != nullptr && node.content.empty() && node.type == "paragraph" &&
-                                   !spec.tag.empty() && !omits_empty_paragraph(*parent);
-        bool tag_cell_textblock = ctx == InlineContext::TableCell && uses_cell_textblock_tag(spec);
-        return !spec.core || tag_empty_paragraph || tag_cell_textblock || uses_tag_form(document_, node, spec)
-                   ? &spec : nullptr;
-    }
-
-    BlockKind block_kind(const Node& node, const NodeSpec* spec) const {
-        if (spec != nullptr) {
-            if (spec->shape == Shape::TextBlock) {
-                return BlockKind::TextBlock;
-            }
-            if (spec->shape == Shape::BlockAtom) {
-                return BlockKind::TagLine;
-            }
-            if (spec->shape == Shape::InlineAtom || spec->shape == Shape::InlineContainer) {
-                return BlockKind::Inline;
-            }
-        }
-        const std::string& type = node.type;
-        if (type == "paragraph") {
-            return BlockKind::Paragraph;
-        }
-        if (type == "image") {
-            return schema_.block_image() ? BlockKind::Image : BlockKind::Inline;
-        }
-        if (type == "text" || type == "hardBreak" || type == "htmlInline") {
-            return BlockKind::Inline;
-        }
-        if (type == "htmlBlock") {
-            return BlockKind::Html;
-        }
-        if (type == "blockquote") {
-            return BlockKind::Blockquote;
-        }
-        if (type == "table") {
-            return BlockKind::Table;
-        }
-        if (type == "heading") {
-            return BlockKind::Heading;
-        }
-        if (type == "codeBlock") {
-            return BlockKind::FencedCode;
-        }
-        if (type == "orderedList" && attr_int(node.attrs, "start", 1) != 1) {
-            return BlockKind::NonInterruptingList;
-        }
-        return BlockKind::Other;
-    }
-
     std::vector<BlockPiece> block_pieces(const Node& node, int indent, bool list_item) {
         std::vector<BlockPiece> pieces;
         // Track the previously *emitted* sibling: an empty render must not
@@ -923,23 +858,7 @@ private:
         auto collect_child = [&](const Node& child) {
             const NodeSpec* spec = nullptr;
             if (node_forms_) {
-                bool follows_parent = false;
-                switch (inherited) {
-                    case ContentModel::ListItems:
-                    case ContentModel::OrderedListItems:
-                    case ContentModel::TaskItems:
-                        follows_parent = child.type == "listItem" || child.type == "taskItem";
-                        break;
-                    case ContentModel::Rows:
-                        follows_parent = child.type == "tableRow";
-                        break;
-                    case ContentModel::Cells:
-                        follows_parent = child.type == "tableCell" || child.type == "tableHeader";
-                        break;
-                    default:
-                        break;
-                }
-                spec = follows_parent ? schema_.node(child.type) : declared_form(child, &node);
+                spec = block_child_form(document_, child, &node, inherited);
             }
             if (spec != nullptr && spec->shape == Shape::BlockContainer) {
                 collect_block_children(child, spec, indent, list_item, pieces, prev_variant);
@@ -962,7 +881,8 @@ private:
                     generated_list = &child;
                 }
             }
-            pieces.emplace_back(std::move(rendered), list_item ? block_kind(child, spec) : BlockKind::Other, family);
+            BlockKind kind = list_item ? block_kind(child, spec, schema_) : BlockKind::Other;
+            pieces.emplace_back(std::move(rendered), kind, family);
             prev_variant = variant;
         };
         if (spelling != nullptr) {
@@ -1015,7 +935,7 @@ private:
         }
     }
 
-    std::string join_block_pieces(std::vector<BlockPiece>&& pieces, bool list_item) {
+    std::string join_block_pieces(std::vector<BlockPiece>&& pieces, bool tight) {
         if (pieces.empty()) {
             return {};
         }
@@ -1027,7 +947,7 @@ private:
         size += 2 * (pieces.size() - 1);
         out.reserve(size);
         for (std::size_t i = 1; i < pieces.size(); ++i) {
-            if (!list_item || needs_blank_between(pieces[i - 1].kind, pieces[i].kind)) {
+            if (!tight || needs_blank_between(pieces[i - 1].kind, pieces[i].kind)) {
                 out.append("\n\n");
             } else {
                 out.push_back('\n');
@@ -1098,7 +1018,7 @@ private:
             return render_list(node, indent, false, true, list_variant);
         }
         if (type == "listItem" || type == "taskItem") {
-            return render_list_item(node, "- ", indent, false);
+            return render_list_item(node, "- ", indent, false, true);
         }
         if (type == "codeBlock") {
             return add_indent(render_code_block(node), indent);
@@ -1157,46 +1077,16 @@ private:
             // Only the first number is honoured on reparse, so repeating the ceiling
             // changes nothing about the parsed result.
             number = std::min(number + 1, kMaxListStart);
-            out += render_list_item(child, marker, indent, task || child.type == "taskItem");
+            out += render_list_item(child, marker, indent, task || child.type == "taskItem", tight);
             item_index++;
         });
         return out;
     }
 
-    // Whether two adjacent blocks inside a list item need a blank line between
-    // them to reparse as separate blocks. Blank lines are avoided where markdown
-    // does not require them, so tight lists stay tight.
-    static bool needs_blank_between(BlockKind prev, BlockKind next) {
-        if (prev == BlockKind::TextBlock || next == BlockKind::TextBlock) {
-            return true;
-        }
-        if (prev == BlockKind::Html ||
-            (prev == BlockKind::Table &&
-             (next == BlockKind::Heading || next == BlockKind::FencedCode || next == BlockKind::TagLine))) {
-            return true;
-        }
-        if (prev == BlockKind::TagLine || next == BlockKind::TagLine) {
-            return false;
-        }
-        if ((prev == BlockKind::Image && (next == BlockKind::Paragraph || next == BlockKind::Image)) ||
-            (prev == BlockKind::Paragraph && next == BlockKind::Image)) {
-            return false;
-        }
-        if (next == BlockKind::Paragraph || next == BlockKind::Image || next == BlockKind::Table ||
-            next == BlockKind::Html) {
-            return true;
-        }
-        if ((prev == BlockKind::Paragraph || prev == BlockKind::Image) &&
-            next == BlockKind::NonInterruptingList) {
-            return true;
-        }
-        return prev == BlockKind::Blockquote && next == BlockKind::Blockquote;
-    }
-
-    std::string render_list_item(const Node& node, const std::string& marker, int indent, bool task) {
+    std::string render_list_item(const Node& node, const std::string& marker, int indent, bool task, bool tight) {
         std::vector<BlockPiece> pieces = block_pieces(node, 0, true);
         BlockKind first_kind = pieces.empty() ? BlockKind::Other : pieces.front().kind;
-        std::string body = join_block_pieces(std::move(pieces), true);
+        std::string body = join_block_pieces(std::move(pieces), tight);
         std::vector<std::string> lines = split_lines(body);
         std::string out = repeat(' ', static_cast<std::size_t>(indent)) + marker;
         if (task) {
@@ -1336,13 +1226,14 @@ private:
         for_each_child(cell, [&](const Node& child) {
             const std::string& type = child.type;
             if (type == "paragraph") {
-                const NodeSpec* spec = node_forms_ ? declared_form(child, &cell) : nullptr;
+                const NodeSpec* spec = node_forms_ ? block_child_form(document_, child, &cell) : nullptr;
                 blocks.push_back(spec != nullptr ? render_declared(child, *spec, 0, InlineContext::TableCell)
                                                  : render_inlines(child, InlineContext::TableCell));
             } else if (type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline") {
                 blocks.push_back(render_inline(child, InlineContext::TableCell));
             } else {
-                const NodeSpec* spec = node_forms_ ? declared_form(child, &cell, InlineContext::TableCell) : nullptr;
+                const NodeSpec* spec = node_forms_
+                    ? block_child_form(document_, child, &cell, ContentModel::None, true) : nullptr;
                 blocks.push_back(render_block(child, 0, spec, 0, InlineContext::TableCell));
             }
         });
@@ -1377,7 +1268,7 @@ private:
         }
         if (type == "image") {
             if (node_forms_) {
-                if (const NodeSpec* spec = declared_form(node)) {
+                if (const NodeSpec* spec = block_child_form(document_, node)) {
                     return open_node_tag(*spec, node.attrs);
                 }
             }

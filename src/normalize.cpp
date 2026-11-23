@@ -162,21 +162,87 @@ std::size_t normalize_table_width(const Document& document, Node& table) {
     return columns;
 }
 
-void normalize_inherited_node_attrs(Document& document, Node& node, const Schema& schema, bool reorder_marks) {
-    std::string_view type = node.type;
-    if (type == "codeBlock") {
+struct ListItemSpacing {
+    bool tight;
+    bool has_previous = false;
+    BlockKind previous = BlockKind::Other;
+
+    bool add(BlockKind kind) {
+        bool stop = has_previous && (!tight || needs_blank_between(previous, kind));
+        has_previous = true;
+        previous = kind;
+        return stop;
+    }
+};
+
+bool scan_list_item_pieces(const Document& document, const Node& parent, const NodeSpec* container,
+                           bool node_forms, ListItemSpacing& spacing) {
+    bool tag_lines = container != nullptr && !container->implicit;
+    if (tag_lines && spacing.add(BlockKind::TagLine)) {
+        return true;
+    }
+    ContentModel inherited = container != nullptr && container->core ? container->allow : ContentModel::None;
+    for (std::size_t index : parent.content) {
+        const Node& child = document.node(index);
+        const NodeSpec* spec = node_forms ? block_child_form(document, child, &parent, inherited) : nullptr;
+        if (spec != nullptr && spec->shape == Shape::BlockContainer) {
+            if (scan_list_item_pieces(document, child, spec, node_forms, spacing)) {
+                return true;
+            }
+        } else if (container == nullptr || spec != nullptr || child.type != "paragraph" || !child.content.empty()) {
+            if (spacing.add(block_kind(child, spec, document.schema()))) {
+                return true;
+            }
+        }
+    }
+    return tag_lines && spacing.add(BlockKind::TagLine);
+}
+
+void normalize_list_tightness(const Document& document, Node& list, bool node_forms) {
+    bool tight = attr_bool(list.attrs, "tight", true);
+    bool normalized = tight || list.content.size() == 1;
+    if (normalized) {
+        for (std::size_t index : list.content) {
+            const Node& item = document.node(index);
+            if (!node_forms && item.content.size() == 1) {
+                continue;
+            }
+            ListItemSpacing spacing {tight};
+            if (scan_list_item_pieces(document, item, nullptr, node_forms, spacing)) {
+                normalized = false;
+                break;
+            }
+        }
+    }
+    if (tight != normalized || find_attr(list.attrs, "tight") == nullptr) {
+        set_attr(list.attrs, "tight", AttrValue::boolean(normalized));
+    }
+}
+
+void normalize_inherited_node_attrs(Document& document, Node& node, const Schema& schema,
+                                    bool reorder_marks, bool node_forms) {
+    switch (node_kind(node.type)) {
+    case NodeKind::CodeBlock:
         normalize_fence_info(node.attrs);
-    } else if (type == "table") {
+        break;
+    case NodeKind::Table:
         normalize_table_width(document, node);
         if (!schema.has_table_tags()) {
             normalize_pipe_alignment(document, node);
         }
+        break;
+    case NodeKind::List:
+    case NodeKind::OrderedList:
+        normalize_list_tightness(document, node, node_forms);
+        break;
+    default:
+        break;
     }
     if (reorder_marks && node.marks.size() > 1) {
         order_marks(node.marks, schema);
     }
     for (std::size_t child : node.content) {
-        normalize_inherited_node_attrs(document, document.node(child), schema, reorder_marks);
+        normalize_inherited_node_attrs(document, document.node(child), schema, reorder_marks, node_forms);
     }
 }
 
@@ -328,6 +394,7 @@ struct Normalizer {
     bool declared_nodes;
     bool heading_tags;
     bool table_tags;
+    bool node_forms;
     PathStack path;
 
     void normalize_root();
@@ -491,7 +558,11 @@ NodeKind Normalizer::normalize_node(std::size_t index, LineBreaks breaks) {
         }
         [[fallthrough]];
     case NodeKind::List:
-        return normalize_children(index) ? NodeKind::Removed : kind;
+        if (normalize_children(index)) {
+            return NodeKind::Removed;
+        }
+        normalize_list_tightness(document, document.node(index), node_forms);
+        return kind;
     case NodeKind::Heading: {
         const AttrValue* level = find_attr(node.attrs, "level");
         if (level == nullptr || level->kind != AttrValue::Kind::Int || level->int_value < 1 || level->int_value > 6) {
@@ -560,13 +631,14 @@ void normalize_document(Document& document) {
     const Schema& schema = document.schema();
     Normalizer {document, schema, schema.has_declared_marks() || schema.has_link_tag(),
                 !schema.node("paragraph")->tag.empty(), schema.has_declared_nodes(),
-                !schema.node("heading")->tag.empty(), schema.has_table_tags(), {}}.normalize_root();
+                !schema.node("heading")->tag.empty(), schema.has_table_tags(),
+                schema.has_node_forms(), {}}.normalize_root();
 }
 
 void normalize_inherited_attrs(Document& document) {
-    // Inheritance can change fence info, table attrs, and a link's form and mark order.
+    // Inheritance can change fence info, list tightness, table attrs, and a link's form and mark order.
     const Schema& schema = document.schema();
-    normalize_inherited_node_attrs(document, document.root(), schema, schema.has_link_tag());
+    normalize_inherited_node_attrs(document, document.root(), schema, schema.has_link_tag(), schema.has_node_forms());
 }
 
 }  // namespace marktip
