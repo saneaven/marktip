@@ -30,6 +30,23 @@ function checkSnapshot(document, expected) {
     assert.equal(document.toMarkdown({ canonical: true }), expected.canonical);
 }
 
+function checkEditorRoundtrip(document, fixture, schema) {
+    const canonical = document.toMarkdown({ canonical: true });
+    const reread = () => tm.fromMarkdown(canonical, { schema });
+    if (fixture.rereadError !== null) {
+        assert.throws(reread, error => error instanceof tm.InvalidNodeError && error.code === fixture.rereadError);
+        return;
+    }
+    const parsed = reread();
+    try {
+        const roundtrips = fixture.outcome === "roundtrip";
+        assert.equal(parsed.equals(document), roundtrips);
+        if (roundtrips) assert.equal(parsed.toMarkdown({ canonical: true }), canonical);
+    } finally {
+        parsed.free();
+    }
+}
+
 test("version and repeated initialization", async () => {
     assert.equal(tm.version, fixtures.version);
     await tm.init();
@@ -161,10 +178,19 @@ for (const fixture of fixtures.editorDocuments) {
         const options = optionsFor(fixture);
         const base = fixture.baseDump === null ? undefined : tm.load(fixture.baseDump, { schema: options.schema });
         let document;
+        let rebuilt;
+        let loaded;
         try {
             document = tm.fromDict(fixture.value, { ...options, base });
             checkSnapshot(document, fixture.expected);
+            checkEditorRoundtrip(document, fixture, options.schema);
+            rebuilt = tm.fromDict(document.toDict(), options);
+            loaded = tm.load(document.dump(), { schema: options.schema });
+            assert.ok(rebuilt.equals(document));
+            assert.ok(loaded.equals(document));
         } finally {
+            loaded?.free();
+            rebuilt?.free();
             document?.free();
             base?.free();
         }
@@ -195,13 +221,22 @@ for (const fixture of fixtures.fingerprints) {
 
 for (const fixture of fixtures.errors) {
     test(`error parity: ${fixture.id}`, () => {
-        assert.throws(() => tm[fixture.operation](fixture.value, optionsFor(fixture)), error => {
+        const options = optionsFor(fixture);
+        assert.throws(() => tm[fixture.operation](fixture.value, options), error => {
             assert.ok(error instanceof tm.MarktipError);
             assert.ok(error instanceof tm[fixture.expected.name]);
             const actual = Object.fromEntries(Object.keys(fixture.expected).map(key => [key, error[key]]));
             assert.deepEqual(actual, fixture.expected);
             return true;
         });
+        if (fixture.outcome === "refused") {
+            const permissive = tm.fromDict(fixture.value, { ...options, strict: "off" });
+            try {
+                checkEditorRoundtrip(permissive, fixture, options.schema);
+            } finally {
+                permissive.free();
+            }
+        }
     });
 }
 

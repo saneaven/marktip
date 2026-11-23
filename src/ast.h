@@ -41,7 +41,6 @@ public:
     Node& node(std::size_t index);
     std::size_t node_count() const;
     const Schema& schema() const;
-    const std::shared_ptr<const Schema>& schema_ptr() const;
     const std::optional<Spelling>& spelling() const;
     std::optional<Spelling>& spelling();
 
@@ -55,7 +54,6 @@ private:
 };
 
 bool same_document(const Document& left, const Document& right);
-bool same_carried_inline_content(const Document& left, const Node& a, const Document& right, const Node& b);
 std::size_t document_hash(const Document& document);
 std::size_t block_hash(const Document& document, std::size_t index);
 std::string plain_text(const Document& document, const Node& node);

@@ -337,7 +337,7 @@ def generate():
             "options": js_options(options), "expected": expected,
         })
 
-    for name, value, dict_options, _, refuses, _, _ in EDITOR_DOCUMENTS:
+    for name, value, dict_options, _, outcome, _, _, reread_error in EDITOR_DOCUMENTS:
         options = dict(dict_options, strict="content")
         schema = options.pop("schema", None)
         base = options.pop("base", None)
@@ -345,8 +345,11 @@ def generate():
         if schema_name is None:
             schema_name = f"editor/{name}"
             schemas[schema_name] = schema
-        fixture = {"id": f"editor/{name}", "value": value, "schema": schema_name, "options": js_options(options)}
-        if refuses:
+        fixture = {
+            "id": f"editor/{name}", "value": value, "schema": schema_name, "options": js_options(options),
+            "outcome": outcome, "rereadError": reread_error,
+        }
+        if outcome == "refused":
             fixture["operation"] = "fromDict"
             fixture["expected"] = error_result(lambda: tm.from_dict(value, schema=schema, base=base, **options))
             payload["errors"].append(fixture)

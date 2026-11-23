@@ -486,6 +486,40 @@ unsigned emphasis_at_edge(const std::vector<Mark>& marks, std::size_t prefix, un
     return removed;
 }
 
+std::vector<EmphasisRun> emphasis_runs(const Document& document, const std::vector<std::size_t>& children,
+                                      const std::vector<Mark>& enclosing, bool declared_nodes, bool extended) {
+    std::vector<EmphasisRun> runs;
+    for_each_inline_run(document, children, enclosing, declared_nodes, [&](const InlineRun& run) {
+        runs.push_back({run.begin, run.end, run.delimiter_marks(document.schema(), extended), run.in_code});
+    });
+    return runs;
+}
+
+unsigned unwritable_edge_marks(const Document& document, const std::vector<std::size_t>& children,
+                               const std::vector<EmphasisRun>& runs, std::size_t i,
+                               unsigned inside, bool trailing, bool cjk_friendly) {
+    const EmphasisRun& run = runs[i];
+    const EmphasisRun* neighbour = trailing ? (i + 1 < runs.size() ? &runs[i + 1] : nullptr)
+                                             : (i != 0 ? &runs[i - 1] : nullptr);
+    const std::vector<Mark> no_marks;
+    const auto& adjacent = neighbour == nullptr ? no_marks : neighbour->marks;
+    std::size_t prefix = common_prefix(run.marks, adjacent);
+    unsigned outside = MD_ATTN_SPACE;
+    if (neighbour != nullptr) {
+        std::size_t other = trailing ? neighbour->begin : neighbour->end - 1;
+        bool adjacent_delimiter = adjacent.size() > prefix;
+        // Closing and opening asterisks at the seam form one token.
+        if (adjacent_delimiter && prefix < run.marks.size() && (emphasis_bit(run.marks[prefix]) & 3) != 0) {
+            adjacent_delimiter = !std::all_of(adjacent.begin() + prefix, adjacent.end(), [](const Mark& mark) {
+                return (emphasis_bit(mark) & 3) != 0;
+            });
+        }
+        outside = adjacent_delimiter || neighbour->code ? MD_ATTN_PUNCT
+            : inline_edge(document.node(children[other]), !trailing, cjk_friendly);
+    }
+    return emphasis_at_edge(run.marks, prefix, inside, outside, trailing);
+}
+
 bool could_trim_emphasis(const Node& node) {
     std::string_view type = node.type;
     if (node.marks.empty()) {
@@ -559,10 +593,7 @@ void Normalizer::apply_edge_edit(std::size_t index, const EdgeEdit& edit, std::v
 }
 
 bool Normalizer::expel_emphasis_edges(std::vector<std::size_t>& children) {
-    std::vector<EmphasisRun> runs;
-    for_each_inline_run(document, children, {}, declared_nodes, [&](const InlineRun& run) {
-        runs.push_back({run.begin, run.end, run.delimiter_marks(schema, reorder_marks), run.in_code});
-    });
+    auto runs = emphasis_runs(document, children, {}, declared_nodes, reorder_marks);
     const std::vector<Mark> no_marks;
     std::vector<EdgeEdit> edits;
     for (std::size_t i = 0; i < runs.size(); ++i) {
@@ -581,25 +612,8 @@ bool Normalizer::expel_emphasis_edges(std::vector<std::size_t>& children) {
             if ((category & (MD_ATTN_SPACE | MD_ATTN_PUNCT)) == 0) {
                 continue;
             }
-            const EmphasisRun* neighbour = trailing ? (i + 1 < runs.size() ? &runs[i + 1] : nullptr)
-                                                     : (i != 0 ? &runs[i - 1] : nullptr);
-            const auto& adjacent = neighbour == nullptr ? no_marks : neighbour->marks;
-            std::size_t prefix = common_prefix(run.marks, adjacent);
-            unsigned outside = MD_ATTN_SPACE;
-            if (neighbour != nullptr) {
-                std::size_t other = trailing ? neighbour->begin : neighbour->end - 1;
-                bool adjacent_delimiter = adjacent.size() > prefix;
-                // Closing and opening asterisks at the seam form one token.
-                if (adjacent_delimiter && prefix < run.marks.size() && (emphasis_bit(run.marks[prefix]) & 3) != 0) {
-                    adjacent_delimiter = !std::all_of(adjacent.begin() + prefix, adjacent.end(), [](const Mark& mark) {
-                        return (emphasis_bit(mark) & 3) != 0;
-                    });
-                }
-                outside = adjacent_delimiter || neighbour->code ? MD_ATTN_PUNCT
-                    : inline_edge(document.node(children[other]), !trailing, cjk_friendly);
-            }
             unsigned inside = inline_edge(node, trailing, cjk_friendly);
-            unsigned removed = emphasis_at_edge(run.marks, prefix, inside, outside, trailing);
+            unsigned removed = unwritable_edge_marks(document, children, runs, i, inside, trailing, cjk_friendly);
             if (removed == 0) {
                 continue;
             }
@@ -946,6 +960,42 @@ NodeKind Normalizer::normalize_node(std::size_t index, NodeKind kind, LineBreaks
 }
 
 }  // namespace
+
+bool has_unwritable_emphasis(const Document& document, const Node& node, bool cjk_friendly,
+                             const std::vector<Mark>& enclosing) {
+    const Schema& schema = document.schema();
+    bool declared_nodes = schema.has_declared_nodes();
+    auto runs = emphasis_runs(document, node.content, enclosing, declared_nodes,
+                              schema.has_declared_marks() || schema.has_link_tag());
+    for (std::size_t i = 0; i < runs.size(); ++i) {
+        const EmphasisRun& run = runs[i];
+        if (run.marks.empty()) {
+            continue;
+        }
+        for (bool trailing : {false, true}) {
+            std::size_t position = trailing ? run.end - 1 : run.begin;
+            // The writer puts backticks at both edges of a code span.
+            unsigned inside = run.code ? MD_ATTN_PUNCT
+                : inline_edge(document.node(node.content[position]), trailing, cjk_friendly);
+            if (unwritable_edge_marks(document, node.content, runs, i, inside, trailing, cjk_friendly)) {
+                return true;
+            }
+        }
+    }
+    if (declared_nodes) {
+        for (std::size_t index : node.content) {
+            const Node& child = document.node(index);
+            if (const NodeSpec* spec = declared_inline_spec(schema, child);
+                spec != nullptr && spec->shape == Shape::InlineContainer) {
+                auto inner = enclosing_delimiters(schema, enclosing, child.marks);
+                if (has_unwritable_emphasis(document, child, cjk_friendly, inner)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
 
 void normalize_document(Document& document, bool cjk_friendly, InputAttrKeys* present) {
     const Schema& schema = document.schema();

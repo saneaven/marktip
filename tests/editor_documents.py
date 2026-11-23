@@ -53,12 +53,14 @@ def cell(*children, header=False, **attrs):
     return node("tableHeader" if header else "tableCell", *children, attrs=attrs)
 
 
-def case(case_id, *blocks, schema=None, base=None, refuses=False, normalized=None, expected_markdown=None):
+def case(case_id, *blocks, schema=None, base=None, outcome="roundtrip", normalized=None,
+         expected_markdown=None, reread_error=None):
     markdown_options = {} if schema is None else {"schema": schema}
     dict_options = dict(markdown_options)
     if base is not None:
         dict_options["base"] = tm.from_markdown(base, **markdown_options)
-    return case_id, node("doc", *blocks), dict_options, markdown_options, refuses, normalized, expected_markdown
+    return (case_id, node("doc", *blocks), dict_options, markdown_options, outcome,
+            normalized, expected_markdown, reread_error)
 
 
 BOLD = mark("bold")
@@ -261,51 +263,54 @@ EDITOR_DOCUMENTS = (
     case("loose-list-with-quote", bullet_list(list_item(paragraph(text("one")),
                                                         node("blockquote", paragraph(text("two")))), tight=False)),
 
-    # Text or structure that strict content will refuse.
-    case("touching-strike-inside-italic", paragraph(text("ab"), text("c", ITALIC, STRIKE)), refuses=True),
-    case("touching-crossed-bold-and-italic", paragraph(text("a", BOLD), text("b", BOLD, ITALIC), text("c", ITALIC)),
-         refuses=True),
+    # Text or structure that strict content refuses.
+    case("touching-strike-inside-italic", paragraph(text("ab"), text("c", ITALIC, STRIKE)), outcome="refused"),
     case("touching-bold-at-link-edge",
-         paragraph(text("a", BOLD), text("b", BOLD, mark("link", href="u")), text("c")), refuses=True),
+         paragraph(text("a", BOLD), text("b", BOLD, mark("link", href="u")), text("c")), outcome="refused"),
     case("touching-strike-italic-before-linked-letter",
          paragraph(text("b", ITALIC, STRIKE, mark("link", href="/v")), text("c", mark("link", href="/v"))),
-         refuses=True),
+         outcome="refused"),
     case("touching-strike-italic-after-linked-letter",
          paragraph(text("a", mark("link", href="/v")), text("b", ITALIC, STRIKE, mark("link", href="/v"))),
-         refuses=True),
+         outcome="refused"),
     case("touching-letter-before-italic-image",
-         paragraph(text("a"), node("image", attrs={"src": "/i", "alt": "x"}, marks=(ITALIC,))), refuses=True),
+         paragraph(text("a"), node("image", attrs={"src": "/i", "alt": "x"}, marks=(ITALIC,))), outcome="refused"),
     case("touching-letter-after-italic-image",
-         paragraph(node("image", attrs={"src": "/i", "alt": "x"}, marks=(ITALIC,)), text("b")), refuses=True),
+         paragraph(node("image", attrs={"src": "/i", "alt": "x"}, marks=(ITALIC,)), text("b")), outcome="refused"),
     case("touching-letter-before-italic-html",
-         paragraph(text("a"), node("htmlInline", attrs={"html": "<b>"}, marks=(ITALIC,))), refuses=True),
-    case("touching-letter-before-italic-code", paragraph(text("a"), text(" b", ITALIC, CODE)), refuses=True),
+         paragraph(text("a"), node("htmlInline", attrs={"html": "<b>"}, marks=(ITALIC,))), outcome="refused"),
+    case("touching-letter-before-italic-code", paragraph(text("a"), text(" b", ITALIC, CODE)), outcome="refused"),
     case("touching-letter-before-italic-declared-atom",
          paragraph(text("a"), node("mention", marks=(ITALIC,))),
-         schema=tm.Schema(nodes=[tm.NodeSpec("mention", "inline")]), refuses=True),
+         schema=tm.Schema(nodes=[tm.NodeSpec("mention", "inline")]), outcome="refused"),
     case("touching-letter-before-italic-math",
          paragraph(text("a"), node("inlineMath", attrs={"latex": "x"}, marks=(ITALIC,))),
-         schema=MATH_SCHEMA, refuses=True),
+         schema=MATH_SCHEMA, outcome="refused"),
+    case("heading-in-pipe-table-cell", table(1, [cell(heading(text("title")), header=True)]), outcome="refused"),
+
+    # Strict content accepts these trees, but their canonical Markdown does not round-trip.
+    case("touching-crossed-bold-and-italic", paragraph(text("a", BOLD), text("b", BOLD, ITALIC), text("c", ITALIC)),
+         outcome="limit"),
     case("quoted-emphasis-327",
          paragraph(text('"a" ', BOLD, ITALIC), text('"b" ', ITALIC), text('"c"', BOLD, ITALIC, STRIKE)),
-         refuses=True),
+         outcome="limit"),
     case("dotted-emphasis-327",
          paragraph(text("a ", BOLD, ITALIC), text(".b ", ITALIC), text(".c", BOLD, ITALIC, STRIKE)),
-         refuses=True),
+         outcome="limit"),
     case("emphasis-after-link-label-with-trailing-space",
          paragraph(text("a ", BOLD, ITALIC), text("b ", ITALIC, mark("link", href="/u")), text(".c", BOLD, ITALIC)),
-         refuses=True),
+         outcome="limit"),
     case("emphasis-before-link-label-with-leading-space",
          paragraph(text("a. ", BOLD), text(".b.", BOLD, ITALIC), text(" c", ITALIC, mark("link", href="/u"))),
-         refuses=True),
+         outcome="limit"),
     case("emphasis-around-declared-inline-container",
          paragraph(text("a ", BOLD, ITALIC), node("wrap", text(".b.", BOLD), marks=(ITALIC,)),
                    text(" c", BOLD, ITALIC)),
-         schema=INLINE_WRAP_SCHEMA, refuses=True),
+         schema=INLINE_WRAP_SCHEMA, outcome="limit"),
     case("emphasis-through-trailing-declared-inline-container",
          paragraph(text("a ", BOLD, ITALIC), node("wrap", text(".b.", BOLD), marks=(ITALIC,))),
-         schema=INLINE_WRAP_SCHEMA, refuses=True),
-    case("heading-in-pipe-table-cell", table(1, [cell(heading(text("title")), header=True)]), refuses=True),
+         schema=INLINE_WRAP_SCHEMA, outcome="limit", reread_error="invalid_tag"),
+
     case("block-image-in-pipe-table-cell",
          table(1, [cell(node("image", attrs={"src": "/b", "alt": "a"}), header=True)]),
          schema=tm.Schema(block_image=True), expected_markdown="| ![a](/b) |\n| --- |"),

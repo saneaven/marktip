@@ -172,12 +172,14 @@ def test_every_known_type_accepted():
 def test_unwritable_emphasis_reports_the_input_textblock(strict):
     schema = tm.Schema(core_attrs={"table": {}})
     ast = doc(p(), {"type": "blockquote", "content": [
-        p(text("a", "bold"), text("b", "bold", "italic"), text("c", "italic")),
+        p(text("un"), text("believ", "bold", "strike"), text("able")),
     ]})
-    assert tm.from_dict(ast, schema=schema, strict="off").to_markdown(canonical=True)
+    permissive = tm.from_dict(ast, schema=schema, strict="off")
+    assert tm.from_markdown(permissive.to_markdown(canonical=True), schema=schema) != permissive
     with pytest.raises(tm.InvalidNodeError) as error:
         tm.from_dict(ast, schema=schema, strict=strict)
     assert error.value.code == "unrepresentable"
+    assert error.value.field == "content"
     assert error.value.path == "content[1].content[0]"
 
 

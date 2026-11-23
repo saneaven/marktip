@@ -1,4 +1,6 @@
-#include "markdown_parser.h"
+#include "parser.h"
+
+#include "md4c.h"
 
 extern "C" {
 #include "entity.h"
@@ -795,35 +797,34 @@ int source_segments_callback(const MD_SOURCE_SEGMENT* segments, MD_SIZE count, v
 
 }  // namespace
 
-MarkdownParser::MarkdownParser(ParseOptions options, std::shared_ptr<const Schema> schema)
-    : options_(options), schema_(std::move(schema)),
-      needs_lift_(schema_->has_tags() || schema_->block_image()) {
-    const auto& tags = schema_->tags();
-    typed_tags_.reserve(tags.size());
+Document parse_to_document(std::string markdown, const ParseOptions& options,
+                           std::shared_ptr<const Schema> schema) {
+    const auto& tags = schema->tags();
+    std::vector<MD_TYPED_TAG> typed_tags;
+    typed_tags.reserve(tags.size());
     for (const TagEntry& entry : tags) {
-        typed_tags_.push_back({entry.tag.c_str(), entry.block_line});
+        typed_tags.push_back({entry.tag.c_str(), entry.block_line});
     }
-    parser_.typed_tags = typed_tags_.data();
-    parser_.n_typed_tags = static_cast<unsigned>(typed_tags_.size());
-    parser_.source_segments = options.keep_source ? source_segments_callback : nullptr;
+    MD_PARSER parser {};
+    parser.typed_tags = typed_tags.data();
+    parser.n_typed_tags = static_cast<unsigned>(typed_tags.size());
+    parser.source_segments = options.keep_source ? source_segments_callback : nullptr;
     // With html=false, block-level raw HTML degrades to paragraph text via MD_FLAG_NOHTMLBLOCKS.
     // Inline HTML spans stay recognized (no MD_FLAG_NOHTMLSPANS),
     // so the <br>-in-cell hardBreak mapping keeps working.
     // AstBuilder handles literal conversion without declared tags; lift handles it otherwise.
-    parser_.flags = MD_DIALECT_GITHUB | (options.cjk_friendly ? MD_FLAG_CJKFRIENDLYEMPHASIS : 0) |
-                    (options.html ? 0 : MD_FLAG_NOHTMLBLOCKS) | (schema_->has_math() ? MD_FLAG_LATEXMATHSPANS : 0);
-    parser_.enter_block = enter_block_callback;
-    parser_.leave_block = leave_block_callback;
-    parser_.enter_span = enter_span_callback;
-    parser_.leave_span = leave_span_callback;
-    parser_.text = text_callback;
-}
+    parser.flags = MD_DIALECT_GITHUB | (options.cjk_friendly ? MD_FLAG_CJKFRIENDLYEMPHASIS : 0) |
+                   (options.html ? 0 : MD_FLAG_NOHTMLBLOCKS) | (schema->has_math() ? MD_FLAG_LATEXMATHSPANS : 0);
+    parser.enter_block = enter_block_callback;
+    parser.leave_block = leave_block_callback;
+    parser.enter_span = enter_span_callback;
+    parser.leave_span = leave_span_callback;
+    parser.text = text_callback;
 
-Document MarkdownParser::parse(std::string markdown, const NodeSpec* detached_textblock) const {
     replace_nul(markdown);
-    AstBuilder builder(markdown, options_.html, options_.keep_source, schema_);
+    AstBuilder builder(markdown, options.html, options.keep_source, std::move(schema));
     std::string_view source = builder.source();
-    int rc = md_parse(source.data(), static_cast<MD_SIZE>(source.size()), &parser_, &builder);
+    int rc = md_parse(source.data(), static_cast<MD_SIZE>(source.size()), &parser, &builder);
     if (rc != 0) {
         if (!builder.error().empty()) {
             throw ParseError(builder.error_code(), builder.error());
@@ -831,15 +832,10 @@ Document MarkdownParser::parse(std::string markdown, const NodeSpec* detached_te
         throw ParseError("parse_failed", "MD4C failed to parse markdown");
     }
     Document document = std::move(builder).into_document();
-    if (needs_lift_) {
-        lift(document, options_, detached_textblock);
+    if (document.schema().has_tags() || document.schema().block_image()) {
+        lift(document, options);
     }
     return document;
-}
-
-Document parse_to_document(std::string markdown, const ParseOptions& options,
-                           std::shared_ptr<const Schema> schema) {
-    return MarkdownParser(options, std::move(schema)).parse(std::move(markdown));
 }
 
 }  // namespace marktip

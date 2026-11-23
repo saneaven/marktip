@@ -128,27 +128,26 @@ def _signature(document, schema):
 RUN_MASKS = tuple("".join(str(mask) for mask in masks) for masks in product(range(8), repeat=3))
 
 # Masks use bold=1, italic=2 and strike=4 in run order.
-# These cases fail with the writer's one spelling.
-# Some have another spelling that marktip does not search for.
-PUNCTUATION_REFUSALS = "123 127 132 136 213 217 231 235 323 327 363 367 567 576 657 675 767".split()
 REFUSES = {
     "latin-touching": """
         005 006 007 017 027 035 050 051 052 053 054 055 056 057 060 061 062 063
-        064 065 066 067 070 071 072 073 074 075 076 077 105 106 107 117 123 127
-        132 136 150 152 160 170 171 172 173 174 175 176 177 205 206 207 213 217
-        227 231 235 250 260 261 270 271 272 273 274 275 276 277 305 306 307 317
-        323 327 335 350 351 352 353 354 355 356 357 360 361 367 370 371 372 405
+        064 065 066 067 070 071 072 073 074 075 076 077 105 106 107 117 127 136
+        150 152 160 170 171 172 173 174 175 176 177 205 206 207 217 227 235 250
+        260 261 270 271 272 273 274 275 276 277 305 306 307 317 327 335 350 351
+        352 353 354 355 356 357 360 361 370 371 372 405
         406 407 417 427 435 450 460 470 500 501 502 503 504 505 506 507 517 527
-        536 550 560 567 570 576 600 601 602 603 604 605 606 607 617 627 635 650
-        657 660 670 675 700 701 702 703 704 705 706 707 717 727 735 750 760 767
-        770
+        536 550 560 570 600 601 602 603 604 605 606 607 617 627 635 650 660 670
+        700 701 702 703 704 705 706 707 717 727 735 750 760 770
     """.split(),
-    "hangul-touching": """
-        123 127 132 136 213 217 231 235 323 327 363 367 567 576 657 675 767
-    """.split(),
-    "latin-quoted": PUNCTUATION_REFUSALS,
-    "latin-punctuated": PUNCTUATION_REFUSALS,
-    "hangul-punctuated": PUNCTUATION_REFUSALS,
+}
+
+PAIRING_LIMITS = "123 127 132 136 213 217 231 235 323 327 363 367 567 576 657 675 767".split()
+LIMITS = {
+    "latin-touching": "123 132 213 231 323 367 567 576 657 675 767".split(),
+    "hangul-touching": PAIRING_LIMITS,
+    "latin-quoted": PAIRING_LIMITS,
+    "latin-punctuated": PAIRING_LIMITS,
+    "hangul-punctuated": PAIRING_LIMITS,
 }
 
 
@@ -230,22 +229,33 @@ def test_canonical_from_editor_spec(markdown):
 
 
 @pytest.mark.parametrize(
-    "x,dict_options,markdown_options,refuses,normalized,expected_markdown",
-    [pytest.param(x, dict_options, markdown_options, refuses, normalized, expected_markdown, id=case_id)
-     for case_id, x, dict_options, markdown_options, refuses, normalized, expected_markdown in EDITOR_DOCUMENTS],
+    "x,dict_options,markdown_options,outcome,normalized,expected_markdown,reread_error",
+    [pytest.param(*case[1:], id=case[0]) for case in EDITOR_DOCUMENTS],
 )
-def test_canonical_from_editor_document(x, dict_options, markdown_options, refuses, normalized, expected_markdown):
-    if refuses:
+def test_canonical_from_editor_document(x, dict_options, markdown_options, outcome, normalized, expected_markdown,
+                                        reread_error):
+    if outcome == "refused":
         with pytest.raises(tm.InvalidNodeError) as error:
             tm.from_dict(x, strict="content", **dict_options)
         assert error.value.code == "unrepresentable"
+        permissive = tm.from_dict(x, strict="off", **dict_options)
+        assert tm.from_markdown(permissive.to_markdown(canonical=True), **markdown_options) != permissive
         return
 
     document = tm.from_dict(x, strict="content", **dict_options)
     _editor_invariants(x, document, dict_options)
     if "base" in dict_options:
         _base_spelling(document, dict_options["base"].to_markdown())
-    canonical = _canonical_roundtrip(document, **markdown_options)
+    if outcome == "limit":
+        canonical = document.to_markdown(canonical=True)
+        if reread_error is not None:
+            with pytest.raises(tm.InvalidNodeError) as error:
+                tm.from_markdown(canonical, **markdown_options)
+            assert error.value.code == reread_error
+        else:
+            assert tm.from_markdown(canonical, **markdown_options) != document
+    else:
+        canonical = _canonical_roundtrip(document, **markdown_options)
     if normalized is not None:
         assert document.to_dict() == normalized
     if expected_markdown is not None:
@@ -269,13 +279,18 @@ def _three_run_documents():
             content = [{"type": "text", "text": letter, "marks": mark_sets[int(mask)]}
                        for letter, mask in zip(letters, masks)]
             x = {"type": "doc", "content": [{"type": "paragraph", "content": content}]}
-            refuses = masks in REFUSES.get(variant, ())
-            yield pytest.param(x, options, refuses, id=f"{variant}-{masks}")
+            if masks in REFUSES.get(variant, ()):
+                outcome = "refused"
+            elif masks in LIMITS.get(variant, ()):
+                outcome = "limit"
+            else:
+                outcome = "roundtrip"
+            yield pytest.param(x, options, outcome, id=f"{variant}-{masks}")
 
 
-@pytest.mark.parametrize("x,options,refuses", list(_three_run_documents()))
-def test_canonical_from_three_runs(x, options, refuses):
-    if refuses:
+@pytest.mark.parametrize("x,options,outcome", list(_three_run_documents()))
+def test_canonical_from_three_runs(x, options, outcome):
+    if outcome == "refused":
         with pytest.raises(tm.InvalidNodeError) as error:
             tm.from_dict(x, strict="content", **options)
         assert error.value.code == "unrepresentable"
@@ -286,4 +301,7 @@ def test_canonical_from_three_runs(x, options, refuses):
 
     document = tm.from_dict(x, strict="content", **options)
     _editor_invariants(x, document, options)
-    _canonical_roundtrip(document, **options)
+    if outcome == "limit":
+        assert tm.from_markdown(document.to_markdown(canonical=True), **options) != document
+    else:
+        _canonical_roundtrip(document, **options)

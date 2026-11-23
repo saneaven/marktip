@@ -617,26 +617,6 @@ public:
         return rendered;
     }
 
-    std::string render_textblock_for_readback(std::size_t index, const Node& parent,
-                                              bool pipe_cell, bool task_checkbox) {
-        std::string rendered;
-        if (pipe_cell) {
-            rendered = "| " + table_cell_text(parent) + " |\n| --- |";
-        } else if (task_checkbox) {
-            // A checkbox keeps leading HTML inline on the task item's first line.
-            Node item {parent.type, {}, parent.attrs, {}, {index}};
-            rendered = render_list_item(item, "- ", 0, true, true);
-        } else {
-            const Node& block = document_.node(index);
-            const NodeSpec* spec = node_forms_ ? block_child_form(document_, block, &parent) : nullptr;
-            rendered = render_block(block, 0, spec);
-        }
-        if (!math_tokens_.empty()) {
-            return resolve_math(std::move(rendered));
-        }
-        return rendered;
-    }
-
     std::optional<StoredSpelling> dump_spelling() {
         if (!document_.spelling()) {
             return std::nullopt;
@@ -1357,11 +1337,6 @@ private:
 std::string to_markdown(const Document& document, bool canonical) {
     MarkdownWriter writer(document);
     return writer.render(canonical);
-}
-
-std::string render_textblock_for_readback(const Document& document, std::size_t index,
-                                          const Node& parent, bool pipe_cell, bool task_checkbox) {
-    return MarkdownWriter(document).render_textblock_for_readback(index, parent, pipe_cell, task_checkbox);
 }
 
 std::optional<StoredSpelling> dump_spelling(const Document& document) {

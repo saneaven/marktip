@@ -56,7 +56,7 @@ doc = tm.from_dict(ast)
   For example, with table tags enabled, a declared `callout` with `content="table+"` fails if its only child is an empty `<table>`.
   Both conversions accepted that input in 0.8.3.
   The error can also occur on dict input with `strict="off"`.
-- Strict editor saves can raise `InvalidNodeError` with code `unrepresentable` for emphasis the canonical writer cannot carry or for a pipe cell it cannot carry.
+- Strict editor saves can raise `InvalidNodeError` with code `unrepresentable` when the emphasis check judges a delimiter unable to open or close at its run edge or when a pipe cell cannot carry a block.
   Display the error to the editor user.
   Pass `cjk_friendly=True` to `from_dict` or `cjkFriendly: true` to `fromDict` when that Markdown will be read in CJK-friendly mode.
 - The remembered bytes can differ from the normalized tree.
@@ -132,8 +132,9 @@ Then `to_markdown()` equals `to_markdown(canonical=True)`, and `dump()` has no `
 Use the same schema and reading options for the round trip, and use `strict="content"` or `strict="exact"` on dict input.
 An editor's submitted tree can change as described in [Defined normalizations](#defined-normalizations).
 
-Rules 2 and 3 do not cover emphasis in `from_markdown` output or in blocks that inherit remembered text, which skip the strict read-back check.
-For example, `from_markdown("**a**[**b**](u)c")` writes canonically as `**a[b](u)**c`.
+Rules 2 and 3 hold for strict dict input except for the cases described under [Strict limits](#strict-limits).
+`from_markdown` output and blocks that inherit remembered text skip the emphasis check.
+For example, a tree from `from_markdown("**a**[**b**](u)c")` writes canonically as `**a[b](u)**c`.
 Reading that back changes the tree, and the next canonical write gives `\*\*a[b](u)\*\*c`.
 The original tree still passes strict `from_dict` when it inherits the original Markdown through `base=`.
 
@@ -259,7 +260,7 @@ For the default schema, the caller's flow is:
 | --- | --- | --- |
 | Agent writes | `from_markdown(md).dump()` | Parse once |
 | Frontend renders or opens the editor | Read the stored `doc` | None |
-| Editor saves | `from_dict(editor_json, base=load(stored), strict="content").dump()` | Read JSON twice, compare blocks and check any emphasis that needs writing |
+| Editor saves | `from_dict(editor_json, base=load(stored), strict="content").dump()` | Read JSON twice, compare blocks and check emphasis delimiter edges in blocks without remembered text |
 | Agent reads | `load(stored).to_markdown()` | Read JSON once and join pieces |
 
 Pass the application's schema when restoring a configured document.
@@ -294,7 +295,7 @@ The frontend can render the stored `doc` without running marktip.
 - Resubmitting an unchanged 0.8 dump through `base=` can lose spelling if the older tree has adjacent equal-mark runs that now join.
 - Two remembered lists that become neighbours can share a marker.
   The writer can then regenerate one of those lists even though its remembered spelling exempted it from the strict emphasis check.
-- Adjacent links distinguished only by a Markdown-omitted attr can fail the strict emphasis check if the reader merges them.
+- The reader can merge adjacent links distinguished only by an attr omitted from Markdown, including in a block that passes the strict emphasis check.
 - With `block_image=True`, a top-level paragraph replaced by exactly one node keeps its text.
   A paragraph that really splits into several nodes loses its text; unchanged blocks around it keep theirs.
 - A source-preserving dump stores both node content and remembered Markdown, so remembered text increases the stored size.
@@ -849,7 +850,7 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `invalid_content` | `InvalidNodeError` | a content-model violation on strict dict input or a declared tag, a required child that cannot be filled after normalization, or an invalid strict text payload |
 | `unknown_attr` | `InvalidNodeError` | an unknown attr on strict dict input or a declared tag |
 | `invalid_attr_value` | `InvalidNodeError` | a wrong type, out-of-range value or repeated tag attr |
-| `unrepresentable` | `InvalidNodeError` | well-formed input would lose content or attrs in the selected Markdown form, including emphasis the writer's spelling cannot carry |
+| `unrepresentable` | `InvalidNodeError` | a detected content or attr loss in the selected Markdown form, or an emphasis delimiter that the emphasis check judges unable to open or close at its run edge |
 | `missing_attr` | `InvalidNodeError` | a required attr is unset on strict dict input or a declared tag |
 | `invalid_mark_set` | `InvalidNodeError` | conflicting or duplicate marks on strict dict input or in declared tags |
 | `invalid_tag` | `InvalidNodeError` | a declared tag is unmatched, self-closing where a container is required, or in the wrong position; a declared or delimiter mark crosses an inline container boundary |
@@ -1057,13 +1058,14 @@ The writer uses the resulting tree when it needs to regenerate a block.
 Under `strict="content"` and `strict="exact"`, an emphasis or pipe-cell refusal raises `InvalidNodeError` with code `unrepresentable` and the input path.
 The paragraph-join check runs while reading the dict.
 The remaining pipe-cell checks and the emphasis check run after inheritance and skip blocks that inherited remembered source.
+The [strict limits](#strict-limits) describe where these checks and Markdown round trips differ.
 `strict="off"` is outside the round-trip guarantees.
 
-- **Emphasis** — strict dict input reads back each textblock carrying bold, italic or strike in a block without remembered spelling.
+- **Emphasis** — strict dict input checks textblocks carrying bold, italic or strike in blocks without remembered spelling.
   The writer uses one spelling, with `*`, `**` and `~~` nested in stored mark order.
-  If the inline content reads back differently, strict refuses it.
-  Examples include some overlapping marks on touching words and emphasis that starts or ends at a link's edge against a letter.
-  Some such trees have another spelling marktip does not search for.
+  Like normalization, the emphasis check judges each delimiter by the text on either side of its run edge.
+  It refuses a delimiter that it judges unable to open or close there.
+  Examples include outer strike delimiters in `un~~**believ**~~able` and bold that ends at a closing link next to a letter.
   `from_markdown` skips this check.
 - **Pipe cells** — in a schema without table tags, strict refuses blocks that a one-line cell would flatten, such as a heading without a heading tag.
   A lone block image, declared block atom or supported textblock tag can be carried.
@@ -1072,10 +1074,24 @@ The remaining pipe-cell checks and the emphasis check run after inheritance and 
 - **Paragraph joins in pipe cells** — strict checks the submitted attrs before inheritance.
   If the cell contains paragraphs that would be joined, a paragraph with a tag attr is refused at its input path.
 
-On `make_fixture(1200, 4)` from `scripts/benchmark.py`, emphasis read-back averaged about 80,000 instructions per emphasized textblock.
-On the same fixture, `from_dict(..., strict="content")` without a base went from 833 million instructions per call in 0.8.3 to 1,238 million in 0.9.0.
-The counts are user-space instructions measured on an Intel Core Ultra 9 185H running Linux x86_64 with CPython 3.14.10 and a GCC 16.2.1 Release build.
-Each per-call figure is the best of five calls.
+#### Strict limits
+
+- **Remembered text** — a block that inherits remembered text through `base=` skips the emphasis check, so strict accepts it even when its canonical Markdown would read back differently.
+- **Pairing** — the reader can pair asterisks differently even when they can open and close at their respective edges.
+  For example, strict accepts touching runs of bold `a`, bold and italic `b`, and italic `c`.
+  The writer emits `**a*b****c*`, which reads with literal asterisks and different emphasis.
+  Pairing can also differ near punctuation or strike delimiters, at link labels with leading or trailing space, around a declared inline container, or when bold closes and reopens inside italic.
+- **Unreadable Markdown** — strict accepts italic over both bold `a ` and a declared inline container holding bold `.b.`.
+  The writer emits `***a** <wrap>**.b.**</wrap>*`, which fails to read back because `from_markdown` raises `invalid_tag`.
+- **Wrong refusals** — strict can refuse emphasis that would read back.
+  With `cjk_friendly`, this can happen when a text run begins with a variation selector directly after or before a delimiter.
+  It can also happen when inheritance splits a bold run in a pipe cell and a hard break ends one of the resulting runs.
+- **Missed delimiter edges** — the emphasis check can accept a delimiter that cannot open or close next to an `htmlInline` payload that does not begin with `<` and end with `>`.
+  Under `cjk_friendly`, a lone variation selector just inside a closing delimiter can cause the same misjudgment.
+- **Losses outside emphasis** — strict checks only the tree, so writer losses unrelated to emphasis delimiters can pass strict in any block.
+  An inline HTML comment before text can read back as an HTML block.
+  An image carrying bold and code can read back as code text.
+  Nested Markdown links through a declared inline container can read back differently.
 
 ## JavaScript package
 

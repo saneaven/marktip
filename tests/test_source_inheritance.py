@@ -563,7 +563,7 @@ def test_split_emphasis_edge_inherits_the_input_mark_keys():
     assert document.to_dict() == tree(run("a ", retained), run("b", retained, bold=True))
 
 
-def test_remembered_spelling_bypasses_emphasis_readback():
+def test_remembered_spelling_bypasses_emphasis_check():
     markdown = "**a**[**b**](u)c"
     base = tm.from_markdown(markdown)
     assert tm.from_markdown(base.to_markdown(canonical=True)) != base
@@ -573,7 +573,7 @@ def test_remembered_spelling_bypasses_emphasis_readback():
 
 
 @pytest.mark.parametrize("marker", ("- [x]", "7. [ ]"), ids=("bullet", "ordered"))
-def test_emphasis_readback_keeps_task_checkbox_context(marker):
+def test_strict_emphasis_roundtrips_in_task_items(marker):
     markdown = f"{marker} <!-- editor note --> **a*b***"
     parsed = tm.from_markdown(markdown)
     document = tm.from_dict(parsed.to_dict(), strict="content")

@@ -8,30 +8,15 @@
 namespace marktip {
 namespace {
 
-template <typename EqualAttrs>
-bool same_content(const Document& left, const Node& a, const Document& right, const Node& b, EqualAttrs equal);
-
-template <typename EqualAttrs>
-bool same_node(const Document& left, const Node& a, const Document& right, const Node& b, EqualAttrs equal) {
-    return a.type == b.type && a.text == b.text && equal(a, b) && same_content(left, a, right, b, equal);
-}
-
-template <typename EqualAttrs>
-bool same_content(const Document& left, const Node& a, const Document& right, const Node& b, EqualAttrs equal) {
-    return std::equal(a.content.begin(), a.content.end(), b.content.begin(), b.content.end(),
-                      [&](std::size_t i, std::size_t j) {
-        return same_node(left, left.node(i), right, right.node(j), equal);
-    });
-}
-
-bool same_carried_attrs(const AttrList& a, const AttrList& b, const std::vector<AttrSpec>& specs) {
-    for (const AttrSpec& spec : specs) {
-        if (!attr_is_carried(spec)) {
-            continue;
-        }
-        const AttrValue* l = find_attr(a, spec.name);
-        const AttrValue* r = find_attr(b, spec.name);
-        if ((l == nullptr) != (r == nullptr) || (l != nullptr && !(*l == *r))) {
+bool same_node(const Document& left, std::size_t left_index, const Document& right, std::size_t right_index) {
+    const Node& a = left.node(left_index);
+    const Node& b = right.node(right_index);
+    if (a.type != b.type || a.text != b.text || !equal_attrs(a.attrs, b.attrs) ||
+        a.marks != b.marks || a.content.size() != b.content.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.content.size(); ++i) {
+        if (!same_node(left, a.content[i], right, b.content[i])) {
             return false;
         }
     }
@@ -45,23 +30,7 @@ void combine_hash(std::size_t& hash, std::size_t value) {
 }  // namespace
 
 bool same_document(const Document& left, const Document& right) {
-    return left.schema().fingerprint() == right.schema().fingerprint() &&
-           same_node(left, left.root(), right, right.root(), [](const Node& a, const Node& b) {
-               return equal_attrs(a.attrs, b.attrs) && a.marks == b.marks;
-           });
-}
-
-bool same_carried_inline_content(const Document& left, const Node& a, const Document& right, const Node& b) {
-    const Schema& schema = left.schema();
-    return same_content(left, a, right, b, [&](const Node& x, const Node& y) {
-        if (!same_carried_attrs(x.attrs, y.attrs, schema.node(x.type)->attrs)) {
-            return false;
-        }
-        return std::equal(x.marks.begin(), x.marks.end(), y.marks.begin(), y.marks.end(),
-                          [&](const Mark& l, const Mark& r) {
-            return l.type == r.type && same_carried_attrs(l.attrs, r.attrs, schema.mark(l.type)->attrs);
-        });
-    });
+    return left.schema().fingerprint() == right.schema().fingerprint() && same_node(left, 0, right, 0);
 }
 
 std::size_t document_hash(const Document& document) {
@@ -121,10 +90,6 @@ std::size_t Document::node_count() const {
 
 const Schema& Document::schema() const {
     return *schema_;
-}
-
-const std::shared_ptr<const Schema>& Document::schema_ptr() const {
-    return schema_;
 }
 
 const std::optional<Spelling>& Document::spelling() const {
