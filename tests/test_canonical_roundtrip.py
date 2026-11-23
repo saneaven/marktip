@@ -127,8 +127,6 @@ RUN_MASKS = tuple("".join(str(mask) for mask in masks) for masks in product(rang
 
 # Keep the failing case IDs fixed so each completed plan item exposes its XPASSes.
 XFAIL_GROUPS = (
-    ("T6 preserves heading breaks where the schema can write them",
-     _spec_ids(ALL_SPECS, "81 82 95") + ["breaks-in-headings", "breaks-in-tagged-headings"]),
     ("M1 aligns emphasis order and continuation with the reader",
      _spec_ids(EDITOR_SPECS, """
          393 394 395 399 404 406 410 411 413 414 415 416 418 419 422 424 428
@@ -154,14 +152,10 @@ XFAIL_GROUPS = (
          301 302 303 305 306 307 308 309 310 311 312 313 314 316 317 318 319
          320 321 322 323 324 325 326
      """, "279 280") + ["missing-tight", "single-block-loose-list", "tight-list-needing-a-blank-line"]),
-    ("B6 normalizes the header, alignment and paragraphs of a pipe table",
-     ["table-without-header-row", "table-body-alignment", "table-cell-with-two-paragraphs"]),
-    ("B7 pads a short table row as the reader does", ["ragged-table"]),
     ("W8 preserves loose lists that are read back as tight",
      _spec_ids(MARKDOWN_SPECS, "5 109 254 264 270 271 286 287 288 290") + ["loose-list-with-quote"]),
     ("E1 rejects touching emphasis that loses marks or becomes literal punctuation",
      ["touching-strike-inside-italic", "touching-crossed-bold-and-italic"], pytest.raises.Exception),
-    ("E2 rejects a heading in a pipe table cell", ["heading-in-pipe-table-cell"], pytest.raises.Exception),
     # Masks use bold=1, italic=2 and strike=4 in run order.
     ("M1 orders combined or continued marks as the reader does",
      _run_ids("latin-spaced", "023 027 037 045 046 047 057 067 157 237 267 457 467") + _run_ids("latin-touching", """

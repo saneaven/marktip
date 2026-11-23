@@ -631,8 +631,10 @@ def test_an_attr_markdown_cannot_carry_stays_in_the_document_and_out_of_the_mark
         *cell(colwidth=[100, 200], align="left")["content"],
     )
     document = tm.from_dict(ast, strict=level)
-    *blocks, table = ast["content"]
-    expected = doc(*blocks, {**table, "attrs": {"colCount": 1}})
+    *blocks, _ = ast["content"]
+    expected = doc(*blocks, {"type": "table", "attrs": {"colCount": 1}, "content": [
+        {"type": "tableRow", "content": [node("tableHeader", colwidth=[100, 200], align="left")]},
+    ]})
     assert document.to_dict() == expected
     assert document.dump()["doc"] == expected
     assert document.to_markdown() == "[a](/x)![](/i.png)\n\n1. a\n\n| x |\n| :--- |"

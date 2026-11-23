@@ -246,6 +246,25 @@ def test_textblock_hard_breaks_use_br_inside_a_table_cell(html, level):
     roundtrip(ast, block_schema(), "| <summary>a<br>b</summary> |\n| --- |", html, level)
 
 
+@pytest.mark.parametrize("core_attrs", ({}, {"table": {}}), ids=("pipe-only", "table-tags"))
+def test_declared_textblock_flattens_soft_breaks_in_a_table_cell(core_attrs):
+    schema = block_schema().extend(core_attrs=core_attrs)
+    child = node("summary", text("a\nb"))
+    ast = doc(node("table", node("tableRow", node("tableHeader", child)), attrs={"colCount": 1}))
+    roundtrip(ast, schema, "| <summary>a b</summary> |\n| --- |", True, "exact")
+
+
+def test_reading_a_lone_block_atom_in_a_pipe_cell_roundtrips_through_strict_dict():
+    schema = tm.Schema(nodes=[tm.NodeSpec("embed", "block", attrs={"label": tm.Attr(str)})])
+    markdown = '| a |\n| --- |\n| <embed label="x"/> |\n'
+    parsed = tm.from_markdown(markdown, schema=schema)
+    ast = parsed.to_dict()
+    assert ast["content"][0]["content"][1]["content"] == [node("tableCell", node("embed", attrs={"label": "x"}))]
+    rebuilt = tm.from_dict(ast, schema=schema, strict="content")
+    assert rebuilt == parsed
+    assert rebuilt.to_markdown(canonical=True) == markdown.removesuffix("\n")
+
+
 @pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("level", LEVELS)
 def test_textblock_body_keeps_inline_marks_and_hard_breaks(html, level):

@@ -22,6 +22,8 @@ struct DictDocument {
     Document document;
     const Document* base;
     InputAttrKeys present;
+    // Strict reads keep input parents by arena index for errors after normalization.
+    std::vector<std::size_t> input_parents;
 
     Document finish(const NodeTypePolicy& node_policy, const UriPolicy& uri_policy) && {
         finalize_document(document, node_policy, uri_policy);
@@ -29,6 +31,9 @@ struct DictDocument {
             present.resize(document.node_count());
             inherit_attrs_and_spelling(document, *base, present);
             normalize_inherited_attrs(document);
+        }
+        if (!input_parents.empty()) {
+            check_representability(document, input_parents);
         }
         return std::move(document);
     }
@@ -309,7 +314,8 @@ class DocumentReader {
 
     static const NodeSpec* fill_node_from_input(Document& document, std::size_t index, Value node_dict,
                                                 std::string_view context, std::size_t depth, StrictMode mode,
-                                                PathStack& path, InputAttrKeys* keys = nullptr) {
+                                                PathStack& path, InputAttrKeys* keys,
+                                                std::vector<std::size_t>* input_parents) {
         check_node_depth(depth, path);
 
         if (keys != nullptr) {
@@ -335,29 +341,40 @@ class DocumentReader {
             path.push_back({"content", child_pos});
             Value child_dict = expect_dict(child_handle, "content child", "content", path);
             std::size_t child_index = document.append_child(index, Node{});
+            if (input_parents != nullptr) {
+                input_parents->push_back(index);
+            }
             const NodeSpec* child = fill_node_from_input(document, child_index, child_dict, "node", depth + 1,
-                                                         mode, path, keys);
+                                                         mode, path, keys, input_parents);
             if (mode != StrictMode::Off) {
-                check_child_content(document, *spec, *child, document.node(child_index),
-                                    Input::size(content_list), path);
+                check_child_content(document, *spec, *child, document.node(child_index), path);
             }
             path.pop_back();
             ++child_pos;
         }
-        if (mode != StrictMode::Off && !spec->core) {
-            check_node_content(document, index, *spec, path);
+        if (mode != StrictMode::Off) {
+            if (!spec->core) {
+                check_node_content(document, index, *spec, path);
+            } else if (child_pos > 1 && document.schema().has_core_attrs() && is_table_cell(spec->name) &&
+                       !document.schema().has_table_tags()) {
+                check_cell_paragraph_join(document, document.node(index), path);
+            }
         }
         return spec;
     }
 
-    static Document read_dict(Value root, std::shared_ptr<const Schema> schema, StrictMode mode, InputAttrKeys* keys) {
+    static Document read_dict(Value root, std::shared_ptr<const Schema> schema, StrictMode mode, InputAttrKeys* keys,
+                              std::vector<std::size_t>* input_parents = nullptr) {
         PathStack path;
         path.reserve(32);
         std::string type = required_type(root, "root node", path);
         check_root_type(type, path);
 
         Document document(std::move(schema));
-        fill_node_from_input(document, 0, root, "root node", 0, mode, path, keys);
+        if (input_parents != nullptr) {
+            input_parents->push_back(0);
+        }
+        fill_node_from_input(document, 0, root, "root node", 0, mode, path, keys, input_parents);
         return document;
     }
 
@@ -367,8 +384,10 @@ public:
         const Document* inheritance_base = base != nullptr &&
             base->schema().fingerprint() == schema->fingerprint() ? base : nullptr;
         InputAttrKeys present;
-        Document document = read_dict(root, std::move(schema), mode, inheritance_base != nullptr ? &present : nullptr);
-        return {std::move(document), inheritance_base, std::move(present)};
+        std::vector<std::size_t> input_parents;
+        Document document = read_dict(root, std::move(schema), mode, inheritance_base != nullptr ? &present : nullptr,
+                                      mode == StrictMode::Off ? nullptr : &input_parents);
+        return {std::move(document), inheritance_base, std::move(present), std::move(input_parents)};
     }
 
     static Document load(Value data, std::shared_ptr<const Schema> schema) {

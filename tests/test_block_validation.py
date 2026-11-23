@@ -66,6 +66,16 @@ def test_block_container_directly_in_a_table_cell_is_unrepresentable(schema, cel
     )
 
 
+def test_partial_markdown_refuses_a_declared_block_container_in_a_pipe_cell():
+    schema = tm.Schema(nodes=[tm.NodeSpec("callout", "block", content="block*")])
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_markdown("| <callout> |\n| --- |", schema=schema, partial=True, keep_source=False)
+    error = excinfo.value
+    assert (error.code, error.field, error.path) == (
+        "unrepresentable", "content", "content[0].content[0].content[0].content[0]",
+    )
+
+
 @pytest.mark.parametrize("cell_type", ["tableCell", "tableHeader"])
 @pytest.mark.parametrize("strict", ["content", "exact"])
 @pytest.mark.parametrize("type", ["embed", "summary"])
@@ -85,8 +95,43 @@ def test_a_declared_block_must_be_the_only_child_of_a_table_cell(schema, cell_ty
     assert (error.code, error.field, error.path) == (
         "unrepresentable", "content", f"content[0].content[0].content[0].content[{position}]",
     )
-    expected = document({**ast["content"][0], "attrs": {"colCount": 1}})
+    expected = document({"type": "table", "attrs": {"colCount": 1}, "content": [{"type": "tableRow", "content": [{
+        "type": "tableHeader", "content": children,
+    }]}]})
     assert tm.from_dict(ast, schema=schema, strict="off").to_dict() == expected
+
+
+@pytest.mark.parametrize("strict", ["content", "exact"])
+@pytest.mark.parametrize("base_markdown", (None, "[ref]: /destination\n"), ids=("no-base", "source-only-base"))
+def test_pipe_cell_refusal_reports_the_input_position_after_normalization(strict, base_markdown):
+    heading = {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "title"}]}
+    children = [{"type": "paragraph", "content": [{"type": "text", "text": value}]} for value in ("one", "two")]
+    cell = {"type": "tableHeader", "content": [*children, heading]}
+    table = {"type": "table", "content": [{"type": "tableRow", "content": [cell]}]}
+    ast = document({"type": "paragraph"}, table)
+    base = None if base_markdown is None else tm.from_markdown(base_markdown)
+
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_dict(ast, strict=strict, base=base)
+    error = excinfo.value
+    assert (error.code, error.field, error.path) == (
+        "unrepresentable", "content", "content[1].content[0].content[0].content[2]",
+    )
+
+
+@pytest.mark.parametrize("strict", ["content", "exact"])
+def test_pipe_cell_accepts_a_tagged_heading_after_dropping_empty_paragraph(strict):
+    schema = tm.Schema(core_attrs={"heading": {}})
+    heading = {"type": "heading", "attrs": {"level": 2}, "content": [
+        {"type": "text", "text": "a"}, {"type": "hardBreak"}, {"type": "text", "text": "b"},
+    ]}
+    cell = {"type": "tableHeader", "content": [{"type": "paragraph"}, heading]}
+    ast = document({"type": "table", "content": [{"type": "tableRow", "content": [cell]}]})
+
+    parsed = tm.from_dict(ast, schema=schema, strict=strict)
+    written = parsed.to_markdown(canonical=True)
+    assert written == "| <h2>a<br>b</h2> |\n| --- |"
+    assert tm.from_markdown(written, schema=schema) == parsed
 
 
 def test_off_skips_block_content_and_marks_checks(schema):

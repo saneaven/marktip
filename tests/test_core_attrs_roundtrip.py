@@ -104,28 +104,41 @@ def test_default_alignment_is_unset_and_keeps_the_markdown_form(html, level, typ
 
 @pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("level", LEVELS)
-@pytest.mark.parametrize("child", [p(), node("heading", text("a"), node("hardBreak"), text("b"), attrs={"level": 2}),
-                                   node("heading", text("a\nb"), attrs={"level": 2})])
+@pytest.mark.parametrize("child, tagged", [
+    (p(), None),
+    (node("heading", text("a"), node("hardBreak"), text("b"), attrs={"level": 2}), "<h2>a\\\nb</h2>"),
+    (node("heading", text("a\nb"), attrs={"level": 2}), "<h2>a\nb</h2>"),
+])
 @pytest.mark.parametrize("context", ("root", "quote", "list", "table"))
-def test_unset_core_overlays_keep_empty_paragraph_and_heading_normalizations(html, level, child, context):
+def test_unset_core_overlays_preserve_heading_breaks_and_empty_paragraphs(html, level, child, tagged, context):
     schema = tm.Schema(core_attrs={"paragraph": {"textAlign": tm.Attr(str)},
                                    "heading": {"textAlign": tm.Attr(str)}})
+    expected = None
     if context == "root":
         ast = doc(child)
+        written = tagged
     elif context == "quote":
         ast = doc(node("blockquote", child))
+        written = None if tagged is None else "> " + tagged.replace("\n", "\n> ")
     elif context == "list":
         ast = doc(node("bulletList", node("listItem", child), attrs={"tight": True}))
+        written = None if tagged is None else "- " + tagged.replace("\n", "\n  ")
     else:
         ast = doc(node("table", node("tableRow", node("tableHeader", child)), attrs={"colCount": 1}))
-    baseline = tm.from_dict(ast, strict=level)
-    document = tm.from_dict(ast, schema=schema, strict=level)
-    assert document.to_dict() == baseline.to_dict()
-    assert document.to_markdown(canonical=True) == baseline.to_markdown(canonical=True)
-    parsed = tm.from_markdown(document.to_markdown(canonical=True), schema=schema, html=html)
-    baseline_parsed = tm.from_markdown(baseline.to_markdown(canonical=True), html=html)
-    assert parsed.to_dict() == baseline_parsed.to_dict()
-    assert parsed.to_markdown(canonical=True) == baseline_parsed.to_markdown(canonical=True)
+        if tagged is None:
+            written = None
+        elif "\\\n" in tagged:
+            written = "| <h2>a<br>b</h2> |\n| --- |"
+        else:
+            written = "| <h2>a b</h2> |\n| --- |"
+            flattened = node("heading", text("a b"), attrs={"level": 2})
+            expected = doc(node("table", node("tableRow", node("tableHeader", flattened)), attrs={"colCount": 1}))
+    if written is None:
+        baseline = tm.from_dict(ast, strict=level)
+        written = baseline.to_markdown(canonical=True)
+        expected = baseline.to_dict()
+    parsed = roundtrip(ast, schema, written, html, level)
+    assert parsed.to_dict() == (ast if expected is None else expected)
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -155,6 +168,14 @@ def test_heading_with_a_set_overlay_preserves_breaks_and_newlines(html, level, c
     schema = tm.Schema(core_attrs={"heading": {"textAlign": tm.Attr(str)}})
     ast = doc(node("heading", *children, attrs={"level": 2, "textAlign": "center"}))
     roundtrip(ast, schema, written, html, level)
+
+
+@pytest.mark.parametrize("html", HTML)
+def test_heading_with_a_set_overlay_flattens_soft_breaks_in_a_cell(html):
+    schema = tm.Schema(core_attrs={"heading": {"textAlign": tm.Attr(str)}})
+    heading = node("heading", text("a\nb"), attrs={"level": 2, "textAlign": "center"})
+    ast = doc(node("table", node("tableRow", node("tableHeader", heading)), attrs={"colCount": 1}))
+    roundtrip(ast, schema, '| <h2 textAlign="center">a b</h2> |\n| --- |', html, "exact")
 
 
 @pytest.mark.parametrize("html", HTML)

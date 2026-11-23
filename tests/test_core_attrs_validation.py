@@ -151,17 +151,44 @@ def test_strict_raw_html_cannot_collide_with_an_active_core_tag(level, type_, ta
 
 
 @pytest.mark.parametrize("level", STRICT_LEVELS)
-@pytest.mark.parametrize("type_", ("paragraph", "heading"))
-def test_a_core_tag_textblock_must_be_the_only_child_of_a_table_cell(level, type_):
-    attrs = {"textAlign": "center"}
-    if type_ == "heading":
-        attrs["level"] = 2
-    child = node(type_, text("first"), **attrs)
+def test_a_tagged_heading_must_be_the_only_child_of_a_table_cell(level):
+    child = node("heading", text("first"), level=2, textAlign="center")
     ast = doc(node("table", node("tableRow", node("tableHeader", child, p(text("second")))), colCount=1))
-    schema = tm.Schema(core_attrs={type_: {"textAlign": tm.Attr(str)}})
+    schema = tm.Schema(core_attrs={"heading": {"textAlign": tm.Attr(str)}})
+
     with pytest.raises(tm.InvalidNodeError) as excinfo:
         tm.from_dict(ast, schema=schema, strict=level)
     assert_error(excinfo, "unrepresentable", "content", "content[0].content[0].content[0].content[0]")
+
+
+@pytest.mark.parametrize("level", STRICT_LEVELS)
+@pytest.mark.parametrize("first_attrs, second_attrs, index", [
+    ({}, {"textAlign": "right"}, 1),
+    ({"textAlign": "center"}, {"textAlign": "right"}, 0),
+    ({"textAlign": "center"}, {}, 0),
+])
+def test_pipe_cell_refuses_paragraph_joins_that_would_change_tag_attrs(level, first_attrs, second_attrs, index):
+    first = node("paragraph", text("first"), **first_attrs)
+    second = node("paragraph", text("second"), **second_attrs)
+    ast = doc(node("table", node("tableRow", node("tableHeader", first, second)), colCount=1))
+    schema = tm.Schema(core_attrs={"paragraph": {"textAlign": tm.Attr(str)}})
+
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_dict(ast, schema=schema, strict=level)
+    assert_error(excinfo, "unrepresentable", "content", f"content[0].content[0].content[0].content[{index}]")
+
+
+@pytest.mark.parametrize("level", STRICT_LEVELS)
+def test_pipe_cell_joins_paragraphs_with_unset_tag_attrs(level):
+    first = node("paragraph", text("first"), textAlign=None)
+    second = node("paragraph", text("second"), textAlign="center")
+    ast = doc(node("table", node("tableRow", node("tableHeader", first, second)), colCount=1))
+    schema = tm.Schema(core_attrs={"paragraph": {"textAlign": tm.Attr(str, default="center")}})
+
+    parsed = tm.from_dict(ast, schema=schema, strict=level)
+    canonical = "| first<br>second |\n| --- |"
+    assert parsed.to_markdown(canonical=True) == canonical
+    assert tm.from_markdown(canonical, schema=schema) == parsed
 
 
 @pytest.mark.parametrize("boundary", ("dict", "markdown"))

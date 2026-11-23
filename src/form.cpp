@@ -7,7 +7,6 @@
 #include "compiler.h"
 
 namespace marktip {
-namespace {
 
 bool has_tag_attr(const AttrList& attrs, const std::vector<AttrSpec>& specs) {
     return std::any_of(specs.begin(), specs.end(), [&](const AttrSpec& spec) {
@@ -15,20 +14,51 @@ bool has_tag_attr(const AttrList& attrs, const std::vector<AttrSpec>& specs) {
     });
 }
 
+namespace {
+
+bool different_cell_alignment(const Node& header, const Node& cell) {
+    const AttrValue* column_align = find_attr(header.attrs, "align");
+    const AttrValue* cell_align = find_attr(cell.attrs, "align");
+    return column_align && cell_align ? !(*column_align == *cell_align) : column_align != cell_align;
+}
+
+bool has_line_break(const Document& document, const Node& node) {
+    return std::any_of(node.content.begin(), node.content.end(), [&](std::size_t index) {
+        const Node& child = document.node(index);
+        if (child.type == "htmlInline") {
+            if (const AttrValue* html = find_attr(child.attrs, "html")) {
+                return html->string_value.find('\n') != std::string::npos;
+            }
+        }
+        return child.type == "hardBreak" ||
+               (child.type == "text" && child.text.find('\n') != std::string::npos) ||
+               has_line_break(document, child);
+    });
+}
+
 // A recursive form query would otherwise enlarge the ordinary paragraph-cell path.
 MARKTIP_NOINLINE bool cell_child_needs_tag(const Document& document, const Node& child) {
     const NodeSpec& spec = *document.schema().node(child.type);
-    return spec.shape != Shape::BlockAtom &&
-           (spec.shape != Shape::TextBlock || !uses_tag_form(document, child, spec));
+    if (spec.shape == Shape::TextBlock) {
+        return !uses_cell_textblock_tag(spec) && !uses_tag_form(document, child, spec);
+    }
+    return spec.shape != Shape::BlockAtom;
 }
 
 }  // namespace
+
+bool uses_cell_textblock_tag(const NodeSpec& spec) {
+    return spec.core && spec.shape == Shape::TextBlock && !spec.tag.empty() && spec.name != "paragraph";
+}
 
 bool uses_tag_form(const Document& document, const Node& node, const NodeSpec& spec) {
     if (spec.tag.empty()) {
         return false;
     }
     if (!spec.core || has_tag_attr(node.attrs, spec.attrs)) {
+        return true;
+    }
+    if (node.type == "heading" && has_line_break(document, node)) {
         return true;
     }
     const Schema& schema = document.schema();
@@ -44,15 +74,18 @@ bool uses_tag_form(const Document& document, const Node& node, const NodeSpec& s
     if (schema.has_table_tags() && node.type == "table") {
         for (std::size_t row_index = 0; row_index < node.content.size(); ++row_index) {
             const Node& row = document.node(node.content[row_index]);
-            if (uses_tag_form(document, row, *schema.node(row.type))) {
+            const Node& header = document.node(node.content.front());
+            if (row.content.size() != header.content.size() ||
+                uses_tag_form(document, row, *schema.node(row.type))) {
                 return true;
             }
-            for (std::size_t child : row.content) {
-                const Node& cell = document.node(child);
+            for (std::size_t column = 0; column < row.content.size(); ++column) {
+                const Node& cell = document.node(row.content[column]);
                 if ((cell.type == "tableHeader") != (row_index == 0) || cell.content.size() > 1 ||
                     (!cell.content.empty() && document.node(cell.content.front()).type != "paragraph" &&
                      cell_child_needs_tag(document, document.node(cell.content.front()))) ||
-                    has_tag_attr(cell.attrs, schema.node(cell.type)->attrs)) {
+                    has_tag_attr(cell.attrs, schema.node(cell.type)->attrs) ||
+                    (row_index != 0 && different_cell_alignment(document.node(header.content[column]), cell))) {
                     return true;
                 }
             }

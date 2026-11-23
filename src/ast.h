@@ -57,6 +57,8 @@ bool same_document(const Document& left, const Document& right);
 std::size_t document_hash(const Document& document);
 std::size_t block_hash(const Document& document, std::size_t index);
 std::string plain_text(const Document& document, const Node& node);
+bool is_table_cell(std::string_view type);
+std::size_t table_columns(const Document& document, const Node& table);
 
 void normalize_task_list(Document& document, std::size_t index);
 

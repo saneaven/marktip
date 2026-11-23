@@ -511,7 +511,7 @@ void finish_parent(Document& document, InlineParent& parent, PathStack& path, st
     for (const PlacedChild& child : parent.placed) {
         path.push_back({"content", child.position});
         std::size_t index = document.node(parent.node).content[child.position];
-        check_child_content(document, *parent.spec, *child.spec, document.node(index), siblings, path);
+        check_lifted_child_content(document, *parent.spec, *child.spec, document.node(index), path);
         path.pop_back();
     }
 }
@@ -738,8 +738,7 @@ MARKTIP_NOINLINE const NodeSpec& process_inline(Document& document, std::size_t 
             const Node& child = document.node(document.node(index).content[position]);
             if (child.type == "image") {
                 path.push_back({"content", position});
-                check_child_content(document, content_spec, *schema.node("image"), child,
-                                    document.node(index).content.size(), path);
+                check_child_content(document, content_spec, *schema.node("image"), child, path);
                 path.pop_back();
             }
         }
@@ -850,7 +849,7 @@ MARKTIP_NOINLINE void split_block_images(Document& document, std::size_t index, 
             path.push_back({"content", position});
             path.push_back({"content", static_cast<std::size_t>(first_image - inline_children.begin())});
             check_child_content(document, *document.schema().node("paragraph"), *document.schema().node("image"),
-                                document.node(*first_image), inline_children.size(), path);
+                                document.node(*first_image), path);
             path.pop_back();
             path.pop_back();
         }
@@ -889,8 +888,7 @@ const NodeSpec& lift_node(Document& document, std::size_t index, const ParseOpti
         std::size_t child = document.node(index).content[i];
         const NodeSpec& child_spec = lift_node(document, child, options, block_forms, path, paired_from);
         if (!child_spec.core && child_spec.shape == Shape::TextBlock) {
-            check_child_content(document, spec, child_spec, document.node(child),
-                                document.node(index).content.size(), path);
+            check_child_content(document, spec, child_spec, document.node(child), path);
             complete_content(document, child, child_spec, path);
         }
         path.pop_back();

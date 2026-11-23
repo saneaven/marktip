@@ -72,6 +72,7 @@ HARD_BREAK = node("hardBreak")
 NOTE_SCHEMA = tm.Schema(marks=[tm.MarkSpec("note", attrs={"label": tm.Attr(str)})])
 HEADING_SCHEMA = tm.Schema(core_attrs={"heading": {}})
 PARAGRAPH_SCHEMA = tm.Schema(core_attrs={"paragraph": {}})
+TABLE_SCHEMA = tm.Schema(core_attrs={"table": {}})
 TAGGED_PARAGRAPH_SCHEMA = tm.Schema(core_attrs={"paragraph": {"textAlign": tm.Attr(str)}})
 INLINE_CONTAINER_SCHEMA = tm.Schema(nodes=[tm.NodeSpec("span", "inline", content="inline*")])
 MATH_SCHEMA = tm.Schema(nodes=[
@@ -115,12 +116,18 @@ EDITOR_DOCUMENTS = (
     case("blanks-and-soft-break-after-hard-break-in-pipe-cell",
          table(1, [cell(paragraph(text("a"), HARD_BREAK, text(" ", BOLD), text("\nb")), header=True)]),
          normalized=node("doc", table(1, [cell(paragraph(text("a"), HARD_BREAK, text("b")), header=True)]))),
+    case("soft-breaks-in-pipe-cell",
+         table(1, [cell(paragraph(text("a\nb\n"), HARD_BREAK, text("c")), header=True)]),
+         normalized=node("doc", table(1, [cell(paragraph(text("a b "), HARD_BREAK, text("c")), header=True)])),
+         expected_markdown="| a b <br>c |\n| --- |"),
     case("newline-in-code-span", paragraph(text("a\nb", CODE))),
     case("code-marked-hard-break", paragraph(text("a", CODE), node("hardBreak", marks=(CODE,)), text("b", CODE)),
          normalized=node("doc", paragraph(text("a", CODE), HARD_BREAK, text("b", CODE)))),
-    case("breaks-in-headings", heading(text("a"), HARD_BREAK, text("b")), heading(text("a\nb"))),
+    case("breaks-in-headings", heading(text("a"), HARD_BREAK, text("b")), heading(text("a\nb")),
+         normalized=node("doc", heading(text("a b")), heading(text("a b"))), expected_markdown="## a b\n\n## a b"),
     case("breaks-in-tagged-headings", heading(text("a"), HARD_BREAK, text("b")), heading(text("a\nb")),
-         schema=HEADING_SCHEMA),
+         schema=HEADING_SCHEMA, normalized=node("doc", heading(text("a"), HARD_BREAK, text("b")), heading(text("a\nb"))),
+         expected_markdown="<h2>a\\\nb</h2>\n\n<h2>a\nb</h2>"),
 
     # Marks and their boundaries.
     case("bold-inside-italic", paragraph(text("italic and ", ITALIC), text("bold", BOLD, ITALIC),
@@ -162,13 +169,32 @@ EDITOR_DOCUMENTS = (
     case("single-block-loose-list", bullet_list(list_item(paragraph(text("item"))), tight=False)),
     case("tight-list-needing-a-blank-line", bullet_list(list_item(paragraph(text("one")), paragraph(text("two"))))),
     case("tight-list-with-thematic-break", bullet_list(list_item(node("horizontalRule"), paragraph(text("after"))))),
-    case("table-without-header-row", table(1, [cell(paragraph(text("one")))], [cell(paragraph(text("two")))])),
-    case("table-body-alignment", table(1, [cell(paragraph(text("one")), header=True, align="left")],
-                                      [cell(paragraph(text("two")), align="right")])),
+    case("table-without-header-row", table(1, [cell(paragraph(text("one")))],
+                                          [cell(paragraph(text("two")), header=True)]),
+         normalized=node("doc", table(1, [cell(paragraph(text("one")), header=True)],
+                                      [cell(paragraph(text("two")))]))),
+    case("table-body-alignment",
+         table(2, [cell(paragraph(text("one")), header=True, align="left"), cell(paragraph(text("two")), header=True)],
+               [cell(paragraph(text("three")), align="right"), cell(paragraph(text("four")), align="center")]),
+         normalized=node("doc", table(2, [cell(paragraph(text("one")), header=True, align="left"),
+                                          cell(paragraph(text("two")), header=True)],
+                                      [cell(paragraph(text("three")), align="left"), cell(paragraph(text("four")))]))),
     case("table-cell-with-two-paragraphs", table(1, [cell(paragraph(text("one")), header=True)],
-                                               [cell(paragraph(text("two")), paragraph(text("three")))])),
-    case("ragged-table", table(2, [cell(paragraph(text("one")), header=True)],
-                              [cell(paragraph(text("two"))), cell(paragraph(text("three")))])),
+                                               [cell(paragraph(text("two")), paragraph(text("three")))]),
+         normalized=node("doc", table(1, [cell(paragraph(text("one")), header=True)],
+                                      [cell(paragraph(text("two"), HARD_BREAK, text("three")))]))),
+    case("trailing-empty-paragraph-in-pipe-cell",
+         table(1, [cell(paragraph(text("a")), paragraph(), header=True)]), schema=PARAGRAPH_SCHEMA,
+         normalized=node("doc", table(1, [cell(paragraph(text("a")), header=True)])),
+         expected_markdown="| a |\n| --- |"),
+    case("ragged-table", table(1, [cell(paragraph(text("one")), header=True)],
+                              [cell(paragraph(text("two"))), cell(paragraph(text("three")))]),
+         normalized=node("doc", table(2, [cell(paragraph(text("one")), header=True), cell(paragraph(), header=True)],
+                                      [cell(paragraph(text("two"))), cell(paragraph(text("three")))]))),
+    case("ragged-tagged-table", table(3, [cell(paragraph(text("a\nb\n"), HARD_BREAK, text("c")), header=True)],
+                                     [cell(paragraph(text("two"))), cell(paragraph(text("three")))]), schema=TABLE_SCHEMA,
+         normalized=node("doc", table(2, [cell(paragraph(text("a b "), HARD_BREAK, text("c")), header=True)],
+                                      [cell(paragraph(text("two"))), cell(paragraph(text("three")))]))),
     case("missing-list-start-and-task-checked",
          node("orderedList", node("taskItem", paragraph(text("item"))), attrs={"tight": True})),
     case("missing-heading-level", node("heading", text("title"))),
@@ -203,6 +229,9 @@ EDITOR_DOCUMENTS = (
     case("touching-crossed-bold-and-italic", paragraph(text("a", BOLD), text("b", BOLD, ITALIC), text("c", ITALIC)),
          refuses=True),
     case("heading-in-pipe-table-cell", table(1, [cell(heading(text("title")), header=True)]), refuses=True),
+    case("block-image-in-pipe-table-cell",
+         table(1, [cell(node("image", attrs={"src": "/b", "alt": "a"}), header=True)]),
+         schema=tm.Schema(block_image=True), expected_markdown="| ![a](/b) |\n| --- |"),
 
     # The remembered table spelling and two atomic node forms.
     case("filled-table-cell-keeps-source",

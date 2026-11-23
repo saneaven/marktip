@@ -267,6 +267,15 @@ def test_setext_heading_with_hard_break_normalizes_stable():
         assert normalize(once) == once
 
 
+def test_setext_heading_with_multiline_inline_html_uses_the_heading_tag():
+    schema = tm.Schema(core_attrs={"heading": {}})
+    parsed = tm.from_markdown("a <!-- c\nn -->\n===", schema=schema)
+    written = parsed.to_markdown(canonical=True)
+
+    assert written == "<h1>a <!-- c\nn --></h1>"
+    assert tm.from_markdown(written, schema=schema) == parsed
+
+
 # ── adjacent same-family lists: markers alternate to stay separate ───────
 # Two same-marker lists merge on reparse (renumbering ordered items and
 # spreading task checkboxes); the serializer alternates the marker ("-"/"*",

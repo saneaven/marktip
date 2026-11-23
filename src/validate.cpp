@@ -7,6 +7,7 @@
 #include "ast.h"
 #include "errors.h"
 #include "form.h"
+#include "node_kind.h"
 #include "tags.h"
 
 namespace marktip {
@@ -75,7 +76,7 @@ const AttrSpec* find_attr_spec(const std::vector<AttrSpec>& specs, std::string_v
                            "node type '" + spec.name + "' does not match its content expression", format_path(path));
 }
 
-[[noreturn]] void throw_table_container(const NodeSpec& spec, const PathStack& path) {
+[[noreturn]] void throw_table_block(const NodeSpec& spec, const PathStack& path) {
     throw InvalidNodeError("unrepresentable", "content",
                            "node type '" + spec.name + "' cannot be expressed in markdown inside a table cell",
                            format_path(path));
@@ -85,6 +86,62 @@ const AttrSpec* find_attr_spec(const std::vector<AttrSpec>& specs, std::string_v
     throw InvalidNodeError("unrepresentable", "content",
                            "node type '" + spec.name + "' must be the only child of a table cell",
                            format_path(path));
+}
+
+bool has_pipe_cell_form(const Document& document, const Node& child, const NodeSpec& spec) {
+    return !spec.core || spec.shape == Shape::BlockAtom || uses_cell_textblock_tag(spec) ||
+           uses_tag_form(document, child, spec);
+}
+
+PathStack input_path(std::size_t index, const std::vector<std::size_t>& input_parents) {
+    PathStack path;
+    while (index != 0) {
+        std::size_t parent = input_parents[index];
+        // Arena indices order the input siblings even after the tree changes.
+        auto position = std::count(input_parents.begin() + parent + 1, input_parents.begin() + index, parent);
+        path.push_back({"content", static_cast<std::size_t>(position)});
+        index = parent;
+    }
+    std::reverse(path.begin(), path.end());
+    return path;
+}
+
+void check_block_representability(const Document& document, const Node& node,
+                                  const std::vector<std::size_t>& input_parents) {
+    if (node.content.empty()) {
+        return;
+    }
+    NodeKind kind = node_kind(node.type);
+    if (kind == NodeKind::Paragraph || kind == NodeKind::Heading || kind == NodeKind::CodeBlock) {
+        return;
+    }
+    const Schema& schema = document.schema();
+    if (kind == NodeKind::Other &&
+        (!schema.has_declared_nodes() || schema.node(node.type)->shape != Shape::BlockContainer)) {
+        return;
+    }
+    if (kind == NodeKind::TableCell) {
+        for (std::size_t index : node.content) {
+            const Node& child = document.node(index);
+            if (child.type == "paragraph" && node.content.size() == 1) {
+                continue;
+            }
+            const NodeSpec& spec = *schema.node(child.type);
+            if (has_pipe_cell_form(document, child, spec)) {
+                if (spec.shape == Shape::BlockContainer) {
+                    throw_table_block(spec, input_path(index, input_parents));
+                }
+                if (node.content.size() != 1) {
+                    throw_table_siblings(spec, input_path(index, input_parents));
+                }
+            } else if (child.type != "paragraph") {
+                throw_table_block(spec, input_path(index, input_parents));
+            }
+        }
+    }
+    for (std::size_t index : node.content) {
+        check_block_representability(document, document.node(index), input_parents);
+    }
 }
 
 }  // namespace
@@ -396,25 +453,60 @@ void check_content_field(const NodeSpec& spec, const PathStack& path) {
 }
 
 void check_child_content(const Document& document, const NodeSpec& parent, const NodeSpec& child,
-                         const Node& child_node, std::size_t siblings, const PathStack& path) {
+                         const Node& child_node, const PathStack& path) {
     if (parent.dfa >= 0) {
         return;
     }
     if (!document.schema().content_model_allows(parent.allow, child)) {
         throw_invalid_child_content(parent, child, path);
     }
-    if ((parent.name == "tableCell" || parent.name == "tableHeader") &&
-        !document.schema().has_table_tags() &&
-        (!child.core || child.shape == Shape::BlockAtom || uses_tag_form(document, child_node, child))) {
-        if (child.shape == Shape::BlockContainer) {
-            throw_table_container(child, path);
-        }
-        if (siblings != 1) {
-            throw_table_siblings(child, path);
-        }
-    }
     if (parent.allow == ContentModel::Text && !child_node.marks.empty()) {
         throw_code_block_marks(path);
+    }
+}
+
+void check_lifted_child_content(const Document& document, const NodeSpec& parent, const NodeSpec& child,
+                                const Node& child_node, const PathStack& path) {
+    check_child_content(document, parent, child, child_node, path);
+    if (child.shape == Shape::BlockContainer && is_table_cell(parent.name) && !document.schema().has_table_tags() &&
+        has_pipe_cell_form(document, child_node, child)) {
+        throw_table_block(child, path);
+    }
+}
+
+void check_representability(const Document& document, const std::vector<std::size_t>& input_parents) {
+    if (document.schema().has_table_tags()) {
+        return;
+    }
+    const auto& spelling = document.spelling();
+    std::size_t piece = 0;
+    for (std::size_t index : document.root().content) {
+        if (spelling) {
+            while (!spelling->items[piece].has_node) {
+                ++piece;
+            }
+            if (spelling->items[piece++].text) {
+                continue;
+            }
+        }
+        check_block_representability(document, document.node(index), input_parents);
+    }
+}
+
+void check_cell_paragraph_join(const Document& document, const Node& cell, const PathStack& path) {
+    const NodeSpec& paragraph = *document.schema().node("paragraph");
+    for (std::size_t i = 0; i < cell.content.size(); ++i) {
+        const Node& child = document.node(cell.content[i]);
+        if (child.attrs.empty() || child.type != "paragraph" || !has_tag_attr(child.attrs, paragraph.attrs)) {
+            continue;
+        }
+        bool joins_previous = i != 0 && document.node(cell.content[i - 1]).type == "paragraph";
+        bool joins_next = i + 1 < cell.content.size() && document.node(cell.content[i + 1]).type == "paragraph";
+        if (joins_previous || joins_next) {
+            PathStack child_path = path;
+            child_path.push_back({"content", i});
+            throw_table_siblings(paragraph, child_path);
+        }
     }
 }
 
@@ -433,8 +525,7 @@ void check_node_content(const Document& document, std::size_t index, const NodeS
         for (std::size_t position = 0; position < node.content.size(); ++position) {
             const Node& child = document.node(node.content[position]);
             child_path.push_back({"content", position});
-            check_child_content(document, spec, *document.schema().node(child.type), child,
-                                node.content.size(), child_path);
+            check_child_content(document, spec, *document.schema().node(child.type), child, child_path);
             child_path.pop_back();
         }
         return;

@@ -840,11 +840,14 @@ private:
                 type == "blockquote");
     }
 
-    const NodeSpec* declared_form(const Node& node, const Node* parent = nullptr) const {
+    const NodeSpec* declared_form(const Node& node, const Node* parent = nullptr,
+                                  InlineContext ctx = InlineContext::Default) const {
         const NodeSpec& spec = *schema_.node(node.type);
         bool tag_empty_paragraph = parent != nullptr && node.content.empty() && node.type == "paragraph" &&
                                    !spec.tag.empty() && !omits_empty_paragraph(*parent);
-        return !spec.core || tag_empty_paragraph || uses_tag_form(document_, node, spec) ? &spec : nullptr;
+        bool tag_cell_textblock = ctx == InlineContext::TableCell && uses_cell_textblock_tag(spec);
+        return !spec.core || tag_empty_paragraph || tag_cell_textblock || uses_tag_form(document_, node, spec)
+                   ? &spec : nullptr;
     }
 
     BlockKind block_kind(const Node& node, const NodeSpec* spec) const {
@@ -1270,10 +1273,7 @@ private:
             return "";
         }
 
-        std::size_t columns = 0;
-        for (const Node* row : rows) {
-            columns = std::max(columns, row_cells(*row).size());
-        }
+        std::size_t columns = table_columns(document_, node);
         if (columns == 0) {
             return "";
         }
@@ -1323,7 +1323,7 @@ private:
     std::vector<const Node*> row_cells(const Node& row) {
         std::vector<const Node*> cells;
         for_each_child(row, [&](const Node& child) {
-            if (child.type == "tableHeader" || child.type == "tableCell") {
+            if (is_table_cell(child.type)) {
                 cells.push_back(&child);
             }
         });
@@ -1342,7 +1342,7 @@ private:
             } else if (type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline") {
                 blocks.push_back(render_inline(child, InlineContext::TableCell));
             } else {
-                const NodeSpec* spec = node_forms_ ? declared_form(child) : nullptr;
+                const NodeSpec* spec = node_forms_ ? declared_form(child, &cell, InlineContext::TableCell) : nullptr;
                 blocks.push_back(render_block(child, 0, spec, 0, InlineContext::TableCell));
             }
         });

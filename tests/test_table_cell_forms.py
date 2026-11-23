@@ -39,19 +39,33 @@ def test_a_lone_block_atom_or_textblock_cell_keeps_its_pipe_table(html, type_):
 
 
 @pytest.mark.parametrize("html", HTML)
+@pytest.mark.parametrize("core_attrs", [
+    pytest.param({"heading": {}}, id="heading-tags"),
+    pytest.param({"heading": {}, "table": {}}, id="heading-and-table-tags"),
+])
+def test_heading_with_a_tag_roundtrips_in_a_pipe_cell_without_overlay_attrs(html, core_attrs):
+    schema = tm.Schema(core_attrs=core_attrs)
+    markdown = "| <h2>title</h2> |\n| --- |"
+    parsed = tm.from_markdown(markdown, schema=schema, html=html)
+    heading = node("heading", text("title"), attrs={"level": 2})
+    cell = node("tableHeader", heading)
+    assert parsed.to_dict() == doc(node("table", node("tableRow", cell), attrs={"colCount": 1}))
+    rebuilt = tm.from_dict(parsed.to_dict(), schema=schema, strict="content")
+    assert rebuilt == parsed
+    assert rebuilt.to_markdown(canonical=True) == markdown
+
+
+@pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("aligned", (False, True))
-def test_heading_cells_use_pipe_form_only_when_the_heading_is_written_as_a_textblock_tag(html, aligned):
+def test_heading_cells_use_the_heading_tag_with_or_without_overlay_attrs(html, aligned):
     selected = tm.Schema(core_attrs={**tm.TABLE_SPANS, **tm.TEXT_ALIGN})
     attrs = {"level": 2, **({"textAlign": "right"} if aligned else {})}
     heading = node("heading", text("Title"), attrs=attrs)
     ast = doc(node("table", node("tableRow", node("tableHeader", heading)), attrs={"colCount": 1}))
     source = tm.from_dict(ast, schema=selected, strict="exact")
     written = source.to_markdown(canonical=True)
-    if aligned:
-        assert written == '| <h2 textAlign="right">Title</h2> |\n| --- |'
-    else:
-        assert written.startswith("<table")
-        assert "## Title" in written
+    tagged = '<h2 textAlign="right">Title</h2>' if aligned else "<h2>Title</h2>"
+    assert written == f"| {tagged} |\n| --- |"
     parsed = tm.from_markdown(written, schema=selected, html=html)
     assert parsed.to_dict() == source.to_dict()
     assert parsed.to_markdown(canonical=True) == written

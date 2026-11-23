@@ -97,6 +97,24 @@ def test_explicit_null_clears_table_alignment_and_rewrites_the_table(html):
     assert_canonical_readback(document, html=html)
 
 
+def test_inherited_pipe_cell_alignment_follows_the_header():
+    tagged = ('<table>\n\n<tr>\n\n<th align="center">\n\na\n\n</th>\n\n</tr>\n\n'
+              '<tr>\n\n<td align="right">\n\nb\n\n</td>\n\n</tr>\n\n</table>')
+    schema = tm.Schema(core_attrs={"table": {}})
+    base = tm.load(tm.from_markdown(tagged, schema=schema).dump())
+    submitted = base.to_dict()
+    header, body = (row["content"][0] for row in submitted["content"][0]["content"])
+    assert header["attrs"]["align"] == "center"
+    assert body["attrs"]["align"] == "right"
+    header["attrs"].pop("align")
+    body["attrs"].pop("align")
+
+    document = tm.from_dict(submitted, base=base, strict="exact")
+    written = document.to_markdown(canonical=True)
+    assert written == "| a |\n| :---: |\n| b |"
+    assert tm.from_markdown(written) == document
+
+
 def test_normalized_tagged_paragraph_matches_when_its_attrs_are_omitted():
     schema = tm.Schema(core_attrs={"paragraph": {"textAlign": tm.Attr(str)}})
     markdown = 'Intro\n\n<p textAlign="center">\nHello\n</p>\n\nOutro'
@@ -130,6 +148,62 @@ def test_filled_empty_blockquote_keeps_base_spelling():
     document = tm.from_dict(submitted, strict="content", base=base)
     assert document == base
     assert document.to_markdown() == markdown
+
+
+def test_inheritance_keeps_the_computed_table_width():
+    markdown = "|a|\n|---|\n"
+    parsed = tm.from_markdown(markdown)
+    stored = parsed.dump()
+    stored["doc"]["content"][0]["attrs"]["colCount"] = 3
+    base = tm.load(stored)
+    submitted = base.to_dict()
+    submitted["content"][0].pop("attrs")
+
+    document = tm.from_dict(submitted, strict="content", base=base)
+    assert document == parsed
+    assert document.to_markdown() == markdown
+
+
+def test_pipe_cell_keeps_an_inherited_heading_tag_attr():
+    schema = tm.Schema(core_attrs={"heading": {"textAlign": tm.Attr(str)}})
+    markdown = '| a |\n| --- |\n| <h2 textAlign="center">title</h2> |'
+    base = tm.from_markdown(markdown, schema=schema, keep_source=False)
+    submitted = base.to_dict()
+    heading = submitted["content"][0]["content"][1]["content"][0]["content"][0]
+    assert heading["type"] == "heading"
+    heading["attrs"].pop("textAlign")
+
+    without_base = tm.from_dict(submitted, schema=schema, strict="content")
+    assert without_base.to_markdown(canonical=True) == "| a |\n| --- |\n| <h2>title</h2> |"
+
+    document = tm.from_dict(submitted, schema=schema, strict="content", base=base)
+    assert document == base
+    assert document.to_markdown(canonical=True) == markdown
+
+
+@pytest.mark.parametrize("strict", ("content", "exact"))
+def test_pipe_cell_rejects_a_heading_with_a_sibling_with_or_without_base(strict):
+    schema = tm.Schema(core_attrs={"heading": {"textAlign": tm.Attr(str)}})
+    tagged_schema = schema.extend(core_attrs={"table": {}})
+    tagged = ('<table>\n\n<tr>\n\n<th>\n\nlead\n\n<h2 textAlign="center">title</h2>\n\n'
+              '</th>\n\n</tr>\n\n</table>')
+    base = tm.load(tm.from_markdown(tagged, schema=tagged_schema).dump(), schema=schema)
+    submitted = base.to_dict()
+    cell = submitted["content"][0]["content"][0]["content"][0]
+    lead, heading = cell["content"]
+    assert lead == paragraph("lead")
+    assert heading["attrs"]["textAlign"] == "center"
+    heading["attrs"].pop("textAlign")
+    assert tm.from_dict(submitted, schema=schema, base=base, strict="off") == base
+
+    for candidate in (None, base):
+        with pytest.raises(tm.InvalidNodeError) as excinfo:
+            tm.from_dict(submitted, schema=schema, base=candidate, strict=strict)
+        error = excinfo.value
+        assert (error.code, error.field, error.path) == (
+            "unrepresentable", "content", "content[0].content[0].content[0].content[1]",
+        )
+        assert "must be the only child of a table cell" in str(error)
 
 
 MANY_BLOCKS = [

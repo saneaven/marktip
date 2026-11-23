@@ -216,6 +216,25 @@ def test_noncanonical_header_rows_promote_the_table_without_changing_cell_types(
 
 
 @pytest.mark.parametrize("html", HTML)
+@pytest.mark.parametrize("header_align, body_align", [
+    ("left", "right"), ("left", None), (None, "right"), ("left", "left"),
+])
+def test_body_cell_alignment_promotes_the_table_when_it_differs_from_the_header(html, header_align, body_align):
+    header_attrs = {} if header_align is None else {"align": header_align}
+    body_attrs = {} if body_align is None else {"align": body_align}
+    ast = doc(table(node("tableRow", node("tableHeader", p(text("a")), attrs=header_attrs)),
+                    node("tableRow", node("tableCell", p(text("b")), attrs=body_attrs))))
+    written = roundtrip(ast, tm.Schema(core_attrs={"table": {}}), html)
+    if header_align == body_align:
+        assert written == "| a |\n| :--- |\n| b |"
+    else:
+        header_tag = f'<th align="{header_align}">' if header_attrs else "<th>"
+        body_tag = f'<td align="{body_align}">' if body_attrs else "<td>"
+        assert written == (f'<table colCount="1">\n\n<tr>\n\n{header_tag}\n\na\n\n</th>\n\n</tr>\n\n'
+                           f"<tr>\n\n{body_tag}\n\nb\n\n</td>\n\n</tr>\n\n</table>")
+
+
+@pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("children", [(p(text("first")), p(text("second"))),
                                      (node("callout", p(text("inside"))),)])
 def test_multiple_cell_blocks_and_declared_block_containers_promote_the_table(html, children):

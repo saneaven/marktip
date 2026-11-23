@@ -6,55 +6,11 @@
 #include "ast.h"
 #include "form.h"
 #include "lift.h"
+#include "node_kind.h"
 #include "schema.h"
 
 namespace marktip {
 namespace {
-
-enum class NodeKind {
-    Text, CodeText, HardBreak, Paragraph, EmptyParagraph, Heading, OrderedList, List, TaskItem, Image, Table,
-    CodeBlock, ParagraphContainer, Container, Other, Removed
-};
-
-NodeKind node_kind(std::string_view type) {
-    const char* name = type.data();
-    switch (type.size()) {
-    case 3:
-        if (std::memcmp(name, "doc", 3) == 0) return NodeKind::Container;
-        break;
-    case 4:
-        if (std::memcmp(name, "text", 4) == 0) return NodeKind::Text;
-        break;
-    case 5:
-        if (std::memcmp(name, "table", 5) == 0) return NodeKind::Table;
-        if (std::memcmp(name, "image", 5) == 0) return NodeKind::Image;
-        break;
-    case 7:
-        if (std::memcmp(name, "heading", 7) == 0) return NodeKind::Heading;
-        break;
-    case 8:
-        if (std::memcmp(name, "taskItem", 8) == 0) return NodeKind::TaskItem;
-        if (std::memcmp(name, "listItem", 8) == 0) return NodeKind::ParagraphContainer;
-        if (std::memcmp(name, "tableRow", 8) == 0) return NodeKind::Container;
-        if (std::memcmp(name, "taskList", 8) == 0) return NodeKind::List;
-        break;
-    case 9:
-        if (std::memcmp(name, "paragraph", 9) == 0) return NodeKind::Paragraph;
-        if (std::memcmp(name, "hardBreak", 9) == 0) return NodeKind::HardBreak;
-        if (std::memcmp(name, "codeBlock", 9) == 0) return NodeKind::CodeBlock;
-        if (std::memcmp(name, "tableCell", 9) == 0) return NodeKind::ParagraphContainer;
-        break;
-    case 10:
-        if (std::memcmp(name, "blockquote", 10) == 0) return NodeKind::ParagraphContainer;
-        if (std::memcmp(name, "bulletList", 10) == 0) return NodeKind::List;
-        break;
-    case 11:
-        if (std::memcmp(name, "orderedList", 11) == 0) return NodeKind::OrderedList;
-        if (std::memcmp(name, "tableHeader", 11) == 0) return NodeKind::ParagraphContainer;
-        break;
-    }
-    return NodeKind::Other;
-}
 
 void normalize_fence_info(AttrList& attrs) {
     if (attrs.empty()) {
@@ -114,24 +70,107 @@ void remove_empty_title(AttrList& attrs) {
     }
 }
 
-long long table_columns(const Document& document, const Node& table) {
-    long long columns = 0;
-    for (std::size_t index : table.content) {
-        const Node& row = document.node(index);
-        if (row.type == "tableRow") {
-            auto cells = std::count_if(row.content.begin(), row.content.end(), [&](std::size_t child) {
-                const std::string& type = document.node(child).type;
-                return type == "tableHeader" || type == "tableCell";
-            });
-            columns = std::max(columns, static_cast<long long>(cells));
+void copy_cell_alignment(AttrList& attrs, const AttrValue* align) {
+    auto old = std::find_if(attrs.begin(), attrs.end(), [](const auto& attr) { return attr.first == "align"; });
+    if (old == attrs.end()) {
+        if (align != nullptr) {
+            attrs.emplace_back("align", *align);
+        }
+    } else if (align == nullptr) {
+        attrs.erase(old);
+    } else if (!(old->second == *align)) {
+        old->second = *align;
+    }
+}
+
+void normalize_pipe_alignment(Document& document, const Node& table) {
+    const Node* header = nullptr;
+    for (std::size_t row_index : table.content) {
+        const Node& row = document.node(row_index);
+        if (row.type != "tableRow") {
+            continue;
+        }
+        if (header == nullptr) {
+            header = &row;
+            continue;
+        }
+        auto column = header->content.begin();
+        for (std::size_t index : row.content) {
+            Node& cell = document.node(index);
+            if (!is_table_cell(cell.type)) {
+                continue;
+            }
+            while (!is_table_cell(document.node(*column).type)) {
+                ++column;
+            }
+            copy_cell_alignment(cell.attrs, find_attr(document.node(*column++).attrs, "align"));
         }
     }
+}
+
+void normalize_pipe_rows(Document& document, std::size_t index, std::size_t columns) {
+    bool first = true;
+    const std::size_t rows = document.node(index).content.size();
+    for (std::size_t i = 0; i < rows; ++i) {
+        std::size_t row = document.node(index).content[i];
+        if (document.node(row).type != "tableRow") {
+            continue;
+        }
+        std::string_view type = first ? std::string_view("tableHeader") : std::string_view("tableCell");
+        std::size_t count = 0;
+        for (std::size_t child : document.node(row).content) {
+            Node& cell = document.node(child);
+            if (cell.type == type) {
+                ++count;
+            } else if (is_table_cell(cell.type)) {
+                cell.type = type;
+                ++count;
+            }
+        }
+        for (; count < columns; ++count) {
+            document.append_child(row, Node {std::string(type), {}, {}, {}, {}});
+        }
+        first = false;
+    }
+    normalize_pipe_alignment(document, document.node(index));
+}
+
+void join_cell_paragraphs(Document& document, std::size_t index) {
+    auto children = std::move(document.node(index).content);
+    std::size_t kept = 0;
+    bool previous_paragraph = false;
+    for (std::size_t child : children) {
+        bool paragraph = document.node(child).type == "paragraph";
+        if (paragraph && previous_paragraph) {
+            std::size_t joined = children[kept - 1];
+            document.append_child(joined, Node {"hardBreak", {}, {}, {}, {}});
+            auto& content = document.node(joined).content;
+            const auto& extra = document.node(child).content;
+            content.insert(content.end(), extra.begin(), extra.end());
+        } else {
+            children[kept++] = child;
+        }
+        previous_paragraph = paragraph;
+    }
+    children.resize(kept);
+    document.node(index).content = std::move(children);
+}
+
+std::size_t normalize_table_width(const Document& document, Node& table) {
+    std::size_t columns = table_columns(document, table);
+    set_attr(table.attrs, "colCount", AttrValue::integer(static_cast<long long>(columns)));
     return columns;
 }
 
 void normalize_inherited_node_attrs(Document& document, Node& node, const Schema& schema, bool reorder_marks) {
-    if (std::string_view(node.type) == "codeBlock") {
+    std::string_view type = node.type;
+    if (type == "codeBlock") {
         normalize_fence_info(node.attrs);
+    } else if (type == "table") {
+        normalize_table_width(document, node);
+        if (!schema.has_table_tags()) {
+            normalize_pipe_alignment(document, node);
+        }
     }
     if (reorder_marks && node.marks.size() > 1) {
         order_marks(node.marks, schema);
@@ -182,9 +221,10 @@ void trim_before_soft_break(Document& document, const std::vector<std::size_t>& 
 
 enum class LinePosition { Start, Content };
 enum class LineScope { Paragraph, Heading, Declared };
+enum class LineBreaks { Preserve, Cell, FlatHeading };
 
-void normalize_line_text(Document& document, const std::vector<std::size_t>& children, std::string& text, std::size_t& kept,
-                         LinePosition& position) {
+void normalize_line_text(Document& document, const std::vector<std::size_t>& children, std::string& text,
+                         std::size_t& kept, LinePosition& position, char soft_break) {
     std::size_t end = text.find('\n');
     if (end == std::string::npos) {
         if (position == LinePosition::Start && !text.empty() && is_blank(text.front())) {
@@ -219,7 +259,7 @@ void normalize_line_text(Document& document, const std::vector<std::size_t>& chi
             break;
         }
         if (position == LinePosition::Content) {
-            text[write++] = '\n';
+            text[write++] = soft_break;
         }
         position = LinePosition::Start;
         read = end + 1;
@@ -248,38 +288,76 @@ void trim_line_end(Document& document, const std::vector<std::size_t>& children,
     }
 }
 
+void flatten_heading_breaks(Document& document, std::vector<std::size_t>& children, std::size_t& kept,
+                            LineScope scope) {
+    std::size_t write = 0;
+    bool after_break = false;
+    for (std::size_t i = 0; i < kept; ++i) {
+        std::size_t index = children[i];
+        Node& child = document.node(index);
+        bool hard_break = child.type == "hardBreak";
+        if (hard_break) {
+            if (write == 0 && scope == LineScope::Heading) {
+                continue;
+            }
+            child.type = "text";
+            child.text = " ";
+        }
+        if (write != 0 && (hard_break || after_break) && child.type == "text") {
+            Node& left = document.node(children[write - 1]);
+            if (left.type == "text" && left.marks == child.marks) {
+                left.text += child.text;
+                after_break = hard_break;
+                continue;
+            }
+        }
+        children[write++] = index;
+        after_break = hard_break;
+    }
+    kept = write;
+    if (kept != 0 && scope == LineScope::Heading) {
+        trim_line_end(document, children, kept, node_kind(document.node(children[kept - 1]).type), false);
+    }
+}
+
 struct Normalizer {
     Document& document;
     const Schema& schema;
     bool reorder_marks;
     bool paragraph_tags;
     bool declared_nodes;
+    bool heading_tags;
+    bool table_tags;
     PathStack path;
 
     void normalize_root();
-    NodeKind normalize_node(std::size_t index);
-    NodeKind normalize_child(std::size_t index, std::size_t position);
-    bool normalize_lines(std::size_t index, LineScope scope);
-    bool normalize_children(std::size_t index, const NodeSpec* spec = nullptr);
+    NodeKind normalize_node(std::size_t index, LineBreaks breaks);
+    NodeKind normalize_child(std::size_t index, std::size_t position, LineBreaks breaks = LineBreaks::Preserve);
+    bool normalize_lines(std::size_t index, LineScope scope, LineBreaks breaks);
+    bool normalize_children(std::size_t index, const NodeSpec* spec = nullptr,
+                            LineBreaks breaks = LineBreaks::Preserve);
     void normalize_marks(Node& node);
     bool remove_child(NodeKind kind) const;
 };
 
-bool Normalizer::normalize_lines(std::size_t index, LineScope scope) {
+bool Normalizer::normalize_lines(std::size_t index, LineScope scope, LineBreaks breaks) {
     // Filling descendants can move the node arena.
     auto children = std::move(document.node(index).content);
     std::size_t kept = 0;
     // Declared textblocks and inline containers enclose their content in tags.
     LinePosition position = scope == LineScope::Declared ? LinePosition::Content : LinePosition::Start;
     NodeKind last = NodeKind::Other;
+    char soft_break = breaks == LineBreaks::Preserve ? '\n' : ' ';
+    bool hard_breaks = false;
     for (std::size_t i = 0; i < children.size(); ++i) {
         std::size_t child_index = children[i];
-        NodeKind kind = normalize_child(child_index, i);
+        NodeKind kind = normalize_child(child_index, i, breaks);
         Node& child = document.node(child_index);
         if (kind == NodeKind::Text) {
-            normalize_line_text(document, children, child.text, kept, position);
+            normalize_line_text(document, children, child.text, kept, position, soft_break);
         } else if (kind == NodeKind::HardBreak) {
             position = LinePosition::Start;
+            hard_breaks = true;
         } else {
             position = LinePosition::Content;
         }
@@ -291,6 +369,9 @@ bool Normalizer::normalize_lines(std::size_t index, LineScope scope) {
     }
     if (scope != LineScope::Declared) {
         trim_line_end(document, children, kept, last, scope == LineScope::Paragraph);
+    }
+    if (hard_breaks && breaks == LineBreaks::FlatHeading) {
+        flatten_heading_breaks(document, children, kept, scope);
     }
     children.resize(kept);
     document.node(index).content = std::move(children);
@@ -308,12 +389,12 @@ void Normalizer::normalize_marks(Node& node) {
     }
 }
 
-NodeKind Normalizer::normalize_child(std::size_t index, std::size_t position) {
+NodeKind Normalizer::normalize_child(std::size_t index, std::size_t position, LineBreaks breaks) {
     if (!declared_nodes) {
-        return normalize_node(index);
+        return normalize_node(index, breaks);
     }
     path.push_back({"content", position});
-    NodeKind kind = normalize_node(index);
+    NodeKind kind = normalize_node(index, breaks);
     path.pop_back();
     return kind;
 }
@@ -322,12 +403,12 @@ bool Normalizer::remove_child(NodeKind kind) const {
     return kind == NodeKind::Removed || (kind == NodeKind::EmptyParagraph && !paragraph_tags);
 }
 
-bool Normalizer::normalize_children(std::size_t index, const NodeSpec* spec) {
+bool Normalizer::normalize_children(std::size_t index, const NodeSpec* spec, LineBreaks breaks) {
     auto children = std::move(document.node(index).content);
     std::size_t kept = 0;
     for (std::size_t i = 0; i < children.size(); ++i) {
         std::size_t child = children[i];
-        if (!remove_child(normalize_child(child, i))) {
+        if (!remove_child(normalize_child(child, i, breaks))) {
             children[kept++] = child;
         }
     }
@@ -386,7 +467,7 @@ void Normalizer::normalize_root() {
     document.root().content = std::move(children);
 }
 
-NodeKind Normalizer::normalize_node(std::size_t index) {
+NodeKind Normalizer::normalize_node(std::size_t index, LineBreaks breaks) {
     Node& node = document.node(index);
     normalize_marks(node);
     NodeKind kind = node_kind(node.type);
@@ -416,18 +497,22 @@ NodeKind Normalizer::normalize_node(std::size_t index) {
         if (level == nullptr || level->kind != AttrValue::Kind::Int || level->int_value < 1 || level->int_value > 6) {
             set_attr(node.attrs, "level", AttrValue::integer(std::clamp(attr_int(node.attrs, "level", 1), 1LL, 6LL)));
         }
-        normalize_lines(index, LineScope::Heading);
+        normalize_lines(index, LineScope::Heading, heading_tags ? breaks : LineBreaks::FlatHeading);
         return kind;
     }
     case NodeKind::Paragraph:
-        return normalize_lines(index, LineScope::Paragraph) ? NodeKind::EmptyParagraph : kind;
+        return normalize_lines(index, LineScope::Paragraph, breaks) ? NodeKind::EmptyParagraph : kind;
     case NodeKind::TaskItem:
         if (find_attr(node.attrs, "checked") == nullptr) {
             set_attr(node.attrs, "checked", AttrValue::boolean(false));
         }
         [[fallthrough]];
     case NodeKind::ParagraphContainer:
-        if (normalize_children(index)) {
+    case NodeKind::TableCell:
+        if (kind == NodeKind::TableCell && !table_tags && node.content.size() > 1) {
+            join_cell_paragraphs(document, index);
+        }
+        if (normalize_children(index, nullptr, kind == NodeKind::TableCell ? LineBreaks::Cell : LineBreaks::Preserve)) {
             document.append_child(index, Node {"paragraph", {}, {}, {}, {}});
         }
         return kind;
@@ -438,11 +523,13 @@ NodeKind Normalizer::normalize_node(std::size_t index) {
         node.content.clear();
         remove_empty_title(node.attrs);
         return kind;
-    case NodeKind::Table:
-        if (find_attr(node.attrs, "colCount") == nullptr) {
-            set_attr(node.attrs, "colCount", AttrValue::integer(table_columns(document, node)));
+    case NodeKind::Table: {
+        std::size_t columns = normalize_table_width(document, node);
+        if (!table_tags) {
+            normalize_pipe_rows(document, index, columns);
         }
         return normalize_children(index) ? NodeKind::Removed : kind;
+    }
     case NodeKind::CodeBlock:
         normalize_fence_info(node.attrs);
         break;
@@ -450,7 +537,7 @@ NodeKind Normalizer::normalize_node(std::size_t index) {
         if (!node.content.empty() && declared_nodes) {
             spec = schema.node(node.type);
             if (spec->shape == Shape::TextBlock || spec->shape == Shape::InlineContainer) {
-                normalize_lines(index, LineScope::Declared);
+                normalize_lines(index, LineScope::Declared, breaks);
                 return kind;
             }
         }
@@ -472,11 +559,12 @@ NodeKind Normalizer::normalize_node(std::size_t index) {
 void normalize_document(Document& document) {
     const Schema& schema = document.schema();
     Normalizer {document, schema, schema.has_declared_marks() || schema.has_link_tag(),
-                !schema.node("paragraph")->tag.empty(), schema.has_declared_nodes(), {}}.normalize_root();
+                !schema.node("paragraph")->tag.empty(), schema.has_declared_nodes(),
+                !schema.node("heading")->tag.empty(), schema.has_table_tags(), {}}.normalize_root();
 }
 
 void normalize_inherited_attrs(Document& document) {
-    // Inheritance can change fence info or switch a link's form and mark order.
+    // Inheritance can change fence info, table attrs, and a link's form and mark order.
     const Schema& schema = document.schema();
     normalize_inherited_node_attrs(document, document.root(), schema, schema.has_link_tag());
 }

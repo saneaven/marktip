@@ -60,9 +60,13 @@ void check_required_attrs(const AttrList& attrs, const std::vector<AttrSpec>& sp
 void store_attr(AttrList& attrs, std::string&& name, AttrValue&& value, const std::vector<AttrSpec>& specs);
 void check_content_field(const NodeSpec& spec, const PathStack& path);
 void check_child_content(const Document& document, const NodeSpec& parent, const NodeSpec& child,
-                         const Node& child_node, std::size_t siblings, const PathStack& path);
+                         const Node& child_node, const PathStack& path);
+void check_lifted_child_content(const Document& document, const NodeSpec& parent, const NodeSpec& child,
+                                const Node& child_node, const PathStack& path);
+void check_cell_paragraph_join(const Document& document, const Node& cell, const PathStack& path);
 void check_node_marks(const Node& node, const NodeSpec& spec, const PathStack& path);
 void check_node_content(const Document& document, std::size_t index, const NodeSpec& spec, const PathStack& path);
+void check_representability(const Document& document, const std::vector<std::size_t>& input_parents);
 bool excludes(const ExcludeSet& set, std::string_view type);
 void check_mark_set(const std::vector<Mark>& existing, const Mark& mark, const Schema& schema,
                     const PathStack& path);

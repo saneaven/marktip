@@ -137,6 +137,24 @@ std::string plain_text(const Document& document, const Node& node) {
     return out;
 }
 
+bool is_table_cell(std::string_view type) {
+    return type == "tableHeader" || type == "tableCell";
+}
+
+std::size_t table_columns(const Document& document, const Node& table) {
+    std::size_t columns = 0;
+    for (std::size_t index : table.content) {
+        const Node& row = document.node(index);
+        if (row.type == "tableRow") {
+            auto cells = std::count_if(row.content.begin(), row.content.end(), [&](std::size_t child) {
+                return is_table_cell(document.node(child).type);
+            });
+            columns = std::max(columns, static_cast<std::size_t>(cells));
+        }
+    }
+    return columns;
+}
+
 void normalize_task_list(Document& document, std::size_t index) {
     Node& list = document.node(index);
     if (list.type != "bulletList") {
