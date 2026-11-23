@@ -39,6 +39,7 @@ public:
     Node& root();
     const Node& node(std::size_t index) const;
     Node& node(std::size_t index);
+    std::size_t node_count() const;
     const Schema& schema() const;
     const std::optional<Spelling>& spelling() const;
     std::optional<Spelling>& spelling();

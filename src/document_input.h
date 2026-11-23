@@ -26,6 +26,7 @@ struct DictDocument {
     Document finish(const NodeTypePolicy& node_policy, const UriPolicy& uri_policy) && {
         finalize_document(document, node_policy, uri_policy);
         if (base != nullptr) {
+            present.resize(document.node_count());
             inherit_attrs_and_spelling(document, *base, present);
             normalize_inherited_attrs(document);
         }

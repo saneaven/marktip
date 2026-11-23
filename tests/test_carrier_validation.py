@@ -11,8 +11,9 @@ def schema():
                                         attrs={"latex": tm.Attr(str)})])
 
 
-def document(attrs):
-    return {"type": "doc", "content": [{"type": "paragraph"}, {
+def document(attrs, *, leading_paragraph=False):
+    blocks = [{"type": "paragraph"}] if leading_paragraph else []
+    return {"type": "doc", "content": [*blocks, {
         "type": "codeBlock", "attrs": attrs,
         "content": [{"type": "text", "text": "x\n"}],
     }]}
@@ -27,11 +28,12 @@ def document(attrs):
     ({"language": "", "info": "math"}, "info", "math"),
 ])
 def test_strict_rejects_a_core_code_block_with_a_declared_fence_prefix(schema, strict, attrs, field, info):
+    ast = document(attrs, leading_paragraph=True)
     with pytest.raises(tm.InvalidNodeError) as excinfo:
-        tm.from_dict(document(attrs), schema=schema, strict=strict)
+        tm.from_dict(ast, schema=schema, strict=strict)
     error = excinfo.value
     assert (error.code, error.field, error.path) == ("unrepresentable", field, "content[1]")
-    assert tm.from_dict(document(attrs), schema=schema, strict="off").to_dict() == document({
+    assert tm.from_dict(ast, schema=schema, strict="off").to_dict() == document({
         "language": "math", "info": info,
     })
 
@@ -43,7 +45,7 @@ def test_strict_rejects_a_core_code_block_with_a_declared_fence_prefix(schema, s
     ({"language": "Math"}, "Math"),
 ])
 def test_fence_collision_matches_the_effective_whole_first_word(schema, strict, attrs, word):
-    ast = document(attrs)
+    ast = document(attrs, leading_paragraph=True)
     assert tm.from_dict(ast, schema=schema, strict=strict).to_dict() == document({"language": word, "info": word})
 
 

@@ -132,15 +132,17 @@ def test_unset_core_overlays_keep_empty_paragraph_and_heading_normalizations(htm
 @pytest.mark.parametrize("level", LEVELS)
 def test_empty_paragraph_with_a_set_overlay_uses_the_normal_tag_form(html, level):
     schema = tm.Schema(core_attrs={"paragraph": {"textAlign": tm.Attr(str)}})
-    roundtrip(doc(p(textAlign="center")), schema, '<p textAlign="center"></p>', html, level)
+    roundtrip(doc(p(text("before")), p(textAlign="center")), schema,
+              'before\n\n<p textAlign="center"></p>', html, level)
 
 
 @pytest.mark.parametrize("html", HTML)
-def test_handwritten_empty_paragraph_tag_uses_general_textblock_reading(html):
+def test_handwritten_empty_paragraph_tag_is_normalized_as_a_paragraph(html):
     schema = tm.Schema(core_attrs={"paragraph": {}})
     parsed = tm.from_markdown("<p></p>", schema=schema, html=html)
-    assert parsed.to_dict() == doc(node("paragraph"))
-    assert parsed.to_markdown(canonical=True) == tm.from_dict(doc(p())).to_markdown(canonical=True)
+    assert parsed.to_dict() == doc()
+    assert parsed.to_markdown(canonical=True) == ""
+    assert parsed.to_markdown() == "<p></p>"
 
 
 @pytest.mark.parametrize("html", HTML)

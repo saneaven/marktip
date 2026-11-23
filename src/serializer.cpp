@@ -833,9 +833,18 @@ private:
         return join_block_pieces(block_pieces(node, indent, false), false);
     }
 
-    const NodeSpec* declared_form(const Node& node) const {
+    static bool omits_empty_paragraph(const Node& parent) {
+        std::string_view type = parent.type;
+        return parent.content.size() == 1 &&
+               (type == "listItem" || type == "taskItem" || type == "tableCell" || type == "tableHeader" ||
+                type == "blockquote");
+    }
+
+    const NodeSpec* declared_form(const Node& node, const Node* parent = nullptr) const {
         const NodeSpec& spec = *schema_.node(node.type);
-        return !spec.core || uses_tag_form(document_, node, spec) ? &spec : nullptr;
+        bool tag_empty_paragraph = parent != nullptr && node.content.empty() && node.type == "paragraph" &&
+                                   !spec.tag.empty() && !omits_empty_paragraph(*parent);
+        return !spec.core || tag_empty_paragraph || uses_tag_form(document_, node, spec) ? &spec : nullptr;
     }
 
     BlockKind block_kind(const Node& node, const NodeSpec* spec) const {
@@ -927,7 +936,7 @@ private:
                     default:
                         break;
                 }
-                spec = follows_parent ? schema_.node(child.type) : declared_form(child);
+                spec = follows_parent ? schema_.node(child.type) : declared_form(child, &node);
             }
             if (spec != nullptr && spec->shape == Shape::BlockContainer) {
                 collect_block_children(child, spec, indent, list_item, pieces, prev_variant);
@@ -1183,14 +1192,6 @@ private:
 
     std::string render_list_item(const Node& node, const std::string& marker, int indent, bool task) {
         std::vector<BlockPiece> pieces = block_pieces(node, 0, true);
-        if (task) {
-            // A checkbox-only line in a loose list reads as an empty paragraph.
-            // Keeping it as a leading piece would add a line when the item is written again.
-            auto first = std::find_if(pieces.begin(), pieces.end(), [](const BlockPiece& piece) {
-                return piece.kind != BlockKind::Paragraph || !piece.text.empty();
-            });
-            pieces.erase(pieces.begin(), first);
-        }
         BlockKind first_kind = pieces.empty() ? BlockKind::Other : pieces.front().kind;
         std::string body = join_block_pieces(std::move(pieces), true);
         std::vector<std::string> lines = split_lines(body);
@@ -1335,7 +1336,7 @@ private:
         for_each_child(cell, [&](const Node& child) {
             const std::string& type = child.type;
             if (type == "paragraph") {
-                const NodeSpec* spec = node_forms_ ? declared_form(child) : nullptr;
+                const NodeSpec* spec = node_forms_ ? declared_form(child, &cell) : nullptr;
                 blocks.push_back(spec != nullptr ? render_declared(child, *spec, 0, InlineContext::TableCell)
                                                  : render_inlines(child, InlineContext::TableCell));
             } else if (type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline") {

@@ -114,9 +114,9 @@ def test_filled_empty_paragraph_inside_a_list_container_keeps_the_list_tight(htm
 @pytest.mark.parametrize("declared", (False, True))
 @pytest.mark.parametrize("children, markdown", [
     ((p(),), "- "),
-    ((p(), p(text("x"))), "- \n\n  x"),
+    ((p(), p(text("x"))), "- x"),
 ])
-def test_direct_empty_list_item_paragraph_bytes_are_unchanged(level, declared, children, markdown):
+def test_direct_empty_list_item_paragraphs_are_unwritten(level, declared, children, markdown):
     ast = doc(node("bulletList", node("listItem", *children), attrs={"tight": False}))
     source = tm.from_dict(ast, schema=schema() if declared else None, strict=level)
     assert source.to_markdown(canonical=True) == markdown

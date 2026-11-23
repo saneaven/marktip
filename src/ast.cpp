@@ -84,6 +84,10 @@ Node& Document::node(std::size_t index) {
     return nodes_[index];
 }
 
+std::size_t Document::node_count() const {
+    return nodes_.size();
+}
+
 const Schema& Document::schema() const {
     return *schema_;
 }

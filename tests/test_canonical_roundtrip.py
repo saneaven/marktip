@@ -140,17 +140,8 @@ XFAIL_GROUPS = (
       "bold-colon-before-word", "emphasis-on-hard-break"]),
     ("M4 removes the duplicate mark inside the container",
      ["bold-repeated-inside-inline-container", "link-repeated-inside-inline-container"]),
-    ("B1 fills parsed empty table cells to match editor cells",
-     _spec_ids(EDITOR_SPECS, gfm="202 204") + ["filled-table-cell-keeps-source"],
-     _CanonicalMismatch, _BaseSpellingMismatch),
-    ("B1/B5 fill parsed empty list items and normalize the omitted tight attr",
-     _spec_ids(EDITOR_SPECS, "280 281 282 283 284 315"),
-     _CanonicalMismatch, _BaseSpellingMismatch),
-    ("B2 normalizes a sole empty paragraph to an empty document",
-     _spec_ids(ALL_SPECS, "484 487") + ["sole-empty-paragraph"]),
-    ("B3 removes or writes a tag for a sibling empty paragraph",
-     ["trailing-empty-paragraph", "trailing-empty-tagged-paragraph"]),
-    ("B4 removes an empty list or table with no Markdown content", ["empty-bullet-list", "empty-table"]),
+    ("B5 normalizes a missing tight attr on lists with empty items",
+     _spec_ids(EDITOR_SPECS, "280 281 282 283 284 315")),
     ("B5 removes the blank line after a heading that changes list tightness",
      _spec_ids(ALL_SPECS, "300")),
     ("B5 removes the blank line after a thematic break that changes list tightness",
@@ -264,6 +255,7 @@ def _canonical_roundtrip(document, **options):
     rewritten = reread.to_markdown(canonical=True)
     if not (reread == document and rewritten == canonical):
         raise _CanonicalMismatch(canonical, rewritten, document.to_dict(), reread.to_dict())
+    return canonical
 
 
 def _base_spelling(document, markdown):
@@ -311,11 +303,11 @@ def test_canonical_from_editor_spec(markdown):
 
 
 @pytest.mark.parametrize(
-    "x,dict_options,markdown_options,refuses,normalized",
-    [_case(case_id, x, dict_options, markdown_options, refuses, normalized)
-     for case_id, x, dict_options, markdown_options, refuses, normalized in EDITOR_DOCUMENTS],
+    "x,dict_options,markdown_options,refuses,normalized,expected_markdown",
+    [_case(case_id, x, dict_options, markdown_options, refuses, normalized, expected_markdown)
+     for case_id, x, dict_options, markdown_options, refuses, normalized, expected_markdown in EDITOR_DOCUMENTS],
 )
-def test_canonical_from_editor_document(x, dict_options, markdown_options, refuses, normalized):
+def test_canonical_from_editor_document(x, dict_options, markdown_options, refuses, normalized, expected_markdown):
     if refuses:
         with pytest.raises(tm.InvalidNodeError) as error:
             tm.from_dict(x, strict="content", **dict_options)
@@ -326,9 +318,11 @@ def test_canonical_from_editor_document(x, dict_options, markdown_options, refus
     _editor_invariants(x, document, dict_options)
     if "base" in dict_options:
         _base_spelling(document, dict_options["base"].to_markdown())
-    _canonical_roundtrip(document, **markdown_options)
+    canonical = _canonical_roundtrip(document, **markdown_options)
     if normalized is not None:
         assert document.to_dict() == normalized
+    if expected_markdown is not None:
+        assert canonical == expected_markdown
 
 
 def _three_run_documents():

@@ -4957,6 +4957,13 @@ md_process_leaf_block(MD_CTX* ctx, const MD_BLOCK* block)
 
     memset(&det, 0, sizeof(det));
 
+    /* MARKTIP LOCAL PATCH: A checkbox-only line can leave a leaf with no paragraph text. */
+    if(type == MD_BLOCK_P  &&  block->n_lines == 1) {
+        const MD_LINE* line = (const MD_LINE*)(block + 1);
+        if(line->beg == line->end)
+            return 0;
+    }
+
     /* MARKTIP LOCAL PATCH: GFM recognizes a table only when its header row has as many cells as its delimiter row.
      * The header is split into cells only here, so a mismatched table is emitted as the paragraph it would have been. */
     if(type == MD_BLOCK_TABLE) {

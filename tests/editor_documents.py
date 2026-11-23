@@ -53,12 +53,12 @@ def cell(*children, header=False, **attrs):
     return node("tableHeader" if header else "tableCell", *children, attrs=attrs)
 
 
-def case(case_id, *blocks, schema=None, base=None, refuses=False, normalized=None):
+def case(case_id, *blocks, schema=None, base=None, refuses=False, normalized=None, expected_markdown=None):
     markdown_options = {} if schema is None else {"schema": schema}
     dict_options = dict(markdown_options)
     if base is not None:
         dict_options["base"] = tm.from_markdown(base, **markdown_options)
-    return case_id, node("doc", *blocks), dict_options, markdown_options, refuses, normalized
+    return case_id, node("doc", *blocks), dict_options, markdown_options, refuses, normalized, expected_markdown
 
 
 BOLD = mark("bold")
@@ -141,13 +141,21 @@ EDITOR_DOCUMENTS = (
          paragraph(node("span", text("x", LINK), marks=(LINK,))), schema=INLINE_CONTAINER_SCHEMA),
 
     # Blocks and attrs.
-    case("empty-list-item", bullet_list(list_item())),
-    case("empty-task-item", node("taskList", node("taskItem", attrs={"checked": True}), attrs={"tight": True})),
-    case("empty-table-cell", table(1, [cell(paragraph(text("A")), header=True)], [cell()])),
-    case("empty-blockquote", node("blockquote")),
+    case("empty-list-item", bullet_list(list_item()),
+         normalized=node("doc", bullet_list(list_item(paragraph())))),
+    case("empty-task-item", node("taskList", node("taskItem", attrs={"checked": True}), attrs={"tight": True}),
+         normalized=node("doc", node("taskList", node("taskItem", paragraph(), attrs={"checked": True}),
+                                     attrs={"tight": True}))),
+    case("empty-table-cell", table(1, [cell(paragraph(text("A")), header=True)], [cell()]),
+         normalized=node("doc", table(1, [cell(paragraph(text("A")), header=True)], [cell(paragraph())]))),
+    case("empty-blockquote", node("blockquote"), normalized=node("doc", node("blockquote", paragraph()))),
     case("sole-empty-paragraph", paragraph()),
     case("trailing-empty-paragraph", paragraph(text("before")), paragraph()),
-    case("trailing-empty-tagged-paragraph", paragraph(text("before")), paragraph(), schema=PARAGRAPH_SCHEMA),
+    case("trailing-empty-tagged-paragraph", paragraph(text("before")), paragraph(), schema=PARAGRAPH_SCHEMA,
+         expected_markdown="before\n\n<p></p>"),
+    case("required-empty-paragraph-in-declared-block", node("callout", paragraph()),
+         schema=tm.Schema(nodes=[tm.NodeSpec("callout", "block", content="paragraph+")]),
+         normalized=node("doc", node("callout", paragraph())), expected_markdown="<callout>\n\n</callout>"),
     case("empty-bullet-list", node("bulletList", attrs={"tight": True})),
     case("empty-table", table(0)),
     case("missing-tight", node("bulletList", list_item(paragraph(text("item"))))),

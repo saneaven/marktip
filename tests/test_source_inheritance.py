@@ -111,6 +111,27 @@ def test_normalized_tagged_paragraph_matches_when_its_attrs_are_omitted():
     assert document.to_markdown() == markdown
 
 
+def test_trailing_empty_paragraph_keeps_base_spelling():
+    markdown = "## Before ###\n\n__last__\n"
+    base = tm.from_markdown(markdown)
+    submitted = base.to_dict()
+    submitted["content"].append({"type": "paragraph"})
+
+    document = tm.from_dict(submitted, strict="content", base=base)
+    assert document == base
+    assert document.to_markdown() == markdown
+
+
+def test_filled_empty_blockquote_keeps_base_spelling():
+    markdown = "> \n"
+    base = tm.from_markdown(markdown)
+    submitted = {"type": "doc", "content": [{"type": "blockquote"}]}
+
+    document = tm.from_dict(submitted, strict="content", base=base)
+    assert document == base
+    assert document.to_markdown() == markdown
+
+
 MANY_BLOCKS = [
     "# Heading ###",
     "[linked][r] and *emphasis*",

@@ -98,13 +98,14 @@ def test_task_item_multiline_paragraphs_keep_soft_and_hard_breaks(paragraph, mar
     assert_roundtrip(doc(task_list(task_item(True, paragraph))), markdown)
 
 
-def test_loose_checkbox_only_line_before_a_quote_normalizes_to_an_empty_first_paragraph():
-    parsed = tm.from_markdown("- [x]\n  > quoted\n\n- [ ] next")
-    expected = doc(task_list(task_item(True, {"type": "paragraph"}, quote("quoted")),
+@pytest.mark.parametrize("schema", (None, tm.Schema(core_attrs={"paragraph": {}})), ids=("default", "paragraph-tag"))
+def test_loose_checkbox_only_line_before_a_quote_does_not_add_an_empty_paragraph(schema):
+    parsed = tm.from_markdown("- [x]\n  > quoted\n\n- [ ] next", schema=schema)
+    expected = doc(task_list(task_item(True, quote("quoted")),
                              task_item(False, p(text("next"))), tight=False))
     assert parsed.to_dict() == expected
     written = parsed.to_markdown(canonical=True)
-    reread = tm.from_markdown(written)
+    reread = tm.from_markdown(written, schema=schema)
     assert reread.to_dict() == expected
     assert reread.to_markdown(canonical=True) == written
 

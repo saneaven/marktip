@@ -5,13 +5,15 @@
 
 #include "ast.h"
 #include "form.h"
+#include "lift.h"
 #include "schema.h"
 
 namespace marktip {
 namespace {
 
 enum class NodeKind {
-    Text, CodeText, HardBreak, Paragraph, Heading, OrderedList, TaskItem, Image, Table, CodeBlock, Container, Other
+    Text, CodeText, HardBreak, Paragraph, EmptyParagraph, Heading, OrderedList, List, TaskItem, Image, Table,
+    CodeBlock, ParagraphContainer, Container, Other, Removed
 };
 
 NodeKind node_kind(std::string_view type) {
@@ -32,25 +34,23 @@ NodeKind node_kind(std::string_view type) {
         break;
     case 8:
         if (std::memcmp(name, "taskItem", 8) == 0) return NodeKind::TaskItem;
-        if (std::memcmp(name, "listItem", 8) == 0 || std::memcmp(name, "tableRow", 8) == 0 ||
-            std::memcmp(name, "taskList", 8) == 0) {
-            return NodeKind::Container;
-        }
+        if (std::memcmp(name, "listItem", 8) == 0) return NodeKind::ParagraphContainer;
+        if (std::memcmp(name, "tableRow", 8) == 0) return NodeKind::Container;
+        if (std::memcmp(name, "taskList", 8) == 0) return NodeKind::List;
         break;
     case 9:
         if (std::memcmp(name, "paragraph", 9) == 0) return NodeKind::Paragraph;
         if (std::memcmp(name, "hardBreak", 9) == 0) return NodeKind::HardBreak;
         if (std::memcmp(name, "codeBlock", 9) == 0) return NodeKind::CodeBlock;
-        if (std::memcmp(name, "tableCell", 9) == 0) return NodeKind::Container;
+        if (std::memcmp(name, "tableCell", 9) == 0) return NodeKind::ParagraphContainer;
         break;
     case 10:
-        if (std::memcmp(name, "blockquote", 10) == 0 || std::memcmp(name, "bulletList", 10) == 0) {
-            return NodeKind::Container;
-        }
+        if (std::memcmp(name, "blockquote", 10) == 0) return NodeKind::ParagraphContainer;
+        if (std::memcmp(name, "bulletList", 10) == 0) return NodeKind::List;
         break;
     case 11:
         if (std::memcmp(name, "orderedList", 11) == 0) return NodeKind::OrderedList;
-        if (std::memcmp(name, "tableHeader", 11) == 0) return NodeKind::Container;
+        if (std::memcmp(name, "tableHeader", 11) == 0) return NodeKind::ParagraphContainer;
         break;
     }
     return NodeKind::Other;
@@ -166,9 +166,9 @@ void normalize_newlines(std::string& text) {
     text.resize(write);
 }
 
-void trim_before_soft_break(Document& document, const Node& parent, std::size_t& kept) {
+void trim_before_soft_break(Document& document, const std::vector<std::size_t>& children, std::size_t& kept) {
     while (kept != 0) {
-        Node& left = document.node(parent.content[kept - 1]);
+        Node& left = document.node(children[kept - 1]);
         if (std::string_view(left.type) != "text" || !is_blank(left.text.back()) || is_code(left)) {
             return;
         }
@@ -183,7 +183,7 @@ void trim_before_soft_break(Document& document, const Node& parent, std::size_t&
 enum class LinePosition { Start, Content };
 enum class LineScope { Paragraph, Heading, Declared };
 
-void normalize_line_text(Document& document, const Node& parent, std::string& text, std::size_t& kept,
+void normalize_line_text(Document& document, const std::vector<std::size_t>& children, std::string& text, std::size_t& kept,
                          LinePosition& position) {
     std::size_t end = text.find('\n');
     if (end == std::string::npos) {
@@ -213,7 +213,7 @@ void normalize_line_text(Document& document, const Node& parent, std::string& te
             write += last - first;
             position = LinePosition::Content;
         } else if (read == 0 && end != std::string::npos && position == LinePosition::Content) {
-            trim_before_soft_break(document, parent, kept);
+            trim_before_soft_break(document, children, kept);
         }
         if (end == std::string::npos) {
             break;
@@ -228,9 +228,10 @@ void normalize_line_text(Document& document, const Node& parent, std::string& te
     text.resize(write);
 }
 
-void trim_line_end(Document& document, Node& parent, std::size_t& kept, NodeKind kind, bool drop_breaks) {
+void trim_line_end(Document& document, const std::vector<std::size_t>& children, std::size_t& kept, NodeKind kind,
+                   bool drop_breaks) {
     while (kept != 0) {
-        Node& last = document.node(parent.content[kept - 1]);
+        Node& last = document.node(children[kept - 1]);
         if (!drop_breaks || kind != NodeKind::HardBreak) {
             if (kind != NodeKind::Text || (!is_blank(last.text.back()) && last.text.back() != '\n') || is_code(last)) {
                 return;
@@ -242,7 +243,7 @@ void trim_line_end(Document& document, Node& parent, std::size_t& kept, NodeKind
         }
         --kept;
         if (kept != 0) {
-            kind = node_kind(document.node(parent.content[kept - 1]).type);
+            kind = node_kind(document.node(children[kept - 1]).type);
         }
     }
 }
@@ -251,21 +252,32 @@ struct Normalizer {
     Document& document;
     const Schema& schema;
     bool reorder_marks;
+    bool paragraph_tags;
+    bool declared_nodes;
+    PathStack path;
 
-    NodeKind normalize_node(Node& node);
-    void normalize_lines(Node& parent, LineScope scope);
+    void normalize_root();
+    NodeKind normalize_node(std::size_t index);
+    NodeKind normalize_child(std::size_t index, std::size_t position);
+    bool normalize_lines(std::size_t index, LineScope scope);
+    bool normalize_children(std::size_t index, const NodeSpec* spec = nullptr);
+    void normalize_marks(Node& node);
+    bool remove_child(NodeKind kind) const;
 };
 
-void Normalizer::normalize_lines(Node& parent, LineScope scope) {
+bool Normalizer::normalize_lines(std::size_t index, LineScope scope) {
+    // Filling descendants can move the node arena.
+    auto children = std::move(document.node(index).content);
     std::size_t kept = 0;
-    // Declared nodes enclose their content in a tag.
+    // Declared textblocks and inline containers enclose their content in tags.
     LinePosition position = scope == LineScope::Declared ? LinePosition::Content : LinePosition::Start;
     NodeKind last = NodeKind::Other;
-    for (std::size_t index : parent.content) {
-        Node& child = document.node(index);
-        NodeKind kind = normalize_node(child);
+    for (std::size_t i = 0; i < children.size(); ++i) {
+        std::size_t child_index = children[i];
+        NodeKind kind = normalize_child(child_index, i);
+        Node& child = document.node(child_index);
         if (kind == NodeKind::Text) {
-            normalize_line_text(document, parent, child.text, kept, position);
+            normalize_line_text(document, children, child.text, kept, position);
         } else if (kind == NodeKind::HardBreak) {
             position = LinePosition::Start;
         } else {
@@ -274,16 +286,18 @@ void Normalizer::normalize_lines(Node& parent, LineScope scope) {
         if ((kind == NodeKind::Text || kind == NodeKind::CodeText) && child.text.empty()) {
             continue;
         }
-        parent.content[kept++] = index;
+        children[kept++] = child_index;
         last = kind;
     }
     if (scope != LineScope::Declared) {
-        trim_line_end(document, parent, kept, last, scope == LineScope::Paragraph);
+        trim_line_end(document, children, kept, last, scope == LineScope::Paragraph);
     }
-    parent.content.resize(kept);
+    children.resize(kept);
+    document.node(index).content = std::move(children);
+    return kept == 0;
 }
 
-NodeKind Normalizer::normalize_node(Node& node) {
+void Normalizer::normalize_marks(Node& node) {
     for (Mark& mark : node.marks) {
         if (std::string_view(mark.type) == "link") {
             remove_empty_title(mark.attrs);
@@ -292,7 +306,91 @@ NodeKind Normalizer::normalize_node(Node& node) {
     if (reorder_marks && node.marks.size() > 1) {
         order_marks(node.marks, schema);
     }
+}
+
+NodeKind Normalizer::normalize_child(std::size_t index, std::size_t position) {
+    if (!declared_nodes) {
+        return normalize_node(index);
+    }
+    path.push_back({"content", position});
+    NodeKind kind = normalize_node(index);
+    path.pop_back();
+    return kind;
+}
+
+bool Normalizer::remove_child(NodeKind kind) const {
+    return kind == NodeKind::Removed || (kind == NodeKind::EmptyParagraph && !paragraph_tags);
+}
+
+bool Normalizer::normalize_children(std::size_t index, const NodeSpec* spec) {
+    auto children = std::move(document.node(index).content);
+    std::size_t kept = 0;
+    for (std::size_t i = 0; i < children.size(); ++i) {
+        std::size_t child = children[i];
+        if (!remove_child(normalize_child(child, i))) {
+            children[kept++] = child;
+        }
+    }
+    bool removed = kept != children.size();
+    children.resize(kept);
+    document.node(index).content = std::move(children);
+    if (removed && spec != nullptr) {
+        complete_content(document, index, *spec, path);
+        return document.node(index).content.empty();
+    }
+    return kept == 0;
+}
+
+void update_spelling(Spelling& spelling, const std::vector<std::size_t>& children) {
+    std::size_t child = 0;
+    std::size_t kept = 0;
+    for (SpellingPiece piece : spelling.items) {
+        if (piece.has_node && children[child++] == 0) {
+            if (!piece.text) {
+                continue;
+            }
+            piece.has_node = false;
+        }
+        spelling.items[kept++] = piece;
+    }
+    spelling.items.resize(kept);
+}
+
+void Normalizer::normalize_root() {
+    normalize_marks(document.root());
+    auto children = std::move(document.root().content);
+    std::size_t kept = 0;
+    std::size_t last = 0;
+    NodeKind last_kind = NodeKind::Other;
+    for (std::size_t i = 0; i < children.size(); ++i) {
+        NodeKind kind = normalize_child(children[i], i);
+        if (remove_child(kind)) {
+            // Zero marks a removed child without disturbing the spelling positions.
+            children[i] = 0;
+        } else {
+            ++kept;
+            last = i;
+            last_kind = kind;
+        }
+    }
+    if (kept == 1 && last_kind == NodeKind::EmptyParagraph) {
+        children[last] = 0;
+        --kept;
+    }
+    if (kept != children.size()) {
+        if (document.spelling()) {
+            update_spelling(*document.spelling(), children);
+        }
+        children.erase(std::remove(children.begin(), children.end(), 0), children.end());
+    }
+    document.root().content = std::move(children);
+}
+
+NodeKind Normalizer::normalize_node(std::size_t index) {
+    Node& node = document.node(index);
+    normalize_marks(node);
     NodeKind kind = node_kind(node.type);
+    const NodeSpec* spec = nullptr;
     switch (kind) {
     case NodeKind::Text:
         normalize_newlines(node.text);
@@ -310,22 +408,29 @@ NodeKind Normalizer::normalize_node(Node& node) {
         if (find_attr(node.attrs, "start") == nullptr) {
             set_attr(node.attrs, "start", AttrValue::integer(1));
         }
-        break;
+        [[fallthrough]];
+    case NodeKind::List:
+        return normalize_children(index) ? NodeKind::Removed : kind;
     case NodeKind::Heading: {
         const AttrValue* level = find_attr(node.attrs, "level");
         if (level == nullptr || level->kind != AttrValue::Kind::Int || level->int_value < 1 || level->int_value > 6) {
             set_attr(node.attrs, "level", AttrValue::integer(std::clamp(attr_int(node.attrs, "level", 1), 1LL, 6LL)));
         }
-        [[fallthrough]];
+        normalize_lines(index, LineScope::Heading);
+        return kind;
     }
     case NodeKind::Paragraph:
-        normalize_lines(node, kind == NodeKind::Paragraph ? LineScope::Paragraph : LineScope::Heading);
-        return kind;
+        return normalize_lines(index, LineScope::Paragraph) ? NodeKind::EmptyParagraph : kind;
     case NodeKind::TaskItem:
         if (find_attr(node.attrs, "checked") == nullptr) {
             set_attr(node.attrs, "checked", AttrValue::boolean(false));
         }
-        break;
+        [[fallthrough]];
+    case NodeKind::ParagraphContainer:
+        if (normalize_children(index)) {
+            document.append_child(index, Node {"paragraph", {}, {}, {}, {}});
+        }
+        return kind;
     case NodeKind::Image:
         if (find_attr(node.attrs, "alt") == nullptr) {
             set_attr(node.attrs, "alt", AttrValue::string(plain_text(document, node)));
@@ -337,25 +442,27 @@ NodeKind Normalizer::normalize_node(Node& node) {
         if (find_attr(node.attrs, "colCount") == nullptr) {
             set_attr(node.attrs, "colCount", AttrValue::integer(table_columns(document, node)));
         }
-        break;
+        return normalize_children(index) ? NodeKind::Removed : kind;
     case NodeKind::CodeBlock:
         normalize_fence_info(node.attrs);
         break;
     case NodeKind::Other:
-        if (!node.content.empty() && schema.has_declared_nodes()) {
-            const NodeSpec& spec = *schema.node(node.type);
-            if (spec.shape == Shape::TextBlock || spec.shape == Shape::InlineContainer) {
-                normalize_lines(node, LineScope::Declared);
+        if (!node.content.empty() && declared_nodes) {
+            spec = schema.node(node.type);
+            if (spec->shape == Shape::TextBlock || spec->shape == Shape::InlineContainer) {
+                normalize_lines(index, LineScope::Declared);
                 return kind;
             }
         }
         break;
     case NodeKind::CodeText:
+    case NodeKind::EmptyParagraph:
     case NodeKind::Container:
+    case NodeKind::Removed:
         break;
     }
-    for (std::size_t child : node.content) {
-        normalize_node(document.node(child));
+    if (!node.content.empty()) {
+        normalize_children(index, spec);
     }
     return kind;
 }
@@ -364,8 +471,8 @@ NodeKind Normalizer::normalize_node(Node& node) {
 
 void normalize_document(Document& document) {
     const Schema& schema = document.schema();
-    Normalizer {document, schema, schema.has_declared_marks() || schema.has_link_tag()}
-        .normalize_node(document.root());
+    Normalizer {document, schema, schema.has_declared_marks() || schema.has_link_tag(),
+                !schema.node("paragraph")->tag.empty(), schema.has_declared_nodes(), {}}.normalize_root();
 }
 
 void normalize_inherited_attrs(Document& document) {

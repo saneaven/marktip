@@ -206,12 +206,7 @@ def test_block_shapes_can_be_the_first_block_in_tight_and_loose_list_items(html,
         first = first_marker + lines[0]
     first += "".join("\n" + " " * continuation + line for line in lines[1:])
     markdown = first + ("\n" if tight else "\n\n") + second_marker + "after"
-    expected = None
-    if family == "task" and not tight and shape != "textblock":
-        expected = doc(node(list_type,
-                            node(item_type, node("paragraph"), shape_node(shape), attrs=first_attrs),
-                            node(item_type, p(text("after")), attrs=second_attrs), attrs=list_attrs))
-    roundtrip(ast, block_schema(), markdown, html, level, expected)
+    roundtrip(ast, block_schema(), markdown, html, level)
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -292,6 +287,16 @@ def test_empty_paragraphs_in_optional_block_content_are_dropped(html, level):
               doc(node("callout")))
 
 
+@pytest.mark.parametrize("content", ("paragraph*", "block*", "legacyEmbed|paragraph"))
+def test_declared_container_writes_its_sole_empty_paragraph(content):
+    schema = tm.Schema(nodes=[
+        tm.NodeSpec("callout", "block", content=content),
+        tm.NodeSpec("legacyEmbed", "block", group=""),
+    ], core_attrs={"paragraph": {}})
+    ast = doc(node("callout", node("paragraph")))
+    roundtrip(ast, schema, "<callout>\n\n<p></p>\n\n</callout>", html=True, level="content", expected=ast)
+
+
 @pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("level", LEVELS)
 def test_required_block_content_restores_one_empty_paragraph(html, level):
@@ -300,11 +305,16 @@ def test_required_block_content_restores_one_empty_paragraph(html, level):
 
 
 @pytest.mark.parametrize("html", HTML)
-def test_reading_an_empty_required_container_fills_one_empty_paragraph(html):
-    schema = tm.Schema(nodes=[tm.NodeSpec("callout", kind="block", content="paragraph+")])
+@pytest.mark.parametrize("core_attrs, canonical", [
+    ({}, "<callout>\n\n</callout>"),
+    ({"paragraph": {}}, "<callout>\n\n<p></p>\n\n</callout>"),
+])
+def test_reading_an_empty_required_container_fills_one_empty_paragraph(html, core_attrs, canonical):
+    schema = tm.Schema(nodes=[tm.NodeSpec("callout", kind="block", content="paragraph+")], core_attrs=core_attrs)
     parsed = tm.from_markdown("<callout>\n\n</callout>", schema=schema, html=html)
     assert parsed.to_dict() == doc(node("callout", node("paragraph")))
-    assert parsed.to_markdown(canonical=True) == "<callout>\n\n</callout>"
+    assert parsed.to_markdown(canonical=True) == canonical
+    assert tm.from_markdown(canonical, schema=schema, html=html) == parsed
 
 
 def details_schema():
@@ -339,10 +349,13 @@ def test_implicit_wrapper_can_contain_a_nested_details_block(html, level):
 
 @pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("level", LEVELS)
-def test_empty_required_implicit_content_restores_one_empty_paragraph(html, level):
+@pytest.mark.parametrize("core_attrs, markdown", [
+    ({}, "<details>\n\n<summary>Title</summary>\n\n</details>"),
+    ({"paragraph": {}}, "<details>\n\n<summary>Title</summary>\n\n<p></p>\n\n</details>"),
+])
+def test_empty_required_implicit_content_restores_one_empty_paragraph(html, level, core_attrs, markdown):
     ast = doc(node("details", node("detailsSummary", text("Title")), node("detailsContent", p())))
-    markdown = "<details>\n\n<summary>Title</summary>\n\n</details>"
-    roundtrip(ast, details_schema(), markdown, html, level)
+    roundtrip(ast, details_schema().extend(core_attrs=core_attrs), markdown, html, level)
 
 
 @pytest.mark.parametrize("html", HTML)
@@ -386,8 +399,4 @@ def test_implicit_details_roundtrip_in_quotes_and_loose_list_items(html, level, 
         markdown = opening + "".join(
             "\n" + (" " * continuation + line if line else "") for line in lines
         ) + "\n\n" + second_marker + "after"
-    expected = None
-    if context == "task":
-        expected = doc(node(family, node(item, node("paragraph"), child, attrs=first_attrs),
-                            node(item, p(text("after")), attrs=second_attrs), attrs=attrs))
-    roundtrip(ast, details_schema(), markdown, html, level, expected)
+    roundtrip(ast, details_schema(), markdown, html, level)

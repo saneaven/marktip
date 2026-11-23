@@ -52,6 +52,17 @@ def test_normalized_nul_source_survives_storage():
     assert restored.to_markdown() == markdown.replace("\0", "\ufffd")
 
 
+def test_removed_paragraph_keeps_source_without_a_node_in_storage():
+    markdown = "## Before ###\n\n&#32;\n\n__after__\n"
+    document = tm.from_markdown(markdown, keep_source=True)
+    assert document == tm.from_markdown("## Before ###\n\n__after__\n")
+    assert document.to_markdown() == markdown
+
+    stored, restored = json_storage_roundtrip(document)
+    assert stored["source"]["items"][1] == {"text": "&#32;", "sep": "\n\n", "node": False}
+    assert restored.to_markdown() == markdown
+
+
 @pytest.mark.parametrize("html", (True, False))
 def test_tag_line_containers_atoms_and_internal_definitions_survive_storage(html):
     schema = block_schema()

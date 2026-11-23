@@ -245,8 +245,6 @@ void check_lift_depth(std::size_t depth) {
     }
 }
 
-void complete_content(Document& document, std::size_t index, const NodeSpec& spec, PathStack& path);
-
 void build_containers(Document& document, InlineParent current, const std::vector<InlinePiece>& pieces,
                        bool partial, PathStack& path);
 
@@ -1018,6 +1016,8 @@ void complete_one_content(Document& document, std::size_t index, const NodeSpec&
     }
 }
 
+}  // namespace
+
 void complete_content(Document& document, std::size_t index, const NodeSpec& spec, PathStack& path) {
     if (spec.dfa < 0) {
         return;
@@ -1035,8 +1035,6 @@ void complete_content(Document& document, std::size_t index, const NodeSpec& spe
         path.pop_back();
     }
 }
-
-}  // namespace
 
 void lift(Document& document, const ParseOptions& options) {
     PathStack path;

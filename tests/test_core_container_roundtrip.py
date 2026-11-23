@@ -307,11 +307,13 @@ def test_any_table_type_activates_the_whole_table_tag_family(type_):
     assert parsed.to_markdown(canonical=True) == "| heading |\n| --- |\n| value |"
 
 
-def test_an_empty_ul_tag_reads_as_a_bullet_list():
+def test_an_empty_ul_tag_is_removed():
     schema = tm.Schema(core_attrs={"taskList": {}})
-    parsed = tm.from_markdown('<ul tight="true">\n\n</ul>', schema=schema)
-    assert parsed.to_dict() == doc(node("bulletList", attrs={"tight": True}))
-    assert parsed.to_markdown(canonical=True) == tm.from_dict(doc(node("bulletList", attrs={"tight": True}))).to_markdown(canonical=True)
+    source = '<ul tight="true">\n\n</ul>'
+    parsed = tm.from_markdown(source, schema=schema)
+    assert parsed.to_dict() == doc()
+    assert parsed.to_markdown(canonical=True) == ""
+    assert parsed.to_markdown() == source
 
 
 @pytest.mark.parametrize("html", HTML)
