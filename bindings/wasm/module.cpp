@@ -136,7 +136,7 @@ EMSCRIPTEN_KEEPALIVE std::uint32_t mt_from_dict(const char* data, std::size_t le
         ConversionOptions options = read_options(options_json.root(), *schema, true);
         const Document* base = base_handle == 0 ? nullptr : &documents.at(base_handle);
         return retain(DocumentReader<JsonInput>::from_dict(root_dict(input), std::move(schema), options.strict, base)
-                          .finish(options.nodes, options.uri));
+                          .finish(options.nodes, options.uri, options.parser.cjk_friendly));
     });
 }
 
@@ -166,6 +166,12 @@ EMSCRIPTEN_KEEPALIVE void mt_to_markdown(std::uint32_t handle, int canonical) {
     invoke([&] {
         result = to_markdown(documents.at(handle), canonical != 0);
         return 0;
+    });
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t mt_equals(std::uint32_t left, std::uint32_t right) {
+    return invoke([&] {
+        return same_document(documents.at(left), documents.at(right));
     });
 }
 

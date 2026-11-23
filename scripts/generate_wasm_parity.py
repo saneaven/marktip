@@ -10,6 +10,7 @@ import marktip as tm
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
+from editor_documents import EDITOR_DOCUMENTS
 from spec_examples import EDGE_DOCUMENTS, EXAMPLES, block_schema, editor_dict
 
 
@@ -214,8 +215,7 @@ def generate():
     }
     payload = {
         "version": tm.__version__,
-        "schemas": {name: None if schema is None else schema.to_dict() for name, schema in schemas.items()},
-        "documents": [], "errors": [], "partial": [], "fingerprints": [],
+        "documents": [], "editorDocuments": [], "errors": [], "partial": [], "fingerprints": [],
     }
 
     def add_document(name, markdown, schema_name, **options):
@@ -223,11 +223,12 @@ def generate():
         document = tm.from_markdown(markdown, schema=schema, **options)
         loaded = tm.load(document.dump(), schema=schema)
         editor_input = editor_dict(document.to_dict())
-        edited = tm.from_dict(editor_input, schema=schema, base=loaded)
+        edited = tm.from_dict(editor_input, schema=schema, base=loaded,
+                              cjk_friendly=options.get("cjk_friendly", False))
         payload["documents"].append({
             "id": name, "markdown": markdown, "schema": schema_name, "options": js_options(options),
-            "expected": snapshot(document), "loadedDump": loaded.dump(),
-            "editorInput": editor_input, "editorExpected": snapshot(edited),
+            "expected": snapshot(document), "loadedDump": loaded.dump(), "loadedEquals": loaded == document,
+            "editorInput": editor_input, "editorExpected": snapshot(edited), "editorEquals": edited == document,
         })
 
     examples = [(example.id, example.values[0]) for example in EXAMPLES]
@@ -335,6 +336,26 @@ def generate():
             "id": name, "operation": operation, "value": value, "schema": schema_name,
             "options": js_options(options), "expected": expected,
         })
+
+    for name, value, dict_options, _, refuses, _, _ in EDITOR_DOCUMENTS:
+        options = dict(dict_options, strict="content")
+        schema = options.pop("schema", None)
+        base = options.pop("base", None)
+        schema_name = next((key for key, registered in schemas.items() if schema == registered), None)
+        if schema_name is None:
+            schema_name = f"editor/{name}"
+            schemas[schema_name] = schema
+        fixture = {"id": f"editor/{name}", "value": value, "schema": schema_name, "options": js_options(options)}
+        if refuses:
+            fixture["operation"] = "fromDict"
+            fixture["expected"] = error_result(lambda: tm.from_dict(value, schema=schema, base=base, **options))
+            payload["errors"].append(fixture)
+        else:
+            fixture["baseDump"] = None if base is None else base.dump()
+            fixture["expected"] = snapshot(tm.from_dict(value, schema=schema, base=base, **options))
+            payload["editorDocuments"].append(fixture)
+
+    payload["schemas"] = {name: None if schema is None else schema.to_dict() for name, schema in schemas.items()}
     schema_results(payload)
     return payload
 
@@ -346,7 +367,8 @@ def main():
     payload = generate()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"Wrote {len(payload['documents'])} documents, {len(payload['partial'])} partial inputs, "
+    print(f"Wrote {len(payload['documents'])} documents, {len(payload['editorDocuments'])} strict editor documents, "
+          f"{len(payload['partial'])} partial inputs, "
           f"{len(payload['errors'])} errors, {len(payload['fingerprints'])} fingerprints, "
           f"{len(payload['presets'])} presets, {len(payload['presetFunctions'])} preset functions, "
           f"{len(payload['schemaCases'])} schemas, {len(payload['extensions'])} extensions and "

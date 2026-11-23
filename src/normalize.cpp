@@ -144,7 +144,11 @@ void join_cell_paragraphs(Document& document, std::size_t index) {
     std::size_t kept = 0;
     bool previous_paragraph = false;
     for (std::size_t child : children) {
-        bool paragraph = document.node(child).type == "paragraph";
+        const Node& node = document.node(child);
+        bool paragraph = node.type == "paragraph";
+        if (!paragraph && is_empty_list_or_table(node)) {
+            continue;
+        }
         if (paragraph && previous_paragraph) {
             std::size_t joined = children[kept - 1];
             document.append_child(joined, Node {"hardBreak", {}, {}, {}, {}});

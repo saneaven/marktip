@@ -13,7 +13,7 @@
 namespace py = pybind11;
 
 #ifndef MARKTIP_VERSION
-#define MARKTIP_VERSION "0.8.3"
+#define MARKTIP_VERSION "0.9.0"
 #endif
 
 namespace {
@@ -170,10 +170,14 @@ PYBIND11_MODULE(_core, module) {
         " and attrs added to core types through core_attrs;"
         " None (the default) uses the built-in GFM schema." +
         uri_policy_doc + node_policy_doc +
-        " strict names what the conversion may not lose, rather than converting around everything:"
+        " strict controls validation and which attrs Markdown must carry."
         " 'off' (the default) checks no attrs at all,"
         " 'content' keeps content and structure and drops presentation only,"
-        " 'exact' keeps every attr the JSON carries, except declared defaults that mean unset."
+        " and 'exact' refuses attrs Markdown would omit, except declared defaults that mean unset."
+        " Normalization can adjust attrs at every strict level."
+        " For example, fence info is reconciled with language,"
+        " body cells take their align from the header in schemas without table tags,"
+        " and a list with one item containing one block becomes tight."
         " With the default schema, the two levels differ over presentation attrs."
         " These are link target/rel/class, image width/height, orderedList type and tableCell colwidth."
         " 'content' type-checks them and drops them; 'exact' refuses them."
@@ -194,8 +198,8 @@ PYBIND11_MODULE(_core, module) {
         " These use .code 'unrepresentable', .field 'html' and .path locating the raw HTML node."
         " Strict also closes node/mark top-level fields and each node's content model;"
         " violations use .code 'unknown_field' or 'invalid_content'."
-        " table 'colCount' and a non-header row's 'align' are accepted at every level,"
-        " because from_markdown emits both and the structure carries them anyway."
+        " Table 'colCount' and a non-header row's 'align' are accepted at every level,"
+        " subject to normalization."
         " None means the attr was never set wherever Tiptap declares `default: null`,"
         " and from_dict drops the key rather than coercing it.";
 

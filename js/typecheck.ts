@@ -45,11 +45,14 @@ const document = tm.fromMarkdown("<callout>\ntext", {
     rejectNodeTypes: ["image"],
 });
 const loaded = tm.load(document.dump(), { schema });
-const edited = tm.fromDict(document.toDict(), { schema, strict: "exact", base: loaded });
+const edited = tm.fromDict(document.toDict(), { schema, strict: "exact", base: loaded, cjkFriendly: true });
 tm.fromDict(document.toDict(), { schema, strict: "content" }).free();
+const sameDocument: boolean = edited.equals(loaded);
+const equalsUnknown: boolean = document.equals(document.toDict());
 const markdown: string = edited.toMarkdown({ canonical: true });
 const version: string = tm.version;
-JSON.stringify({ same, marks, nodes, coreAttrs, blockImage, style, alignment, link, markdown, version, mapNode });
+JSON.stringify({ same, sameDocument, equalsUnknown, marks, nodes, coreAttrs, blockImage,
+                 style, alignment, link, markdown, version, mapNode });
 
 try {
     tm.fromDict({ type: "unrecognized" });

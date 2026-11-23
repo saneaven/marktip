@@ -9,9 +9,8 @@ void check_option_names(JsonInput::Value options, bool from_dict) {
     for (auto item : JsonInput::items(options)) {
         std::string name = JsonInput::string(item.first);
         bool common = name == "linkSchemes" || name == "imageSchemes" || name == "linkRelative" ||
-                      name == "imageRelative" || name == "rejectNodeTypes";
-        bool specific = from_dict ? name == "strict" :
-                        name == "cjkFriendly" || name == "html" || name == "partial" || name == "keepSource";
+                      name == "imageRelative" || name == "rejectNodeTypes" || name == "cjkFriendly";
+        bool specific = from_dict ? name == "strict" : name == "html" || name == "partial" || name == "keepSource";
         if (!common && !specific) {
             throw TypeError("unknown option '" + name + "'");
         }
@@ -88,10 +87,10 @@ ConversionOptions read_options(JsonInput::Value value, const Schema& schema, boo
     options.uri.image.relative = relative_policy_from_string(string_option(value, "imageRelative", "allow"),
                                                              "imageRelative");
     rejected_nodes(value, schema, options.nodes);
+    options.parser.cjk_friendly = boolean_option(value, "cjkFriendly", false);
     if (from_dict) {
         options.strict = strict_mode_from_string(string_option(value, "strict", "off"), "strict");
     } else {
-        options.parser.cjk_friendly = boolean_option(value, "cjkFriendly", false);
         options.parser.html = boolean_option(value, "html", true);
         options.parser.partial = boolean_option(value, "partial", false);
         options.parser.keep_source = boolean_option(value, "keepSource", true);

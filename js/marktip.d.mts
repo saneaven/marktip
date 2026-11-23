@@ -11,6 +11,7 @@ type WasmModule = {
     _mt_to_dict(document: number): void;
     _mt_dump(document: number): void;
     _mt_to_markdown(document: number, canonical: number): void;
+    _mt_equals(left: number, right: number): number;
     _mt_document_free(document: number): void;
     _mt_schema_free(schema: number): void;
     _mt_version(): void;

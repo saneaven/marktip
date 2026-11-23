@@ -23,6 +23,51 @@ markdown = doc.to_markdown()
 doc = tm.from_dict(ast)
 ```
 
+### What changed in 0.9.0
+
+- Python documents support `==` and `hash()`, and JavaScript documents support `equals()`.
+  If a save puts a stored document back into a live editor, compare documents with `equals()` in JavaScript or `==` in Python.
+  Comparing JSON strings can make a save replace the editor contents each time the user types a trailing space.
+- The stored tree can differ from the JSON submitted to `from_dict`.
+  Normalization leaves the live editor's tree alone.
+  `from_markdown(...).to_dict()` also changes.
+  Code block text loses the final fence newline, and empty cells, list items, task items and blockquotes gain an empty paragraph.
+  Paragraphs and headings lose line-edge whitespace even in tag form or inside a link or declared mark, with code spans preserving their spaces.
+  Paragraphs keep leading hard breaks and lose trailing ones, including in table cells.
+  In the default schema, the dict heading `heading[a, hardBreak, b]` and the Markdown heading `a\nb\n===\n` both store the single line `a b`.
+  With `core_attrs={"heading": {}}`, both keep their breaks.
+  Their outputs, shown with backslashes and newlines escaped, are `<h2>a\\\nb</h2>` and `<h1>a\nb</h1>`.
+  Some mark orders change on Markdown input, and edge whitespace supplied by a character reference can be trimmed or lose its emphasis too.
+  With `UNDERLINE` declared, reading `**a <u>b</u>**` now leaves the space before `<u>` plain.
+- Canonical hard breaks now use a backslash and a newline, with `<br>` in pipe cells.
+  Fences write the full info string and always put a newline after the body, so an empty fence has an empty line.
+  Fence word recognition follows md4c, so tab-led info no longer selects a declared fence carrier.
+  Loose lists write blank lines inside items, and overlapping marks from an editor can be written in a different order.
+  A checkbox-only line no longer produces an empty leading paragraph before an item's first block.
+- Plain text from dict input such as `visit https://example.com or www.example.com or a@b.com today` now writes as `visit https\://example.com or www\.example.com or a\@b.com today` and reads back as plain text.
+  Code spans containing only spaces write without padding.
+  A paragraph's second line gets a backslash before a leading `|` or `:`.
+  Link destination backticks are escaped, and an empty destination with a title writes as `<>`.
+- In a schema with paragraph tags, kept empty paragraphs write as `<p></p>`, including trailing editor paragraphs and sole paragraphs in otherwise empty declared containers.
+  The sole filler paragraph in a list item, task item, table cell or blockquote stays unwritten.
+  With heading tags, `| ## title |` becomes `| <h2>title</h2> |` for a cell containing a heading, including when the schema also has table tags.
+  Tag-form lists and tables write the normalized attrs `tight`, `start` on ordered lists, and `colCount` on tables.
+- Strict editor saves can raise `InvalidNodeError` with code `unrepresentable` for emphasis the canonical writer cannot carry or for a pipe cell it cannot carry.
+  Display the error to the editor user.
+  Pass `cjk_friendly=True` to `from_dict` or `cjkFriendly: true` to `fromDict` when that Markdown will be read in CJK-friendly mode.
+- The remembered bytes can differ from the normalized tree.
+  For example, `~~b&#32;~~` loses its trailing space, and an empty link such as `[](./target.md)` has no node.
+  Both spellings survive in remembered Markdown.
+  Policy checks now run before normalization and `base=` inheritance, so an inherited value is outside the current call's policy check.
+- The dump format stays the same.
+  `load()` restores 0.8 dumps as stored, including their mark order.
+  Legacy states such as edge whitespace inside emphasis, a final newline in code text or edge hard breaks can write Markdown that reads back differently.
+  Save once through `from_dict(load(x).to_dict())` to normalize the document, passing the schema and reading options in use.
+  A 0.8 dump of a fence containing the single line `x` still stores `x\n` after this resave.
+  A canonical write adds its own newline, so the rewritten fence has a visible empty line after `x`.
+
+See [Defined normalizations](#defined-normalizations) for the input, writing and strict-check rules.
+
 > **Changed in 0.8.0** — `to_markdown()` returns the Markdown a document was read from, and marktip's own spelling only for blocks that changed;
 > pass `canonical=True` for the previous output.
 > Nesting is limited to 512 levels instead of 2,048.
@@ -36,6 +81,8 @@ Pass `cjk_friendly=True` to follow the [CommonMark CJK-friendly Amendments Speci
 ```python
 doc = tm.from_markdown("**볼드**은 강조", cjk_friendly=True)
 ```
+
+`from_dict(..., cjk_friendly=True)` uses the same rules to normalize and check emphasis for Markdown that will be read in that mode.
 
 Strikethrough follows the GFM reference implementations (cmark-gfm/micromark): intra-word `~~` strikes (`a~~b~~c`), including next to CJK letters (`~~삭제~~은`).
 `cjk_friendly` still matters for punctuation-adjacent cases such as `~~"인용"~~라고`.
@@ -72,6 +119,33 @@ Pass `keep_source=False` to skip remembering source spelling without changing th
 Then `to_markdown()` equals `to_markdown(canonical=True)`, and `dump()` has no `source` field.
 `keep_source` is keyword-only and defaults to `True`; it is independent of `partial`.
 
+### Markdown round trips
+
+1. Unchanged blocks return their remembered Markdown byte for byte, subject to the [source-spelling limits](#source-spelling-limits).
+2. Reading `d.to_markdown(canonical=True)` gives the same document as `d`, apart from attrs the Markdown omits.
+3. Writing the re-read document canonically gives the same bytes.
+
+Use the same schema and reading options for the round trip, and use `strict="content"` or `strict="exact"` on dict input.
+An editor's submitted tree can change as described in [Defined normalizations](#defined-normalizations).
+
+Rules 2 and 3 do not cover emphasis in `from_markdown` output or in blocks that inherit remembered text, which skip the strict read-back check.
+For example, `from_markdown("**a**[**b**](u)c")` writes canonically as `**a[b](u)**c`.
+Reading that back changes the tree, and the next canonical write gives `\*\*a[b](u)\*\*c`.
+The original tree still passes strict `from_dict` when it inherits the original Markdown through `base=`.
+
+### Comparing documents
+
+Use `a == b` in Python and `a.equals(b)` in JavaScript.
+Equality compares the schema fingerprint and the tree, including node types, text, attrs, stored mark order and child order.
+Attr key order is ignored for nodes and marks.
+Attrs omitted from Markdown still count.
+Remembered spelling is ignored.
+Equal Python documents have the same `hash()`.
+Python's `__eq__` returns `NotImplemented` for another type, and JavaScript's `equals()` returns `false` for anything other than a `Document`.
+
+Compare `to_markdown()` or `toMarkdown()` for the actual source-preserving output.
+Use the canonical option on those methods to compare only what marktip's Markdown writer emits.
+
 ### Remembering source spelling
 
 A `Document` holds the Tiptap node tree and, when available, the Markdown spelling of its top-level blocks.
@@ -91,22 +165,25 @@ assert edited.to_markdown() == source
 
 `from_markdown` creates the spelling unless `keep_source=False`.
 `from_dict(editor_json, base=stored_document)` borrows it for matching blocks, and `load` restores it from stored data.
-`from_dict` without a base has no spelling and writes the same canonical Markdown as before.
+`from_dict` without a base writes canonical Markdown.
 A base without spelling lends no text or gaps.
 With a matching schema declaration, it still fills absent attrs on matched blocks.
 The base only lends spelling and absent attrs; it does not merge changes from two writers.
 
-Blocks match when type, text, children, and Markdown-carried attrs agree throughout their subtrees.
+Blocks match after normalization when type, text, children, and Markdown-carried attrs agree throughout their subtrees.
 Marks are compared without regard to order.
 Attrs carried by a declared tag count too; presentation and free-form attrs that Markdown does not carry do not count.
 Among equal base blocks, matching first prefers an unused block that keeps the base order, then an unused moved block.
 
 An attr key absent from the editor's JSON means the editor does not model it.
 On a matched block, the value comes from the node or mark at the corresponding position in the base.
-This preserves attrs such as `tight`, `colCount`, `info`, and an old editor's cell `align` without a special list of names.
+This preserves attrs such as `tight`, `info`, and an old editor's cell `align` when the block matches.
+After inheritance, mark order, fence info, list tightness, table width and pipe-table alignment are adjusted again.
 A key present with `null` was cleared and is not inherited.
 An unmatched block inherits no attrs.
-Strict validation still judges the editor's input, with or without a base; an absent required attr is an error under strict even if a base could supply it.
+Strict input validation runs before inheritance, so an absent required attr is an error even if a base could supply it.
+The strict check for a paragraph join that would lose a tag attr also runs while reading the dict.
+The remaining pipe-cell checks and the emphasis check run on the final tree and skip blocks that inherited remembered text.
 
 Top-level reference-definition paragraphs are remembered as source-only pieces.
 They follow their preceding matched base block when it moves; if that base block is not matched, they follow the nearest earlier surviving match or stay at the front.
@@ -178,7 +255,7 @@ For the default schema, the caller's flow is:
 | --- | --- | --- |
 | Agent writes | `from_markdown(md).dump()` | Parse once |
 | Frontend renders or opens the editor | Read the stored `doc` | None |
-| Editor saves | `from_dict(editor_json, base=load(stored)).dump()` | Read JSON twice and compare blocks |
+| Editor saves | `from_dict(editor_json, base=load(stored), strict="content").dump()` | Read JSON twice, compare blocks and check any emphasis that needs writing |
 | Agent reads | `load(stored).to_markdown()` | Read JSON once and join pieces |
 
 Pass the application's schema when restoring a configured document.
@@ -193,13 +270,26 @@ The frontend can render the stored `doc` without running marktip.
 - When identical blocks occur together and one is deleted, which original spelling the survivor inherits is unspecified.
 - Adding a block after an original unclosed code fence or an HTML block such as an unclosed `<script>` can put the added block inside it on readback.
 - The remembered text of a document read with `partial=True` can contain open declared tags.
-  That text needs `partial=True` to be read again; `to_markdown(canonical=True)` writes the closing tags.
+  That text needs `partial=True` to be read again.
+  The canonical writer closes declared containers that remain in the tree after normalization.
   On readback with `partial=True`, a block added after an open top-level container is read as inside it.
 - An original block beginning with spaces can be absorbed into a list if it is moved directly after that list or if the block between them is deleted; two original indented code blocks that become neighbours after deletion or movement can read back as one code block.
 - Reference definitions inside a quote, list, or the start of a paragraph disappear when that containing block is rewritten.
   Other unchanged blocks using those definitions can then re-read their reference links as literal text.
-- If the editor omits `tight`, an edited loose list is written tight.
-- If the editor coalesces adjacent text nodes whose only difference was mark order, that paragraph is treated as changed and loses its spelling.
+- The remembered text of a block dropped as empty stays in the output.
+  Adding or rewriting surrounding blocks can change how that text reads back.
+- If an editor omits a cell's `align` but keeps `tight`, a tag-form table in a tight list item can lose its match and remembered spelling.
+- Adjacent links to the same destination can merge before matching if the caller omits the attr that distinguished them, such as the second link's `title`.
+  The merged block loses the attr and the remembered spelling.
+  Conversely, submitting two equal link runs with `target` omitted from only one can keep them separate, so they no longer match a base that joined them.
+- An inline container's link and an inner link can become equal when the caller omits an attr on the outer link.
+  Normalization then removes the inner link, and the block can lose the inherited attr and its spelling.
+- Emphasis cleanup uses the link's form before inheritance.
+  If the caller omits `target` from a tag-form link, normalizing it as a Markdown link can move emphasis boundaries and prevent the block from inheriting the attr and its spelling.
+- Resubmitting an unchanged 0.8 dump through `base=` can lose spelling if the older tree has adjacent equal-mark runs that now join.
+- Two remembered lists that become neighbours can share a marker.
+  The writer can then regenerate one of those lists even though its remembered spelling exempted it from the strict emphasis check.
+- Adjacent links distinguished only by a Markdown-omitted attr can fail the strict emphasis check if the reader merges them.
 - With `block_image=True`, a top-level paragraph replaced by exactly one node keeps its text.
   A paragraph that really splits into several nodes loses its text; unchanged blocks around it keep theirs.
 - A source-preserving dump stores both node content and remembered Markdown, so remembered text increases the stored size.
@@ -261,7 +351,8 @@ doc = tm.from_markdown(imported_markdown, reject_node_types=NO_RAW_HTML)
 Every entry must name a node type in the schema passed to the call, and matching is exact and case-sensitive.
 Declared node names are accepted too.
 A bare string or a non-string entry raises `TypeError`; an unknown node name raises `ValueError`.
-A document containing a configured type raises `InvalidNodeError` with `.code == "disallowed_node_type"`, `.field == "type"`, and `.path` locating the node.
+A configured type in the input tree raises `InvalidNodeError` with `.code == "disallowed_node_type"`, `.field == "type"`, and `.path` locating the node.
+Normalization can add required fillers after the check, so those fillers are outside the policy.
 The option is keyword-only.
 
 This differs from `html=False`: `html=False` preserves raw markup as escaped literal text on Markdown input, while rejecting `htmlBlock`/`htmlInline` refuses markup that parsed as a raw-HTML node.
@@ -280,15 +371,21 @@ tm.from_dict(ast, strict="content")             # InvalidNodeError: attr 'colspa
                                                 # expressed in markdown: GFM tables have no cell spanning
 ```
 
-`strict` names what the conversion may not lose, from the walk that is already happening, so a consumer does not have to re-traverse the tree in Python to find out whether the document survives intact.
+`strict` names what the conversion must carry.
 It is keyword-only and a `from_dict` option only.
 `from_markdown` validates declared tags, attrs and content as it reads them; that validation is always enabled.
+The strict dict checks for emphasis and pipe cells are described under [Defined normalizations](#what-strict-refuses).
 
-| `strict` | Keeps |
+| `strict` | Checks |
 | --- | --- |
-| `"off"` (default) | nothing is checked |
-| `"content"` | content and structure, including closed node fields and content models. Presentation an editor stamped on is type-checked and left out of the Markdown |
-| `"exact"` | every attr the JSON carries, except declared defaults, which mean unset |
+| `"off"` (default) | no strict checks or round-trip guarantees |
+| `"content"` | content and structure, including closed node fields and content models. Known presentation attrs are type-checked and stored, then omitted from Markdown |
+| `"exact"` | the content checks, plus refusal of supplied attrs with no Markdown form. Declared defaults mean unset |
+
+Normalization still adjusts attrs at every level, including `"exact"`.
+For example, with `language: "python"` and `info: "ruby numbered"`, the stored `info` becomes `"python"`.
+In a schema without table tags, a body cell's `align: "right"` becomes `"left"` when its header is left aligned.
+A single-item, single-block list with `tight: false` becomes `tight: true`.
 
 Both enabled levels also enforce the schema's mark exclusions and refuse duplicate marks with equal type and attrs.
 The standard marks represented by marktip are self-exclusive, so a node cannot carry the same mark type twice — including two `link` marks with different destinations.
@@ -338,7 +435,9 @@ The document keeps the attr, so `to_dict()` and `dump()` still carry it, and onl
 Dropping that `target` costs the *author* nothing — the editor stamped it on and nobody wrote it.
 Dropping a `colspan` moves every cell after it under a different header, so `"content"` refuses that one too.
 Nothing in the JSON tells the two apart: ProseMirror serializes schema defaults onto every node, so a chosen `target` and a stamped one arrive identical.
-That is why the caller picks, rather than the library guessing — store markdown as the record and `"content"` is the promise you want; keep the JSON and it is `"exact"`.
+Choose `"content"` to accept those presentation attrs in stored documents and omit them from Markdown.
+Choose `"exact"` to require a Markdown form for them.
+Both modes apply the same [attr normalizations](#what-the-inputs-normalize).
 
 | Node | Accepted attrs | Dropped, no markdown form |
 | --- | --- | --- |
@@ -387,10 +486,9 @@ Rejecting an empty destination is the URI policy's job (`link_relative="reject"`
 `colspan`/`rowspan` are *known* attrs whose only accepted values are the no-ops Tiptap's table extension puts on every cell.
 Refusing the names outright would leave strict unusable for the documents it exists to check.
 
-In the Markdown form two attrs are accepted and then ignored at every level.
-The serializer derives a table's column count from its rows, so `colCount` is never read, and it takes cell alignment from the header row only, so `align` on a body row is never read either.
-The table tag form carries both attrs.
-Neither is a loss — the structure they describe is what survives — and `from_markdown` emits both, so refusing them would break re-parsing stored canonical Markdown on the read path, where a write-time refusal is much harder to notice.
+The table's `colCount` is set to the widest row's cell count in either form.
+In a schema without table tags, a body cell takes its column's header alignment.
+With table tags, a body alignment that differs from the header selects tag output and is carried there.
 
 ## Extending the schema
 
@@ -438,15 +536,16 @@ Marks open at a container's opening tag belong to the container node; its conten
 For example, `<u>a <ruby>x</ruby> b</u>` gives underline to `a `, the `ruby` node and ` b`, while `x` has no marks.
 Marks opened inside the container apply only to its content.
 A dict may give a container and its content marks of the same type independently.
-Equal delimiter marks (`bold`, `italic`, `strike` and `link`) on a container and its content collapse to the container's mark after writing and reading Markdown.
+Normalization removes equal delimiter marks (`bold`, `italic`, `strike` and `link`) from a container's content when the container already carries them.
 The Markdown link form cannot represent a different link nested inside a container's link.
 Declared mark tags and Markdown delimiter marks must open and close on the same side of each container boundary; crossing it raises `invalid_tag`.
 The writer groups a marked container with adjacent nodes carrying the same marks and writes its content separately.
 Mark order, delimiter placement and emphasis whitespace follow the inline atom rules.
 A `code` mark on a declared inline atom or inline container is `invalid_mark_set` under strict validation, since the node cannot be written inside a code span.
 With `strict="off"`, the node is written outside the code span and that mark is omitted.
-Inline content in a Markdown-form heading or a Markdown table cell keeps that context's single-line rules.
-A heading written in tag form uses ordinary textblock rules and preserves hard breaks and literal newlines outside Markdown table cells.
+Markdown-form headings use one line.
+A heading with a hard break or newline uses its tag form when the schema provides it.
+A soft newline in a textblock directly inside a table cell becomes a space in either table form.
 
 > **Changed in 0.8.3** — an inline container carries its own marks, as an inline atom does.
 > A mark around a container used to be moved onto the text inside it, so `to_markdown(canonical=True)` and an editor round trip wrote it inside the container tag.
@@ -520,11 +619,12 @@ An expression cannot mix inline and block members or give an inline node block c
 Use `text*` or `text+` for text runs: expressions that count adjacent `text` or `htmlInline` nodes are refused because Markdown merges those nodes.
 
 The schema compiles expressions once when it is built.
-Strict dict conversion checks the children without filling anything.
+Strict dict conversion checks the submitted children first.
 Markdown input can create missing required children when a type has no required attr and its own minimal content can be created.
+After empty blocks are normalized, dict input uses the same fill rules for required children.
 Only `paragraph` can be created among core types; `text` cannot be created.
 Where several types fit, the first type named by the expression wins, and a fill that would create its own ancestor is refused at schema construction.
-Fill preserves the content grammar, not empty paragraphs that Markdown omitted.
+Whether an empty paragraph survives also depends on the schema's paragraph tag and its position in the tree.
 
 An implicit wrapper is a block node declared with `implicit=True` and `group=""`.
 It writes only its children; the reader wraps a run the parent does not accept directly.
@@ -538,7 +638,9 @@ The `DETAILS` preset uses this for Tiptap's `detailsContent` node.
 
 A block atom can declare `fence="math", body="latex"` with a declared `str` attr named `latex`.
 A code block whose effective info (`language`, otherwise `info`) has the declared word as its first word reads as the declared type.
-The reader uses only the first word: a suffix such as `display` in `math display` is not part of the declared node and is not written back.
+The reader uses only the first word for a declared carrier.
+For example, the suffix in `math display` is omitted from the declared node and its canonical spelling.
+A leading tab prevents the info from selecting a declared carrier.
 The code body loses its final newline; writing adds one newline.
 The fence form is used only when the body attr is set, no other attr is set, the body has no carriage return, and no line's leading whitespace contains a tab.
 Otherwise the node uses its tag form, so an unset body and an empty body remain distinct.
@@ -571,15 +673,17 @@ Without a redeclaration, a dropped attr stays dropped in either form and keeps i
 | `listItem`, `taskItem` | `<li>`, `<li checked="...">` |
 | `table`, `tableRow`, `tableHeader`, `tableCell` | `<table>`, `<tr>`, `<th>`, `<td>` |
 
-For paragraph, heading, image, link and blockquote, a set overlay attr is the only reason to write the tag form.
-Without a set overlay, empty paragraphs and breaks inside headings behave exactly as they do without a schema.
-A set overlay selects a heading tag form that preserves hard breaks and newlines, subject to Markdown table cells' single-line rules.
+A set overlay attr selects the tag form.
+A kept empty paragraph also uses its available tag, except for a sole filler paragraph in a list item, task item, table cell or blockquote.
+A heading with a hard break or newline, including one in an inline HTML payload, uses its available tag too.
+A heading directly in a pipe cell uses its tag whenever the schema provides it.
 Declaring attrs on any list or table type activates its whole family.
 A list uses tags when it or any item needs them; items follow the list's form.
-A table uses tags when header cells are not exactly its first row, a cell has more than one child or a child its one-line Markdown form cannot carry, or an overlay on the table, a row or a cell is set.
+A table uses tags when header cells are not exactly its first row, when rows have different cell counts, or when a body cell's alignment differs from its header's.
+A cell with several children, a child the pipe form cannot carry, or a set overlay on the table, a row or a cell also selects table tags.
 Rows and cells follow the table's form.
-A cell with no children, one paragraph, one block atom or one textblock tag form remains Markdown-shaped.
-Empty lists and tables gain no special form rule.
+A pipe cell can carry a paragraph, a lone block image, a block atom or a supported textblock tag.
+An empty list or rowless table is removed in either form.
 
 An active table family can carry multiple blocks and block containers in a cell; the Markdown form cannot.
 Declaring `colspan` and `rowspan` carries merged cells, and `colwidth` can use `tm.IntList`.
@@ -656,7 +760,7 @@ assert extended != schema
 `extend` returns a new schema and refuses duplicate declarations, including the same attr declared twice for one core type.
 Equality and hashing compare declarations in order, not just the languages they accept: an omitted tag and an explicit tag equal to the type name differ.
 Compilation happens once per schema object, so reuse a schema when calls share the same editor configuration.
-On an Intel Core Ultra 9 185H Linux machine with Python 3.14.6 and a GCC 16.2.1 Release build,
+In an earlier measurement on an Intel Core Ultra 9 185H Linux machine with Python 3.14.6 and a GCC 16.2.1 Release build,
 `scripts/benchmark.py` measured about 61 microseconds to build a schema with five marks, six nodes and attrs for six core types.
 That is the best of seven batches of 1,000 builds, with declarations prepared outside the timed work.
 
@@ -736,7 +840,7 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `invalid_content` | `InvalidNodeError` | a content-model violation on strict dict input or a declared tag, or an invalid strict text payload |
 | `unknown_attr` | `InvalidNodeError` | an unknown attr on strict dict input or a declared tag |
 | `invalid_attr_value` | `InvalidNodeError` | a wrong type, out-of-range value or repeated tag attr |
-| `unrepresentable` | `InvalidNodeError` | `strict`: the value is well-formed, but markdown cannot carry it |
+| `unrepresentable` | `InvalidNodeError` | well-formed input would lose content or attrs in the selected Markdown form, including emphasis the writer's spelling cannot carry |
 | `missing_attr` | `InvalidNodeError` | a required attr is unset on strict dict input or a declared tag |
 | `invalid_mark_set` | `InvalidNodeError` | conflicting or duplicate marks on strict dict input or in declared tags |
 | `invalid_tag` | `InvalidNodeError` | a declared tag is unmatched, self-closing where a container is required, or in the wrong position; a declared or delimiter mark crosses an inline container boundary |
@@ -765,7 +869,7 @@ Bad option values behave similarly: a non-iterable `link_schemes` or `reject_nod
 
 The selected schema is closed: every node/mark type must have a Markdown or tag mapping.
 `from_dict` rejects unknown types instead of silently dropping content.
-It guarantees, for the whole tree:
+The following checks apply to the submitted tree.
 
 - **Closed schema.**
   Node types are `doc`, `paragraph`, `text`, `hardBreak`, `heading`, `blockquote`, `codeBlock`, `horizontalRule`, `bulletList`, `orderedList`, `listItem`, `taskList`, `taskItem`, `table`, `tableRow`, `tableHeader`, `tableCell`, `image`, `htmlBlock`, `htmlInline`.
@@ -779,10 +883,10 @@ It guarantees, for the whole tree:
   The same limit caps simultaneously open declared mark tags.
 - **No ASCII control character** in a link `href` or image `src`, entity references included (`&Tab;`, `&#09;`).
 - **The URI policy**, when `link_schemes`/`image_schemes`/`link_relative`/`image_relative` ask for it — see [Restricting link and image URIs](#restricting-link-and-image-uris).
-- **The node-type policy**, when `reject_node_types` names a type — see [Rejecting node types](#rejecting-node-types).
+- **The node-type policy**, when `reject_node_types` names a type.
+  Normalization adds required fillers after this check. [Rejecting node types](#rejecting-node-types)
 
-A document that survives `from_dict` always serializes; callers do not need to re-check any of the above.
-`from_markdown` enforces the same URI and rejected-node rules on what it parses.
+`from_markdown` applies the same URI and node-type policies to the parsed tree before normalization.
 
 It deliberately does **not** validate, unless `strict` asks it to:
 
@@ -796,7 +900,8 @@ It deliberately does **not** validate, unless `strict` asks it to:
   Declared defaults are also removed.
   An attr with no markdown form is dropped at serialization — see [Refusing lossy conversions](#refusing-lossy-conversions).
 - **Per-node required attrs.**
-  A `heading` without `level` or a `codeBlock` without `language` is accepted; the serializer substitutes a default rather than failing.
+  A `heading` without `level` gets the default level during normalization.
+  A `codeBlock` can omit `language` and `info`.
   For core types `strict` requires a link's `href` and an image's `src`, because an empty destination would read back as a real link.
   Declarations can require additional attrs on declared types.
   `{"src": None}` and no `src` key at all are both missing values for validation and the URI policy.
@@ -834,52 +939,132 @@ except tm.InvalidNodeError as e:
 
 ## Defined normalizations
 
-Markdown cannot represent every Tiptap document exactly.
-marktip applies the following deterministic normalizations during parsing and serialization.
-These describe the node tree and canonical or regenerated Markdown; remembered blocks bypass the writer's normalizations.
-The tag-boundary whitespace case reaches its stable form after the first write/read cycle.
+marktip preserves non-whitespace characters in order, including punctuation.
+Code, images, math and raw HTML count as units of content.
+Normalization preserves marks on letters and digits, including link destinations and declared mark attrs.
+It preserves the textblock kind and heading level, the item, quote or cell containing the content, and the list kind and checked state.
+Whitespace and punctuation here follow md4c's delimiter classification.
 
-- **NUL in content strings** — U+0000 in text or a non-URI string attr (`alt`, `title`, `language`, `html`, etc.) becomes U+FFFD. Markdown input is replaced once before tokenization, including inline/fenced/indented code and raw HTML, so reparsing cannot retain a NUL or accumulate replacement characters. On dict input, core and declared URI attrs are excluded and retain their unconditional `invalid_uri_char` rejection.
-- **Hard breaks in Markdown-form headings** — ATX headings are single-line, so a `hardBreak` (or a literal newline carried over from setext input) serializes as a single space: `heading("a", hardBreak, "b")` → `# a b`.
-  A heading with a set overlay uses its tag form and preserves both outside Markdown table cells.
-- **Multi-block table cells** — without an active table family, blocks inside a cell are joined with `<br>` and flattened to one line; two paragraphs reparse as one paragraph containing a `hardBreak`.
-  An active table family writes these cells in tag form instead.
-- **Headerless tables** — without an active table family, the first row is emitted as a GFM header; a leading `tableCell` row reparses as `tableHeader`.
-  The active family preserves header placement through the tag form.
-- **Heading levels** — clamped to 1–6 at serialization (`0` → `#`, `7` → `######`).
-- **Ordered list start** — clamped to CommonMark's 0–999999999 (`-5` → `0.`), and the running number stops at that ceiling rather than emitting a 10-digit marker. Only the first number is honoured on reparse, so a repeated ceiling changes nothing.
-- **Code fence info strings** — the parser records the first info word as `language`, which takes precedence over the full `info` on writing, so a parsed fence's suffix is dropped.
-  Declared fence carriers also keep only their declared word.
-  A `language` is truncated at the first newline; one containing a backtick switches the fence to `~~~`.
-- **Nested same-type marks** — Markdown spans that map to the same self-exclusive mark are collapsed (`*outer _inner_ outer*` becomes one continuous `italic` mark) rather than producing an invalid ProseMirror mark set.
-  Equal delimiter marks on a container and its content collapse to the container's mark after a Markdown round trip.
-- **Emphasis boundary whitespace** — whitespace touching an emphasis delimiter has no valid markdown form and is expelled outside the marks (`bold("굵게 ")` → `**굵게** `), cf. prosemirror-markdown's `expelEnclosingWhitespace`.
-- **Adjacent same-family lists** — the canonical writer alternates markers (`-`/`*`, `1.`/`1)`) so they stay separate lists on reparse instead of merging (which would renumber ordered items or spread task checkboxes).
-  Source-preserving output reads the actual markers of its neighbours and can use `+` for a new bullet list between two different original markers.
-- **Declared defaults** — `None` and a value equal to a declared default are omitted at every strict level and are never materialized on read.
-- **Stored mark order** — core marks keep their given order, followed by declared marks in declaration order.
-  A link that takes tag form follows the other core marks and precedes declared marks; a Markdown-form link keeps its given position.
-- **Nested declared marks** — a self-exclusive inner mark replaces the outer one temporarily and the outer mark resumes after the close tag.
-  Without an intervening inline container boundary, the inner mark keeps the outer one's attrs that are declared with `inherit=True`.
-- **Adjacent text** — after tag removal, adjacent text or raw-inline-HTML nodes with equal marks are merged.
-- **Tag-boundary emphasis whitespace** — `**a <u>b</u>**` writes as `**a** <u>**b**</u>`; the intervening space loses bold.
-  Italic and strike behave the same way, and the result is stable from the next cycle onward.
-- **Empty paragraphs and fill** — an empty paragraph is written as nothing unless a set overlay attr selects its tag form.
-  Missing required children can be filled on Markdown input, but extra empty paragraphs are not recovered.
-- **Task items** — continuation lines use the list marker's indent, without the checkbox width.
-  A non-paragraph first block starts after a checkbox-only line; in a loose list that line reads as an empty leading paragraph, while in a tight list it does not.
-- **List-item block separation** — a heading, code fence or block-tag line after a table and a non-1 ordered sublist after a paragraph or Markdown-form block image need a blank line to remain separate blocks.
-  These blank lines make a tight list loose; horizontal rules use underscores inside list items so they stay rules without loosening the list.
-- **Task-list tags** — an LI with `checked` is a task item, even when the value is false.
-  A UL containing any task item becomes a task list and its unchecked items become unchecked task items; an empty UL becomes a bullet list.
-  Each LI's attrs are decoded against its own checked-selected type before that list normalization.
-- **Tag-form images and links** — a missing image `alt` becomes `""`, and an empty image or link `title` is omitted.
-- **Undeclared unit spans** — `colspan: 1` and `rowspan: 1` stay stored on dict input but are not emitted on cell tags unless redeclared.
-- **Math spans** — line breaks inside dollar spans become spaces, and a display span read as a block node has leading and trailing whitespace removed.
-- **Block-image paragraphs** — under `block_image=True`, an image splits its paragraph into block siblings.
-  Whitespace and hard breaks touching the cut are removed, and empty fragments do not become paragraphs.
-  A fragment whose line starts an HTML block, such as `<div class="caption">Caption</div>`, re-reads as `htmlBlock` even when it contains text; that form is stable after the first cycle.
-  A line such as `<span></span>` does not start an HTML block and remains a paragraph.
+Whitespace, emphasis on whitespace and punctuation, and the header status of a pipe table's first row are normalized as described below.
+Node boundaries, mark order, attr defaults, fillers and the final fence newline can also change.
+Attrs such as an undeclared link `target` or image `width` can stay in the tree while being omitted from Markdown under strict content.
+Use `strict="exact"` to require those attrs in the output.
+
+### What the inputs normalize
+
+These rules run after reading and policy checks, before matching a dict input against its base.
+The writer uses the resulting tree when it needs to regenerate a block.
+
+- **Characters and line edges** — CR and CRLF in text become LF.
+  Paragraphs and headings trim spaces, tabs and newlines at line edges, including after a hard break, regardless of their form or link and tag marks.
+  Repeated soft newlines collapse, and a soft newline after a hard break is removed.
+  A soft newline before a hard break is kept when the textblock can carry both.
+  Declared textblocks preserve whitespace at their outer tag boundaries.
+  Code-marked text keeps its spaces and changes internal newlines to spaces.
+- **Hard breaks** — leading hard breaks stay, and trailing runs of hard breaks in paragraphs are removed in every form, including in cells.
+  A hard break loses its code mark and keeps the break itself.
+  In a heading, hard breaks and newlines use the heading tag if the schema provides one.
+  Without that tag, they become spaces.
+  Soft newlines in textblocks directly inside table cells become spaces in either table form.
+- **Mark order** — continuing marks keep their outside position, with continuation judged by mark type.
+  Newly opened core marks are ordered link, strike, italic, bold and then code.
+  Declared marks follow declaration order, and links written as tags follow the other core marks.
+- **Runs and inline containers** — adjacent text or raw-inline-HTML nodes with equal marks join.
+  Equal delimiter marks on an inline container and its content stay on the container alone.
+  A nested self-exclusive mark replaces the outer one until the inner mark ends.
+  Within the same inline container, a declared inner mark keeps attrs marked `inherit=True`.
+- **Emphasis edges** — bold, italic and strike are removed from edge whitespace and punctuation where their delimiters cannot open or close under md4c's rules.
+  A hard break at an emphasis edge loses the emphasis, including where md4c could open it.
+  Link and tag marks remain.
+  For example, the trees `a**"b"**c` and `**Note:**text`, shown in Markdown notation, write as `a"**b**"c` and `**Note**:text`.
+  Edge cleanup and run joining repeat until the tree stops changing.
+- **Empty blocks and fill** — empty list items, task items, table cells and blockquotes receive one empty paragraph.
+  A sole empty document paragraph is removed.
+  Other empty paragraphs are removed unless the schema provides a paragraph tag or a required child has to be filled.
+  Lists with no items and tables with no rows are removed in every form.
+  Declared nodes fill required children after these adjustments.
+- **Lists** — a missing `tight` becomes `true`.
+  A loose list with a single item that writes one block becomes tight, and a tight list whose item needs a blank line becomes loose.
+  These rules apply in Markdown and tag forms.
+  An LI with `checked` is a task item, including when the value is false.
+  A UL containing any task item becomes a task list and its unchecked items become unchecked task items.
+  Each LI's attrs are decoded against the type selected by its own `checked`.
+- **Tables** — without table tags, the first row becomes the header, subsequent rows become body rows, and body cells take the header alignment.
+  Multiple paragraphs without tag attrs in a cell join with hard breaks.
+  Short rows are padded with empty cells.
+  With table tags, differing row lengths and body alignments are carried in tags.
+  In either form `colCount` is the widest row's cell count, which can be smaller than the visual width with spanning cells.
+- **Core attrs** — fill the defaults for heading `level`, ordered list `start`, task `checked` and image `alt`.
+  Heading levels clamp to 1–6 when input validation permits an out-of-range value.
+  Images discard children.
+  Empty link and image titles and empty `language` and `info` are omitted.
+  For a code block, the first fence info word supplies `language`.
+  If a supplied language disagrees with that word, it replaces the info string.
+  Fence info and language are truncated at the first newline when accepted from permissive dict input.
+  md4c trims spaces before the language, so a leading tab can leave `info` set with no language.
+  The same word rule applies when choosing a declared fence carrier.
+- **Other text and attrs** — NUL in text and non-URI string attrs becomes U+FFFD.
+  On Markdown input this happens before tokenization, including for code and raw HTML.
+  URI attrs containing a NUL raise `invalid_uri_char`.
+  Declared defaults and `None` are omitted, except where an attr such as cell `align` treats `None` as a value.
+  Line breaks inside math spans become spaces, and display math read as a block has its outer whitespace trimmed.
+- **Block-image paragraphs** — with `block_image=True`, a block image splits its paragraph.
+  Whitespace and hard breaks at the cuts are removed, and empty fragments are dropped.
+  A fragment beginning with a line such as `<div class="caption">Caption</div>` can read back as an HTML block.
+
+### What the writer carries
+
+- Hard breaks use a backslash followed by a newline, or `<br>` in a pipe cell.
+  Code spans containing only spaces are written without padding.
+- A paragraph's second line is escaped if its first nonblank character is `|` or `:`.
+  Line-start escapes leave raw inline HTML payloads alone.
+  A supplied payload whose later line starts a Markdown block can therefore read back as separate blocks.
+- Text that looks like a URL, email address or `www.` link is escaped where md4c would start an enabled autolink.
+  Text under a Markdown link and image alt text need no autolink escape.
+  A backtick in a link destination is escaped, and an empty destination with a title is written as `<>`.
+- Code fences write the full info string.
+  A backtick in the info string selects a tilde fence.
+  The writer always adds a newline after the body, even for an empty fence.
+  The reader removes that one newline from the stored code text.
+- Loose lists use a blank line between blocks inside each item.
+  An ATX heading, a fenced `codeBlock` or a thematic break can be followed by another block without a blank line.
+  A thematic break inside an item uses underscores.
+  Other combinations still need separation, including a heading, code fence or block tag after a pipe table and a non-1 ordered sublist after a paragraph or Markdown-form image.
+  The writer can add a blank line where md4c would keep the blocks separate, for example between a declared fence carrier and a textblock.
+  A task item with a non-paragraph first block starts with the checkbox on its own line, which reads without an extra leading paragraph.
+  Continuations use the list marker's indent without the checkbox width.
+- Adjacent lists alternate markers to stay separate.
+  Ordered list markers stay within CommonMark's 0–999999999 range, and the running number stops at that ceiling.
+  Only the first number of a list is read back.
+- A kept empty paragraph uses `<p></p>` when the schema provides that tag, including inside a declared container.
+  A sole empty filler in a list item, task item, table cell or blockquote writes nothing.
+  A heading directly in a pipe cell uses its tag when the schema provides it.
+  Undeclared unit spans remain in the tree and are omitted from table tags and pipe tables.
+
+### What strict refuses
+
+Under `strict="content"` and `strict="exact"`, an emphasis or pipe-cell refusal raises `InvalidNodeError` with code `unrepresentable` and the input path.
+The paragraph-join check runs while reading the dict.
+The remaining pipe-cell checks and the emphasis check run after inheritance and skip blocks that inherited remembered source.
+`strict="off"` is outside the round-trip guarantees.
+
+- **Emphasis** — strict dict input reads back each textblock carrying bold, italic or strike in a block without remembered spelling.
+  The writer uses one spelling, with `*`, `**` and `~~` nested in stored mark order.
+  If the inline content reads back differently, strict refuses it.
+  Examples include some overlapping marks on touching words and emphasis that starts or ends at a link's edge against a letter.
+  Some such trees have another spelling marktip does not search for.
+  `from_markdown` skips this check.
+- **Pipe cells** — in a schema without table tags, strict refuses blocks that a one-line cell would flatten, such as a heading without a heading tag.
+  A lone block image, declared block atom or supported textblock tag can be carried.
+  A declared or tag-form block container is refused.
+  A declared or tag-form non-paragraph block that can be carried must be the cell's only child.
+- **Paragraph joins in pipe cells** — strict checks the submitted attrs before inheritance.
+  If the cell contains paragraphs that would be joined, a paragraph with a tag attr is refused at its input path.
+
+On `make_fixture(1200, 4)` from `scripts/benchmark.py`, emphasis read-back averaged about 80,000 instructions per emphasized textblock.
+On the same fixture, `from_dict(..., strict="content")` without a base went from 833 million instructions per call in 0.8.3 to 1,238 million in 0.9.0.
+The counts are user-space instructions measured on an Intel Core Ultra 9 185H running Linux x86_64 with CPython 3.14.10 and a GCC 16.2.1 Release build.
+Each per-call figure is the best of five calls.
 
 ## JavaScript package
 
@@ -962,6 +1147,7 @@ schema.free();
 `toDict()` and `dump()` return ordinary values for `JSON.stringify` or editor input.
 `fromDict()` and `load()` accept ordinary JSON-compatible values.
 A document keeps its schema alive even after the schema's handle is freed.
+Use `edited.equals(base)` to compare the trees before replacing an editor's contents.
 
 ### API correspondence
 
@@ -973,9 +1159,10 @@ Unknown option names raise `TypeError`, including snake_case names passed to cam
 | --- | --- |
 | `from_markdown(md, cjk_friendly=, html=, partial=, keep_source=, schema=)` | `fromMarkdown(md, { cjkFriendly, html, partial, keepSource, schema })` |
 | URI and node options: `link_schemes`, `image_schemes`, `link_relative`, `image_relative`, `reject_node_types` | `{ linkSchemes, imageSchemes, linkRelative, imageRelative, rejectNodeTypes }` on `fromMarkdown` or `fromDict` |
-| `from_dict(ast, ..., strict=, schema=, base=)` | `fromDict(ast, { ..., strict, schema, base })` |
+| `from_dict(ast, ..., cjk_friendly=, strict=, schema=, base=)` | `fromDict(ast, { ..., cjkFriendly, strict, schema, base })` |
 | `load(data, schema=)` | `load(data, { schema })` |
 | `doc.to_dict()`, `doc.dump()`, `doc.to_markdown(canonical=)` | `doc.toDict()`, `doc.dump()`, `doc.toMarkdown({ canonical })` |
+| `a == b` for documents | `a.equals(b)` |
 | `Schema(marks=, nodes=, core_attrs=, block_image=)` | `new Schema({ marks, nodes, coreAttrs, blockImage })` |
 | `schema.marks`, `.nodes`, `.core_attrs`, `.block_image` | `schema.marks`, `.nodes`, `.coreAttrs`, `.blockImage` |
 | `schema.to_dict()`, `Schema.from_dict(data)`, `schema.extend(...)`, `a == b` | `schema.toDict()`, `Schema.fromDict(data)`, `schema.extend({ ... })`, `a.equals(b)` |

@@ -179,6 +179,19 @@ def test_pipe_cell_refuses_paragraph_joins_that_would_change_tag_attrs(level, fi
 
 
 @pytest.mark.parametrize("level", STRICT_LEVELS)
+@pytest.mark.parametrize("separator", ("bulletList", "table"))
+def test_pipe_cell_refuses_tag_attrs_on_paragraphs_joined_across_a_removed_block(level, separator):
+    second = node("paragraph", text("b"), textAlign="center")
+    cell = node("tableHeader", p(text("a")), node(separator), second)
+    ast = doc(node("table", node("tableRow", cell)))
+    schema = tm.Schema(core_attrs={"paragraph": {"textAlign": tm.Attr(str)}})
+
+    with pytest.raises(tm.InvalidNodeError) as excinfo:
+        tm.from_dict(ast, schema=schema, strict=level)
+    assert_error(excinfo, "unrepresentable", "content", "content[0].content[0].content[0].content[2]")
+
+
+@pytest.mark.parametrize("level", STRICT_LEVELS)
 def test_pipe_cell_joins_paragraphs_with_unset_tag_attrs(level):
     first = node("paragraph", text("first"), textAlign=None)
     second = node("paragraph", text("second"), textAlign="center")

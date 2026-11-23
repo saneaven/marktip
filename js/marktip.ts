@@ -47,6 +47,7 @@ export interface FromMarkdownOptions extends UriOptions {
 }
 
 export interface FromDictOptions extends UriOptions {
+    cjkFriendly?: boolean;
     strict?: "off" | "content" | "exact";
     base?: Document | null;
 }
@@ -364,6 +365,15 @@ export class Document {
         const module = runtime();
         module._mt_to_markdown(documentHandle(this), canonical ? 1 : 0);
         return result(module);
+    }
+
+    equals(other: unknown): boolean {
+        const handle = documentHandle(this);
+        if (!documents.has(other as Document)) return false;
+        const module = runtime();
+        const equal = module._mt_equals(handle, documentHandle(other));
+        checkError(module);
+        return equal !== 0;
     }
 
     free(): void {

@@ -36,6 +36,39 @@ test("version and repeated initialization", async () => {
     assert.equal(tm.version, fixtures.version);
 });
 
+test("document equality compares trees and schemas independently of remembered spelling", () => {
+    const first = tm.fromMarkdown("*x*");
+    const second = tm.fromMarkdown("_x_");
+    const differentSchema = tm.fromMarkdown("*x*", { schema: schemas.get("declared") });
+    try {
+        assert.notEqual(first.toMarkdown(), second.toMarkdown());
+        assert.equal(first.equals(second), true);
+        assert.deepEqual(first.toDict(), differentSchema.toDict());
+        assert.equal(first.equals(differentSchema), false);
+        for (const other of [null, undefined, "*x*", first.toDict(), Object.create(tm.Document.prototype)]) {
+            assert.equal(first.equals(other), false);
+        }
+    } finally {
+        differentSchema.free();
+        second.free();
+        first.free();
+    }
+});
+
+test("document equality ignores mark attr key order", () => {
+    const first = tm.fromMarkdown('[x](/docs "Docs")');
+    const tree = first.toDict();
+    tree.content[0].content[0].marks[0].attrs = { title: "Docs", href: "/docs" };
+    const second = tm.fromDict(tree, { strict: "content" });
+    try {
+        assert.notEqual(JSON.stringify(first.toDict()), JSON.stringify(second.toDict()));
+        assert.equal(first.equals(second), true);
+    } finally {
+        second.free();
+        first.free();
+    }
+});
+
 test("plain object StrMap declarations roundtrip tag attrs as a nested object", () => {
     const schema = new tm.Schema({ nodes: [{
         name: "customDiv", kind: "block", content: "block+", tag: "custom-div",
@@ -109,12 +142,31 @@ for (const fixture of fixtures.documents) {
             checkSnapshot(document, fixture.expected);
             loaded = tm.load(document.dump(), { schema: options.schema });
             assert.deepEqual(loaded.dump(), fixture.loadedDump);
-            edited = tm.fromDict(fixture.editorInput, { schema: options.schema, base: loaded });
+            assert.equal(loaded.equals(document), fixture.loadedEquals);
+            edited = tm.fromDict(fixture.editorInput, {
+                schema: options.schema, base: loaded, cjkFriendly: options.cjkFriendly,
+            });
             checkSnapshot(edited, fixture.editorExpected);
+            assert.equal(edited.equals(document), fixture.editorEquals);
         } finally {
             edited?.free();
             loaded?.free();
             document.free();
+        }
+    });
+}
+
+for (const fixture of fixtures.editorDocuments) {
+    test(`editor parity: ${fixture.id}`, () => {
+        const options = optionsFor(fixture);
+        const base = fixture.baseDump === null ? undefined : tm.load(fixture.baseDump, { schema: options.schema });
+        let document;
+        try {
+            document = tm.fromDict(fixture.value, { ...options, base });
+            checkSnapshot(document, fixture.expected);
+        } finally {
+            document?.free();
+            base?.free();
         }
     });
 }
@@ -167,6 +219,7 @@ test("documents reject methods after free and tolerate a second free", () => {
     assert.throws(() => document.toDict(), /freed/i);
     assert.throws(() => document.dump(), /freed/i);
     assert.throws(() => document.toMarkdown(), /freed/i);
+    assert.throws(() => document.equals(document), /freed/i);
     assert.throws(() => tm.fromDict({ type: "doc" }, { base: document }), /freed/i);
 });
 
@@ -213,6 +266,7 @@ test("caller mistakes use TypeError and RangeError", () => {
     assert.throws(() => tm.fromMarkdown("text", { linkSchemes: "https" }), TypeError);
     assert.throws(() => tm.fromDict({ type: "doc" }, { strict: 1 }), TypeError);
     assert.throws(() => tm.fromDict({ type: "doc" }, { strict: "never" }), RangeError);
+    assert.throws(() => tm.fromDict({ type: "doc" }, { cjkFriendly: 1 }), TypeError);
 });
 
 test("schema declarations must be objects", () => {

@@ -3,6 +3,8 @@
 #include <cstring>
 #include <string_view>
 
+#include "ast.h"
+
 namespace marktip {
 
 enum class NodeKind {
@@ -49,6 +51,14 @@ inline NodeKind node_kind(std::string_view type) {
         break;
     }
     return NodeKind::Other;
+}
+
+inline bool is_empty_list_or_table(const Node& node) {
+    if (!node.content.empty()) {
+        return false;
+    }
+    NodeKind kind = node_kind(node.type);
+    return kind == NodeKind::List || kind == NodeKind::OrderedList || kind == NodeKind::Table;
 }
 
 }  // namespace marktip

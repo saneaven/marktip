@@ -530,17 +530,22 @@ void check_representability(const Document& document, const std::vector<std::siz
 
 void check_cell_paragraph_join(const Document& document, const Node& cell, const PathStack& path) {
     const NodeSpec& paragraph = *document.schema().node("paragraph");
-    for (std::size_t i = 0; i < cell.content.size(); ++i) {
+    const std::size_t count = cell.content.size();
+    std::size_t previous = count;
+    bool previous_tagged = false;
+    for (std::size_t i = 0; i < count; ++i) {
         const Node& child = document.node(cell.content[i]);
-        if (child.attrs.empty() || child.type != "paragraph" || !has_tag_attr(child.attrs, paragraph.attrs)) {
-            continue;
-        }
-        bool joins_previous = i != 0 && document.node(cell.content[i - 1]).type == "paragraph";
-        bool joins_next = i + 1 < cell.content.size() && document.node(cell.content[i + 1]).type == "paragraph";
-        if (joins_previous || joins_next) {
-            PathStack child_path = path;
-            child_path.push_back({"content", i});
-            throw_table_siblings(paragraph, child_path);
+        if (child.type == "paragraph") {
+            bool tagged = !child.attrs.empty() && has_tag_attr(child.attrs, paragraph.attrs);
+            if (previous != count && (previous_tagged || tagged)) {
+                PathStack child_path = path;
+                child_path.push_back({"content", previous_tagged ? previous : i});
+                throw_table_siblings(paragraph, child_path);
+            }
+            previous = i;
+            previous_tagged = tagged;
+        } else if (!is_empty_list_or_table(child)) {
+            previous = count;
         }
     }
 }

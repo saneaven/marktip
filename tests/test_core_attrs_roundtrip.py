@@ -178,6 +178,17 @@ def test_heading_with_a_set_overlay_flattens_soft_breaks_in_a_cell(html):
     roundtrip(ast, schema, '| <h2 textAlign="center">a b</h2> |\n| --- |', html, "exact")
 
 
+@pytest.mark.parametrize("level", ("content", "exact"))
+@pytest.mark.parametrize("separator", ("bulletList", "table"))
+def test_pipe_cell_joins_paragraphs_across_a_removed_block(level, separator):
+    cell = node("tableHeader", p(text("a")), node(separator), p(text("b")))
+    ast = doc(node("table", node("tableRow", cell)))
+    canonical = "| a<br>b |\n| --- |"
+    parsed = tm.from_dict(ast, strict=level)
+    assert parsed.to_markdown(canonical=True) == canonical
+    assert tm.from_markdown(canonical) == parsed
+
+
 @pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize("marks, opening, closing", [
