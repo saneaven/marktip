@@ -544,6 +544,43 @@ def test_link_order_roundtrips_after_inheriting_a_title_on_one_run():
     assert tm.from_dict(document.to_dict(), strict="content") == document
 
 
+def test_split_emphasis_edge_inherits_the_input_mark_keys():
+    def run(value, link_attrs, bold=False):
+        marks = [{"type": "link", "attrs": {"href": "/x", **link_attrs}}]
+        if bold:
+            marks.append({"type": "bold"})
+        return {"type": "text", "text": value, "marks": marks}
+
+    def tree(*runs):
+        return {"type": "doc", "content": [{"type": "paragraph", "content": list(runs)}]}
+
+    inherited = {"target": "_blank", "rel": "nofollow"}
+    base = tm.from_dict(tree(run("a ", inherited), run("b", inherited, bold=True)), strict="content")
+    supplied = {"target": None}
+    submitted = tree(run("a", supplied), run(" b", supplied, bold=True))
+    document = tm.from_dict(submitted, base=base, strict="content")
+    retained = {"rel": "nofollow"}
+    assert document.to_dict() == tree(run("a ", retained), run("b", retained, bold=True))
+
+
+def test_remembered_spelling_bypasses_emphasis_readback():
+    markdown = "**a**[**b**](u)c"
+    base = tm.from_markdown(markdown)
+    assert tm.from_markdown(base.to_markdown(canonical=True)) != base
+    document = tm.from_dict(base.to_dict(), base=base, strict="content")
+    assert document == base
+    assert document.to_markdown() == markdown
+
+
+@pytest.mark.parametrize("marker", ("- [x]", "7. [ ]"), ids=("bullet", "ordered"))
+def test_emphasis_readback_keeps_task_checkbox_context(marker):
+    markdown = f"{marker} <!-- editor note --> **a*b***"
+    parsed = tm.from_markdown(markdown)
+    document = tm.from_dict(parsed.to_dict(), strict="content")
+    assert document == parsed
+    assert document.to_markdown(canonical=True) == markdown
+
+
 def test_inherited_tag_link_attr_keeps_adjacent_code_runs_together():
     schema = tm.Schema(core_attrs={"link": {"target": tm.Attr(str)}})
     runs = [

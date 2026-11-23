@@ -66,7 +66,7 @@ void check_lifted_child_content(const Document& document, const NodeSpec& parent
 void check_cell_paragraph_join(const Document& document, const Node& cell, const PathStack& path);
 void check_node_marks(const Node& node, const NodeSpec& spec, const PathStack& path);
 void check_node_content(const Document& document, std::size_t index, const NodeSpec& spec, const PathStack& path);
-void check_representability(const Document& document, const std::vector<std::size_t>& input_parents);
+void check_representability(const Document& document, const std::vector<std::size_t>& input_parents, bool cjk_friendly);
 bool excludes(const ExcludeSet& set, std::string_view type);
 void check_mark_set(const std::vector<Mark>& existing, const Mark& mark, const Schema& schema,
                     const PathStack& path);

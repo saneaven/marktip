@@ -88,7 +88,7 @@ def test_generated_block_image_pieces_survive_storage(html):
 def test_inherited_spelling_read_with_nondefault_options_survives_storage():
     markdown = "\n**《제목》**a <u>x</u>\n"
     base = tm.from_markdown(markdown, html=False, cjk_friendly=True)
-    document = tm.from_dict(editor_dict(base.to_dict()), base=base)
+    document = tm.from_dict(editor_dict(base.to_dict()), base=base, cjk_friendly=True)
     _, restored = json_storage_roundtrip(document)
     assert restored.to_markdown() == markdown
 

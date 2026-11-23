@@ -324,9 +324,10 @@ void check_document_policies(const Document& document, const NodeTypePolicy& nod
     enforce_uri_policy(document, uri_policy);
 }
 
-void finalize_document(Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy) {
+void finalize_document(Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy,
+                       bool cjk_friendly, InputAttrKeys* present) {
     check_document_policies(document, node_policy, uri_policy);
-    normalize_document(document);
+    normalize_document(document, cjk_friendly, present);
 }
 
 }  // namespace marktip

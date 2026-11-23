@@ -19,7 +19,7 @@ py::dict dump_py(const Document& document) {
 
 Document from_dict_py(py::dict root, py::object link_schemes, py::object image_schemes, py::object link_relative,
                       py::object image_relative, py::object reject_node_types, py::object strict, py::object schema,
-                      py::object base) {
+                      py::object base, bool cjk_friendly) {
     // Options are validated before the tree is walked.
     // A bad option value is a caller bug and should surface whatever the document contains.
     UriPolicy policy = uri_policy_from_py(std::move(link_schemes), std::move(image_schemes), std::move(link_relative),
@@ -37,7 +37,7 @@ Document from_dict_py(py::dict root, py::object link_schemes, py::object image_s
     DictDocument document = DocumentReader<PythonInput>::from_dict(root, std::move(selected_schema), mode,
                                                                    inheritance_base);
     py::gil_scoped_release release;
-    return std::move(document).finish(node_policy, policy);
+    return std::move(document).finish(node_policy, policy, cjk_friendly);
 }
 
 Document load_py(py::dict data, py::object schema) {

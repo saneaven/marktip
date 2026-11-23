@@ -36,7 +36,7 @@ Document from_markdown_py(py::object markdown, bool cjk_friendly, bool html, py:
         // so anything checked earlier would be thrown away.
         document = parse_to_document(std::move(input), {cjk_friendly, html, partial, keep_source},
                                      std::move(selected_schema));
-        finalize_document(document, node_policy, policy);
+        finalize_document(document, node_policy, policy, cjk_friendly);
     }
     return document;
 }

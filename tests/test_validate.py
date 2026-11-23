@@ -111,10 +111,10 @@ def test_every_known_type_accepted():
             "content": [text("heading"), {"type": "hardBreak"}],
         },
         p(
-            text("plain"),
+            text("plain "),
             text("marked", *all_marks),
             text(
-                "linked",
+                " linked",
             ),
             {
                 "type": "text",
@@ -166,6 +166,19 @@ def test_every_known_type_accepted():
     # Same guard on the strict side: its attr rules are a table parallel to the type
     # list, so a type added without rules fails here rather than at a caller's.
     assert tm.from_dict(ast, strict="exact").to_markdown(canonical=True)
+
+
+@pytest.mark.parametrize("strict", ["content", "exact"])
+def test_unwritable_emphasis_reports_the_input_textblock(strict):
+    schema = tm.Schema(core_attrs={"table": {}})
+    ast = doc(p(), {"type": "blockquote", "content": [
+        p(text("a", "bold"), text("b", "bold", "italic"), text("c", "italic")),
+    ]})
+    assert tm.from_dict(ast, schema=schema, strict="off").to_markdown(canonical=True)
+    with pytest.raises(tm.InvalidNodeError) as error:
+        tm.from_dict(ast, schema=schema, strict=strict)
+    assert error.value.code == "unrepresentable"
+    assert error.value.path == "content[1].content[0]"
 
 
 def test_unknown_type_error_exported():

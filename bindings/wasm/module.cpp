@@ -122,7 +122,7 @@ EMSCRIPTEN_KEEPALIVE std::uint32_t mt_from_markdown(const char* markdown, std::s
         auto schema = select_schema(schema_handle);
         ConversionOptions options = read_options(options_json.root(), *schema, false);
         Document document = parse_to_document(std::string(markdown, length), options.parser, std::move(schema));
-        finalize_document(document, options.nodes, options.uri);
+        finalize_document(document, options.nodes, options.uri, options.parser.cjk_friendly);
         return retain(std::move(document));
     });
 }

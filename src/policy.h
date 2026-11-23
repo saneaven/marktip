@@ -4,6 +4,8 @@
 #include <string_view>
 #include <vector>
 
+#include "inherit.h"
+
 namespace marktip {
 
 class Document;
@@ -36,7 +38,8 @@ struct NodeTypePolicy {
 
 // Check policies on the input tree so errors retain their paths.
 void check_document_policies(const Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy);
-void finalize_document(Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy);
+void finalize_document(Document& document, const NodeTypePolicy& node_policy, const UriPolicy& uri_policy,
+                       bool cjk_friendly, InputAttrKeys* present = nullptr);
 
 RelativePolicy relative_policy_from_string(std::string_view value, const char* arg_name);
 void add_uri_scheme(UriRule& rule, std::string scheme, const char* arg_name);

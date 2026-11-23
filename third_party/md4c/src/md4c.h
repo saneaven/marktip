@@ -324,6 +324,20 @@ typedef struct MD_SPAN_WIKILINK {
  * opening/closing (cf. markdown-it-cjk-friendly). */
 #define MD_FLAG_CJKFRIENDLYEMPHASIS         0x10000
 
+/* MARKTIP LOCAL PATCH: Share attention classification and flanking with the normalizer. */
+#define MD_ATTN_SPACE 0x01
+#define MD_ATTN_PUNCT 0x02
+#define MD_ATTN_CJK   0x04
+#define MD_ATTN_IVS   0x08
+#define MD_ATTN_VS    0x10
+#define MD_ATTN_OPEN  0x01
+#define MD_ATTN_CLOSE 0x02
+
+unsigned md_attention_codepoint(const MD_CHAR* text, MD_SIZE size, int trailing, MD_SIZE* width);
+unsigned md_attention_category(unsigned codepoint, int cjk_friendly);
+unsigned md_attention_before(const MD_CHAR* text, MD_SIZE size, int cjk_friendly, MD_SIZE* edge_width);
+unsigned md_attention_flanking(unsigned before, unsigned after);
+
 #define MD_FLAG_PERMISSIVEAUTOLINKS         (MD_FLAG_PERMISSIVEEMAILAUTOLINKS | MD_FLAG_PERMISSIVEURLAUTOLINKS | MD_FLAG_PERMISSIVEWWWAUTOLINKS)
 #define MD_FLAG_NOHTML                      (MD_FLAG_NOHTMLBLOCKS | MD_FLAG_NOHTMLSPANS)
 

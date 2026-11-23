@@ -531,28 +531,6 @@ std::string_view spelled_gap(const Spelling& spelling, const BlockOrigin& previo
                ? gap : std::string_view("\n\n");
 }
 
-bool is_emphasis_mark(const Mark& mark) {
-    return mark.type == "bold" || mark.type == "italic" || mark.type == "strike";
-}
-
-std::size_t common_prefix(const std::vector<Mark>& a, const std::vector<Mark>& b) {
-    std::size_t limit = std::min(a.size(), b.size());
-    std::size_t i = 0;
-    while (i < limit && a[i] == b[i]) {
-        ++i;
-    }
-    return i;
-}
-
-std::size_t first_emphasis_at_or_after(const std::vector<Mark>& marks, std::size_t from) {
-    for (std::size_t i = from; i < marks.size(); ++i) {
-        if (is_emphasis_mark(marks[i])) {
-            return i;
-        }
-    }
-    return marks.size();
-}
-
 std::string open_delimiter(const Mark& mark, const Schema& schema) {
     if (mark.type == "bold") {
         return "**";
@@ -594,64 +572,6 @@ std::string close_delimiter(const Mark& mark, const Schema& schema) {
     return close_tag(schema, mark);
 }
 
-// Whitespace adjacent to an emphasis delimiter prevents the delimiter from
-// opening/closing and no markdown syntax can express it, so such whitespace is
-// moved outside the emphasis marks (cf. prosemirror-markdown
-// expelEnclosingWhitespace). It stays inside enclosing non-emphasis marks
-// such as links, which have no whitespace restriction.
-void expel_boundary_whitespace(std::vector<RenderedRun>& runs) {
-    static const char* const kWhitespace = " \t\n";
-    const std::vector<Mark> no_marks;
-    std::vector<RenderedRun> result;
-
-    for (std::size_t i = 0; i < runs.size(); ++i) {
-        const std::vector<Mark>& prev = i > 0 ? runs[i - 1].marks : no_marks;
-        const std::vector<Mark>& next = i + 1 < runs.size() ? runs[i + 1].marks : no_marks;
-        RenderedRun& run = runs[i];
-
-        std::size_t opening_emphasis = first_emphasis_at_or_after(run.marks, common_prefix(prev, run.marks));
-        if (opening_emphasis < run.marks.size()) {
-            std::size_t body = run.content.find_first_not_of(kWhitespace);
-            std::size_t lead_len = body == std::string::npos ? run.content.size() : body;
-            if (lead_len > 0) {
-                RenderedRun lead;
-                lead.marks.assign(run.marks.begin(), run.marks.begin() + opening_emphasis);
-                lead.content = run.content.substr(0, lead_len);
-                run.content.erase(0, lead_len);
-                result.push_back(std::move(lead));
-            }
-        }
-
-        RenderedRun tail;
-        bool has_tail = false;
-        std::size_t closing_emphasis = first_emphasis_at_or_after(run.marks, common_prefix(run.marks, next));
-        if (closing_emphasis < run.marks.size() && !run.content.empty()) {
-            std::size_t body = run.content.find_last_not_of(kWhitespace);
-            std::size_t keep = body == std::string::npos ? 0 : body + 1;
-            if (keep < run.content.size()) {
-                tail.marks.assign(run.marks.begin(), run.marks.begin() + closing_emphasis);
-                tail.content = run.content.substr(keep);
-                run.content.erase(keep);
-                has_tail = true;
-            }
-        }
-
-        if (!run.content.empty()) {
-            RenderedRun kept;
-            if (!run.marks.empty()) {
-                kept.marks = run.marks;
-            }
-            kept.content = std::move(run.content);
-            result.push_back(std::move(kept));
-        }
-        if (has_tail) {
-            result.push_back(std::move(tail));
-        }
-    }
-
-    runs = std::move(result);
-}
-
 // Emit runs keeping shared marks open across run boundaries, so e.g.
 // [a: bold][b: bold+italic] becomes "**a*b***" rather than "**a*****b***".
 std::string emit_runs(const std::vector<RenderedRun>& runs, const Schema& schema) {
@@ -690,6 +610,26 @@ public:
         }
         const Spelling* spelling = !canonical && document_.spelling() ? &*document_.spelling() : nullptr;
         std::string rendered = render_doc(document_.root(), spelling);
+        if (!math_tokens_.empty()) {
+            return resolve_math(std::move(rendered));
+        }
+        return rendered;
+    }
+
+    std::string render_textblock_for_readback(std::size_t index, const Node& parent,
+                                              bool pipe_cell, bool task_checkbox) {
+        std::string rendered;
+        if (pipe_cell) {
+            rendered = "| " + table_cell_text(parent) + " |\n| --- |";
+        } else if (task_checkbox) {
+            // A checkbox keeps leading HTML inline on the task item's first line.
+            Node item {parent.type, {}, parent.attrs, {}, {index}};
+            rendered = render_list_item(item, "- ", 0, true, true);
+        } else {
+            const Node& block = document_.node(index);
+            const NodeSpec* spec = node_forms_ ? block_child_form(document_, block, &parent) : nullptr;
+            rendered = render_block(block, 0, spec);
+        }
         if (!math_tokens_.empty()) {
             return resolve_math(std::move(rendered));
         }
@@ -1342,7 +1282,6 @@ private:
             runs.push_back({run.delimiter_marks(schema_, extended_),
                             run.in_code ? code_span(group) : std::move(group)});
         });
-        expel_boundary_whitespace(runs);
         return emit_runs(runs, schema_);
     }
 
@@ -1417,6 +1356,11 @@ private:
 std::string to_markdown(const Document& document, bool canonical) {
     MarkdownWriter writer(document);
     return writer.render(canonical);
+}
+
+std::string render_textblock_for_readback(const Document& document, std::size_t index,
+                                          const Node& parent, bool pipe_cell, bool task_checkbox) {
+    return MarkdownWriter(document).render_textblock_for_readback(index, parent, pipe_cell, task_checkbox);
 }
 
 std::optional<StoredSpelling> dump_spelling(const Document& document) {

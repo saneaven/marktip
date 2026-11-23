@@ -1,6 +1,4 @@
-#include "parser.h"
-
-#include "md4c.h"
+#include "markdown_parser.h"
 
 extern "C" {
 #include "entity.h"
@@ -8,6 +6,7 @@ extern "C" {
 
 #include <algorithm>
 #include <cstddef>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,7 +14,9 @@ extern "C" {
 
 #include "errors.h"
 #include "lift.h"
+#include "normalize.h"
 #include "schema.h"
+#include "serializer.h"
 
 namespace marktip {
 namespace {
@@ -797,38 +798,35 @@ int source_segments_callback(const MD_SOURCE_SEGMENT* segments, MD_SIZE count, v
 
 }  // namespace
 
-Document parse_to_document(std::string markdown, const ParseOptions& options,
-                           std::shared_ptr<const Schema> schema) {
-    replace_nul(markdown);
-    std::vector<MD_TYPED_TAG> typed_tags;
-    if (schema->has_tags()) {
-        for (const TagEntry& entry : schema->tags()) {
-            typed_tags.push_back({entry.tag.c_str(), entry.block_line});
-        }
+MarkdownParser::MarkdownParser(ParseOptions options, std::shared_ptr<const Schema> schema)
+    : options_(options), schema_(std::move(schema)),
+      needs_lift_(schema_->has_tags() || schema_->block_image()) {
+    const auto& tags = schema_->tags();
+    typed_tags_.reserve(tags.size());
+    for (const TagEntry& entry : tags) {
+        typed_tags_.push_back({entry.tag.c_str(), entry.block_line});
     }
-    unsigned math_flag = schema->has_math() ? MD_FLAG_LATEXMATHSPANS : 0;
-    AstBuilder builder(markdown, options.html, options.keep_source, std::move(schema));
-    MD_PARSER parser {};
-    parser.abi_version = 0;
-    parser.typed_tags = typed_tags.data();
-    parser.n_typed_tags = static_cast<unsigned>(typed_tags.size());
-    parser.source_segments = options.keep_source ? source_segments_callback : nullptr;
+    parser_.typed_tags = typed_tags_.data();
+    parser_.n_typed_tags = static_cast<unsigned>(typed_tags_.size());
+    parser_.source_segments = options.keep_source ? source_segments_callback : nullptr;
     // With html=false, block-level raw HTML degrades to paragraph text via MD_FLAG_NOHTMLBLOCKS.
     // Inline HTML spans stay recognized (no MD_FLAG_NOHTMLSPANS),
     // so the <br>-in-cell hardBreak mapping keeps working.
     // AstBuilder handles literal conversion without declared tags; lift handles it otherwise.
-    parser.flags = MD_DIALECT_GITHUB | (options.cjk_friendly ? MD_FLAG_CJKFRIENDLYEMPHASIS : 0) |
-                   (options.html ? 0 : MD_FLAG_NOHTMLBLOCKS) | math_flag;
-    parser.enter_block = enter_block_callback;
-    parser.leave_block = leave_block_callback;
-    parser.enter_span = enter_span_callback;
-    parser.leave_span = leave_span_callback;
-    parser.text = text_callback;
-    parser.debug_log = nullptr;
-    parser.syntax = nullptr;
+    parser_.flags = MD_DIALECT_GITHUB | (options.cjk_friendly ? MD_FLAG_CJKFRIENDLYEMPHASIS : 0) |
+                    (options.html ? 0 : MD_FLAG_NOHTMLBLOCKS) | (schema_->has_math() ? MD_FLAG_LATEXMATHSPANS : 0);
+    parser_.enter_block = enter_block_callback;
+    parser_.leave_block = leave_block_callback;
+    parser_.enter_span = enter_span_callback;
+    parser_.leave_span = leave_span_callback;
+    parser_.text = text_callback;
+}
 
+Document MarkdownParser::parse(std::string markdown, const NodeSpec* detached_textblock) const {
+    replace_nul(markdown);
+    AstBuilder builder(markdown, options_.html, options_.keep_source, schema_);
     std::string_view source = builder.source();
-    int rc = md_parse(source.data(), static_cast<MD_SIZE>(source.size()), &parser, &builder);
+    int rc = md_parse(source.data(), static_cast<MD_SIZE>(source.size()), &parser_, &builder);
     if (rc != 0) {
         if (!builder.error().empty()) {
             throw ParseError(builder.error_code(), builder.error());
@@ -836,10 +834,50 @@ Document parse_to_document(std::string markdown, const ParseOptions& options,
         throw ParseError("parse_failed", "MD4C failed to parse markdown");
     }
     Document document = std::move(builder).into_document();
-    if (document.schema().has_tags() || document.schema().block_image()) {
-        lift(document, options);
+    if (needs_lift_) {
+        lift(document, options_, detached_textblock);
     }
     return document;
+}
+
+Document parse_to_document(std::string markdown, const ParseOptions& options,
+                           std::shared_ptr<const Schema> schema) {
+    return MarkdownParser(options, std::move(schema)).parse(std::move(markdown));
+}
+
+bool MarkdownParser::inline_round_trips(const Document& document, std::size_t index, const Node& parent,
+                                        const NodeSpec* declared, bool pipe_cell, bool task_checkbox) const {
+    const Node& block = document.node(index);
+    try {
+        std::string rendered = render_textblock_for_readback(document, index, parent, pipe_cell, task_checkbox);
+        const NodeSpec* detached_textblock = pipe_cell || task_checkbox ? nullptr : declared;
+        Document parsed = parse(std::move(rendered), detached_textblock);
+        normalize_document(parsed, options_.cjk_friendly);
+        const Node* container = &parsed.root();
+        auto descend = [&](std::initializer_list<std::string_view> wrappers) {
+            for (std::string_view type : wrappers) {
+                if (container->content.size() != 1) {
+                    return false;
+                }
+                container = &parsed.node(container->content.front());
+                if (container->type != type) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        if ((pipe_cell && !descend({"table", "tableRow", "tableHeader"})) ||
+            (task_checkbox && !descend({"taskList", "taskItem"}))) {
+            return false;
+        }
+        if (container->content.size() != 1) {
+            return false;
+        }
+        const Node& reread = parsed.node(container->content.front());
+        return reread.type == block.type && same_carried_inline_content(document, block, parsed, reread);
+    } catch (const MarktipError&) {
+        return false;
+    }
 }
 
 }  // namespace marktip

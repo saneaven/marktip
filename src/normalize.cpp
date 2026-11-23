@@ -1,5 +1,7 @@
 #include "normalize.h"
 
+#include "md4c.h"
+
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -392,6 +394,82 @@ void order_inline_marks(std::vector<Mark>& marks, const std::vector<Mark>& previ
     }
 }
 
+bool join_inline(Node& left, const Node& right, bool text) {
+    if (left.type != right.type || !same_run_marks(left.marks, right.marks)) {
+        return false;
+    }
+    if (text) {
+        left.text += right.text;
+    } else {
+        std::string joined = attr_string(left.attrs, "html");
+        joined += attr_string(right.attrs, "html");
+        set_attr(left.attrs, "html", AttrValue::string(std::move(joined)));
+    }
+    return true;
+}
+
+struct EmphasisRun {
+    std::size_t begin;
+    std::size_t end;
+    std::vector<Mark> marks;
+    bool code;
+};
+
+struct EdgeEdit {
+    std::size_t position;
+    std::size_t width;
+    unsigned removed;
+    bool trailing;
+};
+
+unsigned emphasis_at_edge(const std::vector<Mark>& marks, std::size_t prefix, unsigned inside,
+                          unsigned outside, bool trailing) {
+    unsigned removed = 0;
+    for (std::size_t i = prefix; i < marks.size();) {
+        unsigned mask = emphasis_bit(marks[i]);
+        std::size_t end = i + 1;
+        if (mask != 0) {
+            // Bold and italic form one asterisk token.
+            if (mask != 4) {
+                while (end < marks.size()) {
+                    unsigned bit = emphasis_bit(marks[end]);
+                    if (bit == 0 || bit == 4) {
+                        break;
+                    }
+                    mask |= bit;
+                    ++end;
+                }
+            }
+            unsigned outer = i == prefix ? outside : MD_ATTN_PUNCT;
+            unsigned inner = end == marks.size() ? inside : MD_ATTN_PUNCT;
+            unsigned flanking = trailing ? md_attention_flanking(inner, outer) : md_attention_flanking(outer, inner);
+            if ((flanking & (trailing ? MD_ATTN_CLOSE : MD_ATTN_OPEN)) == 0) {
+                removed |= mask;
+            }
+        }
+        i = end;
+    }
+    return removed;
+}
+
+bool could_trim_emphasis(const Node& node) {
+    std::string_view type = node.type;
+    if (node.marks.empty()) {
+        return false;
+    }
+    if (type == "text") {
+        auto letter = [](unsigned char ch) {
+            return (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+        };
+        if (node.text.empty() || (letter(node.text.front()) && letter(node.text.back()))) {
+            return false;
+        }
+    } else if (type != "hardBreak") {
+        return false;
+    }
+    return std::any_of(node.marks.begin(), node.marks.end(), emphasis_bit);
+}
+
 struct Normalizer {
     Document& document;
     const Schema& schema;
@@ -401,6 +479,8 @@ struct Normalizer {
     bool heading_tags;
     bool table_tags;
     bool node_forms;
+    bool cjk_friendly;
+    InputAttrKeys* present;
     PathStack path;
 
     void normalize_root();
@@ -413,9 +493,129 @@ struct Normalizer {
     bool normalize_children(std::size_t index, const NodeSpec* spec = nullptr,
                             LineBreaks breaks = LineBreaks::Preserve);
     void normalize_marks(Node& node, const std::vector<Mark>& enclosing);
+    bool expel_emphasis_edges(std::vector<std::size_t>& children);
+    void apply_edge_edit(std::size_t index, const EdgeEdit& edit, std::vector<std::size_t>& output);
     void order_stored_marks(std::vector<Mark>& marks, const std::vector<Mark>& previous);
     bool remove_child(NodeKind kind) const;
 };
+
+void Normalizer::apply_edge_edit(std::size_t index, const EdgeEdit& edit, std::vector<std::size_t>& output) {
+    auto remove = [&](Node& node) {
+        node.marks.erase(std::remove_if(node.marks.begin(), node.marks.end(), [&](const Mark& mark) {
+            return (emphasis_bit(mark) & edit.removed) != 0;
+        }), node.marks.end());
+    };
+    Node& node = document.node(index);
+    output.push_back(index);
+    if (edit.width >= node.text.size()) {
+        remove(node);
+        return;
+    }
+
+    std::size_t cut = edit.trailing ? node.text.size() - edit.width : edit.width;
+    Node tail {node.type, node.text.substr(cut), node.attrs, node.marks, {}};
+    node.text.resize(cut);
+    remove(edit.trailing ? tail : node);
+    std::size_t tail_index = document.append_node(std::move(tail));
+    if (present != nullptr) {
+        present->resize(tail_index + 1);
+        (*present)[tail_index] = (*present)[index];
+    }
+    output.push_back(tail_index);
+}
+
+bool Normalizer::expel_emphasis_edges(std::vector<std::size_t>& children) {
+    std::vector<EmphasisRun> runs;
+    for_each_inline_run(document, children, {}, declared_nodes, [&](const InlineRun& run) {
+        runs.push_back({run.begin, run.end, run.delimiter_marks(schema, reorder_marks), run.in_code});
+    });
+    const std::vector<Mark> no_marks;
+    std::vector<EdgeEdit> edits;
+    for (std::size_t i = 0; i < runs.size(); ++i) {
+        const EmphasisRun& run = runs[i];
+        if (run.code || run.marks.empty()) {
+            continue;
+        }
+        for (bool trailing : {false, true}) {
+            std::size_t position = trailing ? run.end - 1 : run.begin;
+            const Node& node = document.node(children[position]);
+            if (!could_trim_emphasis(node)) {
+                continue;
+            }
+            MD_SIZE width;
+            unsigned category = character_category(node.text, trailing, cjk_friendly, width);
+            if ((category & (MD_ATTN_SPACE | MD_ATTN_PUNCT)) == 0) {
+                continue;
+            }
+            const EmphasisRun* neighbour = trailing ? (i + 1 < runs.size() ? &runs[i + 1] : nullptr)
+                                                     : (i != 0 ? &runs[i - 1] : nullptr);
+            const auto& adjacent = neighbour == nullptr ? no_marks : neighbour->marks;
+            std::size_t prefix = common_prefix(run.marks, adjacent);
+            unsigned outside = MD_ATTN_SPACE;
+            if (neighbour != nullptr) {
+                std::size_t other = trailing ? neighbour->begin : neighbour->end - 1;
+                bool adjacent_delimiter = adjacent.size() > prefix;
+                // Closing and opening asterisks at the seam form one token.
+                if (adjacent_delimiter && prefix < run.marks.size() && (emphasis_bit(run.marks[prefix]) & 3) != 0) {
+                    adjacent_delimiter = !std::all_of(adjacent.begin() + prefix, adjacent.end(), [](const Mark& mark) {
+                        return (emphasis_bit(mark) & 3) != 0;
+                    });
+                }
+                outside = adjacent_delimiter || neighbour->code ? MD_ATTN_PUNCT
+                    : inline_edge(document.node(children[other]), !trailing, cjk_friendly);
+            }
+            unsigned inside = inline_edge(node, trailing, cjk_friendly);
+            unsigned removed = emphasis_at_edge(run.marks, prefix, inside, outside, trailing);
+            if (removed == 0) {
+                continue;
+            }
+            if (category == MD_ATTN_SPACE) {
+                while (width < node.text.size()) {
+                    std::string_view remaining = node.text;
+                    remaining = trailing ? remaining.substr(0, remaining.size() - width) : remaining.substr(width);
+                    MD_SIZE step;
+                    if (character_category(remaining, trailing, cjk_friendly, step) != MD_ATTN_SPACE) {
+                        break;
+                    }
+                    width += step;
+                }
+            }
+            edits.push_back({position, width, removed, trailing});
+            break;
+        }
+    }
+    if (edits.empty()) {
+        return false;
+    }
+
+    std::vector<std::size_t> edited;
+    edited.reserve(children.size() + edits.size());
+    auto edit = edits.begin();
+    for (std::size_t i = 0; i < children.size(); ++i) {
+        if (edit != edits.end() && edit->position == i) {
+            apply_edge_edit(children[i], *edit++, edited);
+        } else {
+            edited.push_back(children[i]);
+        }
+    }
+
+    std::size_t kept = 0;
+    for (std::size_t index : edited) {
+        Node& node = document.node(index);
+        if (node.marks.size() > 1) {
+            order_stored_marks(node.marks, kept == 0 ? no_marks : document.node(edited[kept - 1]).marks);
+        }
+        NodeKind kind = node_kind(node.type);
+        if (kept != 0 && (kind == NodeKind::Text || kind == NodeKind::HtmlInline) &&
+            join_inline(document.node(edited[kept - 1]), node, kind == NodeKind::Text)) {
+            continue;
+        }
+        edited[kept++] = index;
+    }
+    edited.resize(kept);
+    children = std::move(edited);
+    return true;
+}
 
 bool Normalizer::normalize_lines(std::size_t index, LineScope scope, LineBreaks breaks,
                                  const std::vector<Mark>& enclosing) {
@@ -480,14 +680,7 @@ bool Normalizer::normalize_lines(std::size_t index, LineScope scope, LineBreaks 
             // A flattened break or trimmed text can leave new neighbours.
             if (kept != 0 && (text || html)) {
                 Node& left = document.node(children[kept - 1]);
-                if (left.type == child.type && same_run_marks(left.marks, child.marks)) {
-                    if (text) {
-                        left.text += child.text;
-                    } else {
-                        std::string joined = attr_string(left.attrs, "html");
-                        joined += attr_string(child.attrs, "html");
-                        set_attr(left.attrs, "html", AttrValue::string(std::move(joined)));
-                    }
+                if (join_inline(left, child, text)) {
                     continue;
                 }
             }
@@ -506,6 +699,12 @@ bool Normalizer::normalize_lines(std::size_t index, LineScope scope, LineBreaks 
                       scope == LineScope::Paragraph);
     }
     children.resize(kept);
+    if (scope != LineScope::Code && std::any_of(children.begin(), children.end(), [&](std::size_t child) {
+            return could_trim_emphasis(document.node(child));
+        })) {
+        while (expel_emphasis_edges(children)) {
+        }
+    }
     document.node(index).content = std::move(children);
     return kept == 0;
 }
@@ -714,12 +913,12 @@ NodeKind Normalizer::normalize_node(std::size_t index, NodeKind kind, LineBreaks
 
 }  // namespace
 
-void normalize_document(Document& document) {
+void normalize_document(Document& document, bool cjk_friendly, InputAttrKeys* present) {
     const Schema& schema = document.schema();
     Normalizer {document, schema, schema.has_declared_marks() || schema.has_link_tag(),
                 !schema.node("paragraph")->tag.empty(), schema.has_declared_nodes(),
                 !schema.node("heading")->tag.empty(), schema.has_table_tags(),
-                schema.has_node_forms(), {}}.normalize_root();
+                schema.has_node_forms(), cjk_friendly, present, {}}.normalize_root();
 }
 
 void normalize_inherited_attrs(Document& document) {

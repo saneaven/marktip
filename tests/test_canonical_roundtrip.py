@@ -113,10 +113,6 @@ def _signature(document, schema):
     return tuple(visits(document, frozenset()))
 
 
-def _run_ids(variant, masks):
-    return [f"{variant}-{mask}" for mask in masks.split()]
-
-
 class _CanonicalMismatch(AssertionError):
     pass
 
@@ -127,65 +123,29 @@ class _BaseSpellingMismatch(AssertionError):
 
 RUN_MASKS = tuple("".join(str(mask) for mask in masks) for masks in product(range(8), repeat=3))
 
-# Keep the failing case IDs fixed so each completed plan item exposes its XPASSes.
-XFAIL_GROUPS = (
-    ("M3 normalizes emphasis boundaries that lose whitespace or punctuation",
-     ["markdown-html-true-commonmark-430", "markdown-html-false-commonmark-430", "editor-commonmark-430",
-      "strike-trailing-space", "italic-space-after-bold-letter", "bold-quoted-letter-between-letters",
-      "bold-colon-before-word", "emphasis-on-hard-break"] + _run_ids("latin-spaced", """
-         010 012 014 016 020 021 024 025 030 031 032 034 035 036 040 041 042 043
-         050 051 052 053 054 056 060 061 062 063 064 065 070 071 072 073 074 075
-         076 100 101 102 103 104 105 106 107 110 112 114 116 120 121 122 123 124
-         125 126 127 130 131 132 134 135 136 140 141 142 143 144 145 146 147 150
-         151 152 153 154 156 160 161 162 163 164 165 166 167 170 171 172 173 174
-         175 176 200 201 202 203 204 205 206 207 210 211 212 213 214 215 216 217
-         220 221 224 225 230 231 232 234 235 236 240 241 242 243 244 245 246 247
-         250 251 252 253 254 255 256 257 260 261 262 263 264 265 270 271 272 273
-         274 275 276 300 301 302 303 304 305 306 307 310 311 312 313 314 315 316
-         317 320 321 322 323 324 325 326 327 330 331 332 334 335 336 340 341 342
-         343 344 345 346 347 350 351 352 353 354 355 356 357 360 361 362 363 364
-         365 366 367 370 371 372 373 374 375 376 400 401 402 403 404 405 406 407
-         410 411 412 413 414 415 416 417 420 421 422 423 424 425 426 427 430 431
-         432 433 434 435 436 437 440 441 442 443 450 451 452 453 454 456 460 461
-         462 463 464 465 470 471 472 473 474 475 476 500 501 502 503 504 505 506
-         507 510 511 512 513 514 515 516 517 520 521 522 523 524 525 526 527 530
-         531 532 533 534 535 536 537 540 541 542 543 544 545 546 547 550 551 552
-         553 554 556 560 561 562 563 564 565 566 567 570 571 572 573 574 575 576
-         600 601 602 603 604 605 606 607 610 611 612 613 614 615 616 617 620 621
-         622 623 624 625 626 627 630 631 632 633 634 635 636 637 640 641 642 643
-         644 645 646 647 650 651 652 653 654 655 656 657 660 661 662 663 664 665
-         670 671 672 673 674 675 676 700 701 702 703 704 705 706 707 710 711 712
-         713 714 715 716 717 720 721 722 723 724 725 726 727 730 731 732 733 734
-         735 736 737 740 741 742 743 744 745 746 747 750 751 752 753 754 755 756
-         757 760 761 762 763 764 765 766 767 770 771 772 773 774 775 776
-     """)),
-    ("E1 rejects touching emphasis that loses marks or becomes literal punctuation",
-     ["touching-strike-inside-italic", "touching-crossed-bold-and-italic"], pytest.raises.Exception),
-    # Masks use bold=1, italic=2 and strike=4 in run order.
-    ("E1 rejects touching emphasis that drops marks or produces literal delimiters",
-     _run_ids("latin-touching", """
-         005 006 007 017 027 035 050 051 052 053 054 055 056 057 060 061 062 063
-         064 065 066 067 070 071 072 073 074 075 076 077 105 106 107 117 123 127
-         132 136 150 152 160 170 171 172 173 174 175 176 177 205 206 207 213 217
-         227 231 235 250 260 261 270 271 272 273 274 275 276 277 305 306 307 317
-         323 327 335 350 351 352 353 354 355 356 357 360 361 367 370 371 372 405
-         406 407 417 427 435 450 460 470 500 501 502 503 504 505 506 507 517 527
-         536 550 560 567 570 576 600 601 602 603 604 605 606 607 617 627 635 650
-         657 660 670 675 700 701 702 703 704 705 706 707 717 727 735 750 760 767
-         770
-     """)),
-    ("cjk_friendly (step 6) adds the required reading option to from_dict",
-     [f"hangul-touching-{masks}" for masks in RUN_MASKS], TypeError),
-)
-XFAIL = {
-    case_id: pytest.mark.xfail(strict=True, reason=reason, raises=tuple(errors) or _CanonicalMismatch)
-    for reason, case_ids, *errors in XFAIL_GROUPS
-    for case_id in case_ids
+# Masks use bold=1, italic=2 and strike=4 in run order.
+# These cases fail with the writer's one spelling.
+# Some have another spelling that marktip does not search for.
+PUNCTUATION_REFUSALS = "123 127 132 136 213 217 231 235 323 327 363 367 567 576 657 675 767".split()
+REFUSES = {
+    "latin-touching": """
+        005 006 007 017 027 035 050 051 052 053 054 055 056 057 060 061 062 063
+        064 065 066 067 070 071 072 073 074 075 076 077 105 106 107 117 123 127
+        132 136 150 152 160 170 171 172 173 174 175 176 177 205 206 207 213 217
+        227 231 235 250 260 261 270 271 272 273 274 275 276 277 305 306 307 317
+        323 327 335 350 351 352 353 354 355 356 357 360 361 367 370 371 372 405
+        406 407 417 427 435 450 460 470 500 501 502 503 504 505 506 507 517 527
+        536 550 560 567 570 576 600 601 602 603 604 605 606 607 617 627 635 650
+        657 660 670 675 700 701 702 703 704 705 706 707 717 727 735 750 760 767
+        770
+    """.split(),
+    "hangul-touching": """
+        123 127 132 136 213 217 231 235 323 327 363 367 567 576 657 675 767
+    """.split(),
+    "latin-quoted": PUNCTUATION_REFUSALS,
+    "latin-punctuated": PUNCTUATION_REFUSALS,
+    "hangul-punctuated": PUNCTUATION_REFUSALS,
 }
-
-
-def _case(case_id, *args):
-    return pytest.param(*args, id=case_id, marks=XFAIL.get(case_id, ()))
 
 
 def _canonical_roundtrip(document, **options):
@@ -217,7 +177,7 @@ def _editor_invariants(x, document, dict_options):
 @pytest.mark.parametrize(
     "markdown,html",
     [
-        _case(f"markdown-html-{str(html).lower()}-{example.id}", example.values[0], html)
+        pytest.param(example.values[0], html, id=f"markdown-html-{str(html).lower()}-{example.id}")
         for html in (True, False)
         for example in EXAMPLES
     ],
@@ -235,9 +195,29 @@ def test_canonical_from_markdown_joins_adjacent_equal_mark_html():
     _canonical_roundtrip(document)
 
 
+@pytest.mark.parametrize("ending,options", [("\n", {}), (".\ufe00", {"cjk_friendly": True})])
+def test_emphasis_closes_before_a_line_end_or_variation_sequence(ending, options):
+    ast = {"type": "doc", "content": [{"type": "paragraph", "content": [
+        {"type": "text", "text": "x" + ending, "marks": [{"type": "bold"}]},
+        {"type": "text", "text": "c"},
+    ]}]}
+    document = tm.from_dict(ast, strict="content", **options)
+    assert _canonical_roundtrip(document, **options) == f"**x**{ending}c"
+
+
+def test_emphasis_opens_on_punctuation_after_a_line_end():
+    ast = {"type": "doc", "content": [{"type": "paragraph", "content": [
+        {"type": "text", "text": "a\n"},
+        {"type": "text", "text": '"b"', "marks": [{"type": "bold"}]},
+    ]}]}
+    document = tm.from_dict(ast, strict="content")
+    assert document.to_dict() == ast
+    assert _canonical_roundtrip(document) == 'a\n**"b"**'
+
+
 @pytest.mark.parametrize(
     "markdown",
-    [_case(f"editor-{example.id}", example.values[0]) for example in EXAMPLES],
+    [pytest.param(example.values[0], id=f"editor-{example.id}") for example in EXAMPLES],
 )
 def test_canonical_from_editor_spec(markdown):
     base = tm.from_markdown(markdown)
@@ -250,7 +230,7 @@ def test_canonical_from_editor_spec(markdown):
 
 @pytest.mark.parametrize(
     "x,dict_options,markdown_options,refuses,normalized,expected_markdown",
-    [_case(case_id, x, dict_options, markdown_options, refuses, normalized, expected_markdown)
+    [pytest.param(x, dict_options, markdown_options, refuses, normalized, expected_markdown, id=case_id)
      for case_id, x, dict_options, markdown_options, refuses, normalized, expected_markdown in EDITOR_DOCUMENTS],
 )
 def test_canonical_from_editor_document(x, dict_options, markdown_options, refuses, normalized, expected_markdown):
@@ -279,24 +259,30 @@ def _three_run_documents():
         ("latin-spaced", ("a ", "b ", "c"), {}),
         ("latin-touching", ("a", "b", "c"), {}),
         ("hangul-touching", ("가", "나", "다"), {"cjk_friendly": True}),
+        ("latin-quoted", ('"a"', '"b"', '"c"'), {}),
+        ("latin-punctuated", ("a.", ".b.", ".c"), {}),
+        ("hangul-punctuated", ("가.", ".나.", ".다"), {"cjk_friendly": True}),
     )
     for variant, letters, options in runs:
         for masks in RUN_MASKS:
             content = [{"type": "text", "text": letter, "marks": mark_sets[int(mask)]}
                        for letter, mask in zip(letters, masks)]
             x = {"type": "doc", "content": [{"type": "paragraph", "content": content}]}
-            yield _case(f"{variant}-{masks}", x, options, variant != "latin-spaced")
+            refuses = masks in REFUSES.get(variant, ())
+            yield pytest.param(x, options, refuses, id=f"{variant}-{masks}")
 
 
-@pytest.mark.parametrize("x,options,allow_refusal", list(_three_run_documents()))
-def test_canonical_from_three_runs(x, options, allow_refusal):
-    try:
-        document = tm.from_dict(x, strict="content", **options)
-    except tm.InvalidNodeError as error:
-        if not allow_refusal:
-            raise
-        assert error.code == "unrepresentable"
+@pytest.mark.parametrize("x,options,refuses", list(_three_run_documents()))
+def test_canonical_from_three_runs(x, options, refuses):
+    if refuses:
+        with pytest.raises(tm.InvalidNodeError) as error:
+            tm.from_dict(x, strict="content", **options)
+        assert error.value.code == "unrepresentable"
+        permissive = tm.from_dict(x, strict="off", **options)
+        assert _signature(x, None) == _signature(permissive.to_dict(), None)
+        assert tm.from_markdown(permissive.to_markdown(canonical=True), **options) != permissive
         return
 
+    document = tm.from_dict(x, strict="content", **options)
     _editor_invariants(x, document, options)
     _canonical_roundtrip(document, **options)

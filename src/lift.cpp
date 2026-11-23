@@ -871,7 +871,7 @@ MARKTIP_NOINLINE void split_block_images(Document& document, std::size_t index, 
 }
 
 const NodeSpec& lift_node(Document& document, std::size_t index, const ParseOptions& options, bool block_forms,
-                          PathStack& path, std::size_t& paired_from) {
+                          PathStack& path, std::size_t& paired_from, const NodeSpec* detached_textblock = nullptr) {
     if (block_forms) {
         check_lift_depth(path.size());
     }
@@ -888,7 +888,10 @@ const NodeSpec& lift_node(Document& document, std::size_t index, const ParseOpti
         std::size_t child = document.node(index).content[i];
         const NodeSpec& child_spec = lift_node(document, child, options, block_forms, path, paired_from);
         if (!child_spec.core && child_spec.shape == Shape::TextBlock) {
-            check_child_content(document, spec, child_spec, document.node(child), path);
+            // Inline read-back detaches this block from its original parent.
+            if (&child_spec != detached_textblock) {
+                check_child_content(document, spec, child_spec, document.node(child), path);
+            }
             complete_content(document, child, child_spec, path);
         }
         path.pop_back();
@@ -1034,13 +1037,13 @@ void complete_content(Document& document, std::size_t index, const NodeSpec& spe
     }
 }
 
-void lift(Document& document, const ParseOptions& options) {
+void lift(Document& document, const ParseOptions& options, const NodeSpec* detached_textblock) {
     PathStack path;
     path.reserve(32);
     bool block_forms = std::any_of(document.schema().tags().begin(), document.schema().tags().end(),
                                     [](const TagEntry& tag) { return tag.block_line; });
     std::size_t paired_from = std::numeric_limits<std::size_t>::max();
-    lift_node(document, 0, options, block_forms, path, paired_from);
+    lift_node(document, 0, options, block_forms, path, paired_from, detached_textblock);
 }
 
 }  // namespace marktip

@@ -37,6 +37,9 @@ An upstream bump therefore has to re-check that `const ENTITY* entity_lookup(con
   rather than the innermost old container that may still be a blockquote.
   This preserves the next sibling's checked state and removes its checkbox from the text.
   The patch is marked `MARKTIP LOCAL PATCH`; this defect is also present on upstream master.
+- Checkbox-only paragraphs (md4c.c): when a checkbox leaves a single-line paragraph with no text,
+  the leaf emits no paragraph callbacks.
+  The patch is marked `MARKTIP LOCAL PATCH`.
 - Initial list-item blank lines (md4c.c): backported only this rule's handling from [upstream master f9e5eb232b95b737373ae706648cb75bd259ed1a](https://github.com/mity/md4c/blob/f9e5eb232b95b737373ae706648cb75bd259ed1a/src/md4c.c).
   The container records its LI opener's end and whether it has held content,
   and line analysis counts consecutive blank lines instead of reading the last block-buffer bytes as a header.
@@ -60,6 +63,10 @@ An upstream bump therefore has to re-check that `const ENTITY* entity_lookup(con
   retain CommonMark's additional intraword conditions, so `_《제목》_을` stays
   literal. `md_attention_flags()` shares flanking between emphasis and
   strikethrough. Patched hunks use `MARKTIP LOCAL PATCH` comments.
+- Shared attention rules (md4c.h, md4c.c): the parser and normalizer share `md_attention_codepoint()`,
+  `md_attention_category()`, `md_attention_before()`, `md_attention_flanking()` and the `MD_ATTN_*` flags.
+  The preceding category applies the variation-selector rule and can return the width of the classified edge.
+  Patched hunks use `MARKTIP LOCAL PATCH` comments.
 - Intra-word strikethrough (md4c.c, `~` branch in `md_collect_marks`):
   `~`/`~~` delimiter runs use the same graded flanking rules as `*` instead of
   upstream's strict require-whitespace/punctuation rule, matching cmark-gfm

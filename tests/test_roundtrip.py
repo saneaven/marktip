@@ -72,12 +72,9 @@ def test_roundtrip_large_and_deep_smoke():
 #   2. Byte idempotence: normalize(normalize(md)) == normalize(md)
 #      (re-saving an unchanged document never changes bytes)
 #
-# CJK text next to emphasis delimiters is not recognized by standard
-# CommonMark flanking rules; those cases round-trip only under the
-# non-standard `cjk_friendly=True` parsing extension, so the tests pass the
-# flag explicitly. Whitespace touching an emphasis boundary has no valid
-# markdown representation at all; the serializer expels it outside the
-# delimiters, and the tests assert that normalization.
+# Emphasis next to CJK punctuation can require the `cjk_friendly=True` extension.
+# The tests pass the option when the emphasis depends on those flanking rules.
+# Normalization removes emphasis from whitespace at delimiter edges.
 
 # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -109,7 +106,7 @@ def normalize(md):
 
 
 def assert_ast_roundtrip(ast, cjk_friendly=False):
-    md = tm.from_dict(ast).to_markdown(canonical=True)
+    md = tm.from_dict(ast, cjk_friendly=cjk_friendly).to_markdown(canonical=True)
     back = tm.from_markdown(md, cjk_friendly=cjk_friendly).to_dict()
     assert back == ast, f"serialized markdown: {md!r}"
 
@@ -185,20 +182,19 @@ def test_strike_before_cjk_particle():
 
 
 def test_cjk_relaxation_is_opt_in():
-    # Default parsing must stay exactly GFM/CommonMark: the emphasis does not
-    # close, so the delimiters remain literal text.
-    md = tm.from_dict(
-        doc(p(text("마크다운(Markdown)", "bold"), text("은 표준이다")))
-    ).to_markdown(canonical=True)
+    ast = doc(p(text("마크다운(Markdown)", "bold"), text("은 표준이다")))
+    default = tm.from_dict(ast)
+    assert default.to_dict() == doc(p(text("마크다운(Markdown", "bold"), text(")은 표준이다")))
+
+    # Under default parsing the closer stays literal.
+    md = tm.from_dict(ast, cjk_friendly=True).to_markdown(canonical=True)
     reparsed = tm.from_markdown(md).to_dict()
     assert reparsed["content"][0]["content"][0]["text"].startswith("**")
+    assert tm.from_markdown(md, cjk_friendly=True).to_dict() == ast
 
 
 # ── boundary whitespace: expelled outside the delimiters ─────────────────
-# Whitespace touching an emphasis delimiter has no valid markdown
-# representation, so the serializer moves it outside the marks
-# (cf. prosemirror-markdown expelEnclosingWhitespace). Text content and
-# rendering are unchanged; only the space's mark membership normalizes.
+# Whitespace touching an emphasis delimiter moves outside the marks during normalization.
 
 
 def test_trailing_space_inside_bold_is_expelled():

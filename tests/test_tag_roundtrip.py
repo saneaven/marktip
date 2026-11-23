@@ -234,7 +234,7 @@ def test_declared_marks_may_cross_other_tag_and_core_mark_boundaries(html):
     assert parsed.to_dict() == doc(p(text("a", mark("underline")),
                                      text("b", mark("underline"), mark("note")), text("c", mark("note"))))
     parsed = tm.from_markdown("**a <u>b** c</u>", schema=schema, html=html)
-    assert parsed.to_dict() == doc(p(text("a ", mark("bold")),
+    assert parsed.to_dict() == doc(p(text("a", mark("bold")), text(" "),
                                      text("b", mark("bold"), mark("underline")), text(" c", mark("underline"))))
     link = mark("link", href="https://example.com")
     parsed = tm.from_markdown("[a <u>b](https://example.com) c</u>", schema=schema, html=html)
@@ -623,13 +623,13 @@ def test_nonexclusive_mark_nesting_uses_the_existing_depth_limit():
 def assert_tag_boundary_whitespace_normalizes_once(emphasis, delimiter, html):
     schema = underline_schema()
     first = tm.from_markdown(f"{delimiter}a <u>b</u>{delimiter}", schema=schema, html=html)
-    assert first.to_dict() == doc(p(text("a ", mark(emphasis)),
-                                    text("b", mark(emphasis), mark("underline"))))
+    expected = doc(p(text("a", mark(emphasis)), text(" "),
+                     text("b", mark(emphasis), mark("underline"))))
+    assert first.to_dict() == expected
     normalized = f"{delimiter}a{delimiter} <u>{delimiter}b{delimiter}</u>"
     assert first.to_markdown(canonical=True) == normalized
     second = tm.from_markdown(normalized, schema=schema, html=html)
-    assert second.to_dict() == doc(p(text("a", mark(emphasis)), text(" "),
-                                     text("b", mark(emphasis), mark("underline"))))
+    assert second.to_dict() == expected
     assert second.to_markdown(canonical=True) == normalized
     third = tm.from_markdown(second.to_markdown(canonical=True), schema=schema, html=html)
     assert third.to_dict() == second.to_dict()

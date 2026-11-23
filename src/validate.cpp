@@ -7,7 +7,9 @@
 #include "ast.h"
 #include "errors.h"
 #include "form.h"
+#include "inline_runs.h"
 #include "node_kind.h"
+#include "markdown_parser.h"
 #include "tags.h"
 
 namespace marktip {
@@ -106,41 +108,75 @@ PathStack input_path(std::size_t index, const std::vector<std::size_t>& input_pa
     return path;
 }
 
-void check_block_representability(const Document& document, const Node& node,
-                                  const std::vector<std::size_t>& input_parents) {
+bool contains_emphasis(const Document& document, const Node& node) {
+    return std::any_of(node.marks.begin(), node.marks.end(), emphasis_bit) ||
+           std::any_of(node.content.begin(), node.content.end(), [&](std::size_t index) {
+               return contains_emphasis(document, document.node(index));
+           });
+}
+
+[[noreturn]] void throw_emphasis(const PathStack& path) {
+    throw InvalidNodeError("unrepresentable", "content",
+                           "marktip's Markdown spelling cannot carry this emphasis",
+                           format_path(path));
+}
+
+void check_block_representability(const Document& document, std::size_t index, const Node& parent,
+                                  const std::vector<std::size_t>& input_parents, const MarkdownParser& reader,
+                                  bool pipe_table, bool markdown_list) {
+    const Node& node = document.node(index);
     if (node.content.empty()) {
         return;
     }
     NodeKind kind = node_kind(node.type);
-    if (kind == NodeKind::Paragraph || kind == NodeKind::Heading || kind == NodeKind::CodeBlock) {
+    if (kind == NodeKind::CodeBlock) {
         return;
     }
     const Schema& schema = document.schema();
-    if (kind == NodeKind::Other &&
-        (!schema.has_declared_nodes() || schema.node(node.type)->shape != Shape::BlockContainer)) {
+    const NodeSpec* declared = kind == NodeKind::Other && schema.has_declared_nodes() ? schema.node(node.type)
+                                                                                   : nullptr;
+    if (kind == NodeKind::Paragraph || kind == NodeKind::Heading ||
+        (declared != nullptr && declared->shape == Shape::TextBlock)) {
+        if (contains_emphasis(document, node) &&
+            !reader.inline_round_trips(document, index, parent, declared,
+                                       pipe_table && is_table_cell(parent.type),
+                                       markdown_list && index == parent.content.front())) {
+            throw_emphasis(input_path(index, input_parents));
+        }
         return;
     }
-    if (kind == NodeKind::TableCell) {
-        for (std::size_t index : node.content) {
-            const Node& child = document.node(index);
+    if (kind == NodeKind::Other && (declared == nullptr || declared->shape != Shape::BlockContainer)) {
+        return;
+    }
+    if (kind == NodeKind::Table) {
+        pipe_table = !schema.has_table_tags() || !uses_tag_form(document, node, *schema.node(node.type));
+    }
+    if (kind == NodeKind::TableCell && !schema.has_table_tags()) {
+        for (std::size_t child_index : node.content) {
+            const Node& child = document.node(child_index);
             if (child.type == "paragraph" && node.content.size() == 1) {
                 continue;
             }
             const NodeSpec& spec = *schema.node(child.type);
             if (has_pipe_cell_form(document, child, spec)) {
                 if (spec.shape == Shape::BlockContainer) {
-                    throw_table_block(spec, input_path(index, input_parents));
+                    throw_table_block(spec, input_path(child_index, input_parents));
                 }
                 if (node.content.size() != 1) {
-                    throw_table_siblings(spec, input_path(index, input_parents));
+                    throw_table_siblings(spec, input_path(child_index, input_parents));
                 }
             } else if (child.type != "paragraph") {
-                throw_table_block(spec, input_path(index, input_parents));
+                throw_table_block(spec, input_path(child_index, input_parents));
             }
         }
     }
-    for (std::size_t index : node.content) {
-        check_block_representability(document, document.node(index), input_parents);
+    bool child_markdown_list = kind == NodeKind::TaskItem && markdown_list;
+    if (kind == NodeKind::List || kind == NodeKind::OrderedList) {
+        child_markdown_list = !schema.has_list_tags() || !uses_tag_form(document, node, *schema.node(node.type));
+    }
+    for (std::size_t child : node.content) {
+        check_block_representability(document, child, node, input_parents, reader, pipe_table,
+                                     child_markdown_list);
     }
 }
 
@@ -474,10 +510,9 @@ void check_lifted_child_content(const Document& document, const NodeSpec& parent
     }
 }
 
-void check_representability(const Document& document, const std::vector<std::size_t>& input_parents) {
-    if (document.schema().has_table_tags()) {
-        return;
-    }
+void check_representability(const Document& document, const std::vector<std::size_t>& input_parents,
+                            bool cjk_friendly) {
+    const MarkdownParser reader({cjk_friendly, true, false, false}, document.schema_ptr());
     const auto& spelling = document.spelling();
     std::size_t piece = 0;
     for (std::size_t index : document.root().content) {
@@ -489,7 +524,7 @@ void check_representability(const Document& document, const std::vector<std::siz
                 continue;
             }
         }
-        check_block_representability(document, document.node(index), input_parents);
+        check_block_representability(document, index, document.root(), input_parents, reader, false, false);
     }
 }
 

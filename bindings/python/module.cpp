@@ -161,6 +161,8 @@ PYBIND11_MODULE(_core, module) {
     // declared fields, valid content relationships and attrs it understands.
     const std::string from_dict_doc =
         "Build a Document from a Tiptap-style JSON dict."
+        " If the document's Markdown will be read with CJK-friendly emphasis and strikethrough rules,"
+        " set cjk_friendly=True."
         " Pass base=Document to reuse spelling of equal blocks from that document."
         " Matched blocks inherit attrs whose keys are absent; a key set to None is cleared."
         " A base with a different schema declaration lends nothing."
@@ -182,6 +184,9 @@ PYBIND11_MODULE(_core, module) {
         " or 'missing_attr' (a link with no href, an image with no src, which would serialize as '[a]()')."
         " Strict rejects excluded mark combinations and duplicate marks of the same type and attrs."
         " These raise InvalidNodeError with .field 'marks' and .code 'invalid_mark_set'."
+        " In strict modes, for blocks without remembered spelling,"
+        " emphasis that the writer's one spelling cannot carry raises InvalidNodeError with .code 'unrepresentable'."
+        " Some of these trees have another spelling that marktip does not search for."
         " Declared inline atoms and containers accept a marks field at every strict level."
         " Strict also refuses a code mark on a declared inline atom or container with .code 'invalid_mark_set'."
         " With strict='off', serialization writes the node outside code spans and omits its code mark."
@@ -205,7 +210,7 @@ PYBIND11_MODULE(_core, module) {
                py::arg("link_relative") = "allow",
                py::arg("image_relative") = "allow", py::arg("reject_node_types") = py::none(),
                py::arg("strict") = "off", py::arg("schema") = py::none(), py::arg("base") = py::none(),
-               from_dict_doc.c_str());
+               py::arg("cjk_friendly") = false, from_dict_doc.c_str());
     module.def("load", &marktip::load_py, py::arg("data"), py::kw_only(), py::arg("schema") = py::none(),
                "Load a Document saved by dump()."
                " Restore spelling when the schema declaration matches."

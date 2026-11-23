@@ -3024,30 +3024,25 @@ md_is_autolink(MD_CTX* ctx, OFF beg, OFF max_end, OFF* p_end, int* p_missing_mai
     return FALSE;
 }
 
-/* MARKTIP LOCAL PATCH: CJK-friendly flanking also classifies the preceding sequence. */
-#define MD_ATTN_SPACE 0x01
-#define MD_ATTN_PUNCT 0x02
-#define MD_ATTN_CJK   0x04
-#define MD_ATTN_IVS   0x08
-#define MD_ATTN_VS    0x10
-
-static unsigned
-md_decode_attention_before(MD_CTX* ctx, OFF off, OFF* p_start)
+/* MARKTIP LOCAL PATCH: Share the attention classifier and flanking with the normalizer. */
+unsigned
+md_attention_codepoint(const MD_CHAR* text, MD_SIZE size, int trailing, MD_SIZE* width)
 {
-    OFF start = off - 1;
-    SZ size;
+    OFF start = 0;
+    if(trailing) {
+        start = size - 1;
 #if defined MD4C_USE_UTF16
-    if(start > 0 && IS_UTF16_SURROGATE_LO(CH(start)) && IS_UTF16_SURROGATE_HI(CH(start-1)))
-        start--;
+        if(start > 0 && IS_UTF16_SURROGATE_LO(text[start]) && IS_UTF16_SURROGATE_HI(text[start-1]))
+            start--;
 #elif defined MD4C_USE_UTF8
-    while(start > 0 && off - start < 4 && IS_UTF8_TAIL(CH(start)))
-        start--;
+        while(start > 0 && size - start < 4 && IS_UTF8_TAIL(text[start]))
+            start--;
 #endif
-    *p_start = start;
-    return md_decode_unicode(STR(0), start, ctx->size, &size);
+    }
+    return md_decode_unicode(text, start, size, width);
 }
 
-static unsigned
+unsigned
 md_attention_category(unsigned codepoint, int cjk_friendly)
 {
     unsigned category = 0;
@@ -3072,6 +3067,42 @@ md_attention_category(unsigned codepoint, int cjk_friendly)
     return category;
 }
 
+unsigned
+md_attention_before(const MD_CHAR* text, MD_SIZE size, int cjk_friendly, MD_SIZE* edge_width)
+{
+    MD_SIZE width;
+    unsigned previous = md_attention_codepoint(text, size, TRUE, &width);
+    unsigned before = md_attention_category(previous, cjk_friendly);
+#if defined MD4C_USE_UTF16 || defined MD4C_USE_UTF8
+    if(before == MD_ATTN_VS && width < size) {
+        MD_SIZE base_width;
+        unsigned base = md_attention_codepoint(text, size - width, TRUE, &base_width);
+        unsigned category = md_attention_category(base, cjk_friendly);
+        if(!(category & MD_ATTN_SPACE)) {
+            width += base_width;
+            before = category & ~MD_ATTN_IVS;
+            if(md_is_cjk_ambiguous_punct__(base, previous))
+                before = MD_ATTN_CJK | MD_ATTN_PUNCT;
+        }
+    }
+#endif
+    if(edge_width != NULL)
+        *edge_width = width;
+    return before;
+}
+
+unsigned
+md_attention_flanking(unsigned before, unsigned after)
+{
+    int left_flanking = !(after & MD_ATTN_SPACE) &&
+        (!(after & MD_ATTN_PUNCT) || (before & (MD_ATTN_SPACE | MD_ATTN_PUNCT)) ||
+         (after & MD_ATTN_CJK) || (before & (MD_ATTN_CJK | MD_ATTN_IVS)));
+    int right_flanking = !(before & MD_ATTN_SPACE) &&
+        (!(before & MD_ATTN_PUNCT) || (after & (MD_ATTN_SPACE | MD_ATTN_PUNCT)) ||
+         (before & MD_ATTN_CJK) || (after & MD_ATTN_CJK));
+    return (left_flanking ? MD_ATTN_OPEN : 0) | (right_flanking ? MD_ATTN_CLOSE : 0);
+}
+
 static unsigned
 md_attention_flags(MD_CTX* ctx, OFF line_beg, OFF line_end, OFF beg, OFF end, CHAR ch)
 {
@@ -3079,37 +3110,18 @@ md_attention_flags(MD_CTX* ctx, OFF line_beg, OFF line_end, OFF beg, OFF end, CH
     unsigned before = MD_ATTN_SPACE;
     unsigned after = MD_ATTN_SPACE;
     unsigned flags = 0;
-    OFF previous = beg;
-    unsigned previous_codepoint = 0;
+    unsigned flanking;
     int left_flanking, right_flanking;
     SZ size;
 
-    if(beg > line_beg) {
-        previous_codepoint = md_decode_attention_before(ctx, beg, &previous);
-        before = md_attention_category(previous_codepoint, cjk_friendly);
-    }
+    if(beg > line_beg)
+        before = md_attention_before(STR(line_beg), beg - line_beg, cjk_friendly, NULL);
     if(end < line_end)
         after = md_attention_category(md_decode_unicode(STR(0), end, ctx->size, &size), cjk_friendly);
 
-#if defined MD4C_USE_UTF16 || defined MD4C_USE_UTF8
-    if(before == MD_ATTN_VS && previous > line_beg) {
-        OFF base_start;
-        unsigned base = md_decode_attention_before(ctx, previous, &base_start);
-        unsigned category = md_attention_category(base, cjk_friendly);
-        if(!(category & MD_ATTN_SPACE)) {
-            before = category & ~MD_ATTN_IVS;
-            if(md_is_cjk_ambiguous_punct__(base, previous_codepoint))
-                before = MD_ATTN_CJK | MD_ATTN_PUNCT;
-        }
-    }
-#endif
-
-    left_flanking = !(after & MD_ATTN_SPACE) &&
-        (!(after & MD_ATTN_PUNCT) || (before & (MD_ATTN_SPACE | MD_ATTN_PUNCT)) ||
-         (after & MD_ATTN_CJK) || (before & (MD_ATTN_CJK | MD_ATTN_IVS)));
-    right_flanking = !(before & MD_ATTN_SPACE) &&
-        (!(before & MD_ATTN_PUNCT) || (after & (MD_ATTN_SPACE | MD_ATTN_PUNCT)) ||
-         (before & MD_ATTN_CJK) || (after & MD_ATTN_CJK));
+    flanking = md_attention_flanking(before, after);
+    left_flanking = (flanking & MD_ATTN_OPEN) != 0;
+    right_flanking = (flanking & MD_ATTN_CLOSE) != 0;
 
     /* Underscores retain CommonMark's additional intraword restrictions. */
     if(left_flanking && (ch != _T('_') || !right_flanking || (before & MD_ATTN_PUNCT)))

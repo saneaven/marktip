@@ -90,5 +90,5 @@ def test_editor_mark_on_cjk_punctuation_roundtrips_before_latin(mark_type):
             ],
         }],
     }
-    markdown = tm.from_dict(ast).to_markdown(canonical=True)
+    markdown = tm.from_dict(ast, cjk_friendly=True).to_markdown(canonical=True)
     assert tm.from_markdown(markdown, cjk_friendly=True).to_dict() == ast

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "md4c.h"
+
 #include "ast.h"
 #include "form.h"
 #include "tags.h"
@@ -16,6 +18,49 @@ inline bool has_mark(const std::vector<Mark>& marks, std::string_view type) {
 
 inline bool same_run_marks(const std::vector<Mark>& left, const std::vector<Mark>& right) {
     return left == right;
+}
+
+inline std::size_t common_prefix(const std::vector<Mark>& left, const std::vector<Mark>& right) {
+    std::size_t count = 0;
+    while (count < left.size() && count < right.size() && left[count] == right[count]) {
+        ++count;
+    }
+    return count;
+}
+
+inline unsigned emphasis_bit(const Mark& mark) {
+    std::string_view type = mark.type;
+    if (type == "bold") return 1;
+    if (type == "italic") return 2;
+    if (type == "strike") return 4;
+    return 0;
+}
+
+inline unsigned character_category(std::string_view text, bool trailing, bool cjk_friendly, MD_SIZE& width) {
+    if (text.empty()) {
+        width = 0;
+        return MD_ATTN_SPACE;
+    }
+    if ((trailing ? text.back() : text.front()) == '\n') {
+        width = 1;
+        return MD_ATTN_SPACE;
+    }
+    if (trailing) {
+        if (text.size() > 8) {
+            text.remove_prefix(text.size() - 8);
+        }
+        return md_attention_before(text.data(), static_cast<MD_SIZE>(text.size()), cjk_friendly, &width);
+    }
+    auto size = static_cast<MD_SIZE>(std::min<std::size_t>(text.size(), 4));
+    return md_attention_category(md_attention_codepoint(text.data(), size, false, &width), cjk_friendly);
+}
+
+inline unsigned inline_edge(const Node& node, bool trailing, bool cjk_friendly) {
+    if (std::string_view(node.type) == "text") {
+        MD_SIZE width;
+        return character_category(node.text, trailing, cjk_friendly, width);
+    }
+    return node.type == "hardBreak" ? MD_ATTN_SPACE : MD_ATTN_PUNCT;
 }
 
 inline void remove_enclosing_marks(std::vector<Mark>& marks, const std::vector<Mark>& enclosing) {
@@ -61,7 +106,7 @@ struct InlineRun {
             }
         }
         if (extended) {
-            // Tag marks enclose the emphasis whose whitespace the writer moves.
+            // Tag marks enclose Markdown delimiters in the written run.
             order_tag_marks(result, schema);
         }
         return result;

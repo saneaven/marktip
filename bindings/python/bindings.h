@@ -27,7 +27,7 @@ std::shared_ptr<const Schema> schema_from_py(pybind11::handle value);
 Document from_dict_py(pybind11::dict root, pybind11::object link_schemes, pybind11::object image_schemes,
                       pybind11::object link_relative, pybind11::object image_relative,
                       pybind11::object reject_node_types, pybind11::object strict, pybind11::object schema,
-                      pybind11::object base);
+                      pybind11::object base, bool cjk_friendly);
 Document from_markdown_py(pybind11::object markdown, bool cjk_friendly, bool html, pybind11::object link_schemes,
                           pybind11::object image_schemes, pybind11::object link_relative,
                           pybind11::object image_relative, pybind11::object reject_node_types,
