@@ -25,7 +25,7 @@ struct DictDocument {
     // Strict reads keep input parents by arena index for errors after normalization.
     std::vector<std::size_t> input_parents;
 
-    Document finish(const NodeTypePolicy& node_policy, const UriPolicy& uri_policy, bool cjk_friendly = false) && {
+    Document finish(const NodeTypePolicy& node_policy, const UriPolicy& uri_policy, bool cjk_friendly) && {
         finalize_document(document, node_policy, uri_policy, cjk_friendly, base != nullptr ? &present : nullptr);
         if (base != nullptr) {
             present.resize(document.node_count());

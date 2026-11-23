@@ -61,4 +61,8 @@ inline bool is_empty_list_or_table(const Node& node) {
     return kind == NodeKind::List || kind == NodeKind::OrderedList || kind == NodeKind::Table;
 }
 
+inline bool fills_empty_paragraph(NodeKind kind) {
+    return kind == NodeKind::ParagraphContainer || kind == NodeKind::TaskItem || kind == NodeKind::TableCell;
+}
+
 }  // namespace marktip

@@ -20,6 +20,8 @@ MD4C leaves `MD_TEXT_ENTITY` substrings verbatim in `MD_ATTRIBUTE`, so `&#106;av
 `entity.h` is an internal header — it is not covered by MD4C's API stability and carries no `extern "C"` guard.
 An upstream bump therefore has to re-check that `const ENTITY* entity_lookup(const char*, size_t)` and the `&name;` key format still hold.
 
+The writer's W4 escaping in `src/serializer.cpp` copies md4c's permissive autolink recognizer conditions, which also need to be rechecked on an upstream bump.
+
 ## Local patches (deviations from upstream)
 
 - Top-level source segments (md4c.h, md4c.c): `MD_PARSER::source_segments` receives one ordered `MD_SOURCE_SEGMENT` array after pass 1 and before pass 2's root-child callbacks.

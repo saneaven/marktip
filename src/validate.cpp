@@ -1,6 +1,7 @@
 #include "validate.h"
 
 #include <algorithm>
+#include <initializer_list>
 #include <stdexcept>
 #include <utility>
 
@@ -8,8 +9,10 @@
 #include "errors.h"
 #include "form.h"
 #include "inline_runs.h"
-#include "node_kind.h"
 #include "markdown_parser.h"
+#include "node_kind.h"
+#include "normalize.h"
+#include "serializer.h"
 #include "tags.h"
 
 namespace marktip {
@@ -121,9 +124,45 @@ bool contains_emphasis(const Document& document, const Node& node) {
                            format_path(path));
 }
 
+bool inline_round_trips(const Document& document, std::size_t index, const Node& parent,
+                        const NodeSpec* declared, const MarkdownParser& reader,
+                        bool cjk_friendly, bool pipe_cell, bool task_checkbox) {
+    const Node& block = document.node(index);
+    try {
+        std::string rendered = render_textblock_for_readback(document, index, parent, pipe_cell, task_checkbox);
+        const NodeSpec* detached_textblock = pipe_cell || task_checkbox ? nullptr : declared;
+        Document parsed = reader.parse(std::move(rendered), detached_textblock);
+        normalize_document(parsed, cjk_friendly);
+        const Node* container = &parsed.root();
+        auto descend = [&](std::initializer_list<std::string_view> wrappers) {
+            for (std::string_view type : wrappers) {
+                if (container->content.size() != 1) {
+                    return false;
+                }
+                container = &parsed.node(container->content.front());
+                if (container->type != type) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        if ((pipe_cell && !descend({"table", "tableRow", "tableHeader"})) ||
+            (task_checkbox && !descend({"taskList", "taskItem"}))) {
+            return false;
+        }
+        if (container->content.size() != 1) {
+            return false;
+        }
+        const Node& reread = parsed.node(container->content.front());
+        return reread.type == block.type && same_carried_inline_content(document, block, parsed, reread);
+    } catch (const MarktipError&) {
+        return false;
+    }
+}
+
 void check_block_representability(const Document& document, std::size_t index, const Node& parent,
                                   const std::vector<std::size_t>& input_parents, const MarkdownParser& reader,
-                                  bool pipe_table, bool markdown_list) {
+                                  bool cjk_friendly, bool pipe_table, bool markdown_list) {
     const Node& node = document.node(index);
     if (node.content.empty()) {
         return;
@@ -138,9 +177,9 @@ void check_block_representability(const Document& document, std::size_t index, c
     if (kind == NodeKind::Paragraph || kind == NodeKind::Heading ||
         (declared != nullptr && declared->shape == Shape::TextBlock)) {
         if (contains_emphasis(document, node) &&
-            !reader.inline_round_trips(document, index, parent, declared,
-                                       pipe_table && is_table_cell(parent.type),
-                                       markdown_list && index == parent.content.front())) {
+            !inline_round_trips(document, index, parent, declared, reader, cjk_friendly,
+                                pipe_table && is_table_cell(parent.type),
+                                markdown_list && index == parent.content.front())) {
             throw_emphasis(input_path(index, input_parents));
         }
         return;
@@ -175,7 +214,7 @@ void check_block_representability(const Document& document, std::size_t index, c
         child_markdown_list = !schema.has_list_tags() || !uses_tag_form(document, node, *schema.node(node.type));
     }
     for (std::size_t child : node.content) {
-        check_block_representability(document, child, node, input_parents, reader, pipe_table,
+        check_block_representability(document, child, node, input_parents, reader, cjk_friendly, pipe_table,
                                      child_markdown_list);
     }
 }
@@ -524,7 +563,8 @@ void check_representability(const Document& document, const std::vector<std::siz
                 continue;
             }
         }
-        check_block_representability(document, index, document.root(), input_parents, reader, false, false);
+        check_block_representability(document, index, document.root(), input_parents, reader, cjk_friendly,
+                                     false, false);
     }
 }
 

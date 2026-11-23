@@ -244,8 +244,9 @@ EDITOR_DOCUMENTS = (
          normalized=node("doc", code_block("x", info="\tpy options"))),
 
     # Writer spellings.
-    case("three-consecutive-hard-breaks", paragraph(text("a"), HARD_BREAK, HARD_BREAK, HARD_BREAK, text("b"))),
-    case("all-space-code-span", paragraph(text("  ", CODE))),
+    case("three-consecutive-hard-breaks", paragraph(text("a"), HARD_BREAK, HARD_BREAK, HARD_BREAK, text("b")),
+         expected_markdown="a" + "\\\n" * 3 + "b"),
+    case("all-space-code-span", paragraph(text("  ", CODE)), expected_markdown="`  `"),
     case("pipe-led-table-delimiter-in-paragraph", paragraph(text("a | b\n| --- | --- |"))),
     case("colon-led-table-delimiter-in-paragraph", paragraph(text("a | b\n:--- | ---"))),
     case("plain-url-text", paragraph(text("visit https://example.com today"))),
@@ -254,7 +255,8 @@ EDITOR_DOCUMENTS = (
     case("backtick-in-link-destination-before-code-span",
          paragraph(text("link", mark("link", href="/a`b")), text(" "), text("code", CODE))),
     case("empty-link-destination-with-title", paragraph(text("link", mark("link", href="", title="title")))),
-    case("fence-info-with-options", code_block("x\n", language="python", info="python numbered")),
+    case("fence-info-with-options", code_block("x\n", language="python", info="python numbered"),
+         expected_markdown="```python numbered\nx\n\n```"),
     case("code-block-without-final-newline", code_block("x")),
     case("loose-list-with-quote", bullet_list(list_item(paragraph(text("one")),
                                                         node("blockquote", paragraph(text("two")))), tight=False)),

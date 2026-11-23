@@ -194,6 +194,21 @@ def test_html_nodes_fall_back_to_content_when_attr_is_absent():
     assert doc_with(inline) == "a<u>U</u>b"
 
 
+@pytest.mark.parametrize("first", [
+    {"type": "htmlInline", "content": [{"type": "text", "text": "<i>A</i>"}]},
+    {"type": "htmlInline", "attrs": {"html": "<i>A</i>"}},
+], ids=["content-content", "attr-content"])
+def test_adjacent_inline_html_preserves_content_fallback(first):
+    paragraph = {"type": "paragraph", "content": [
+        {"type": "text", "text": "Start "},
+        first,
+        {"type": "htmlInline", "content": [{"type": "text", "text": "<b>B</b>"}]},
+        {"type": "text", "text": "End"},
+    ]}
+    document = tm.from_dict({"type": "doc", "content": [paragraph]}, strict="off")
+    assert document.to_markdown(canonical=True) == "Start <i>A</i><b>B</b>End"
+
+
 def test_html_attr_wins_over_content():
     node = {
         "type": "htmlBlock",

@@ -14,8 +14,6 @@ public:
     MarkdownParser& operator=(const MarkdownParser&) = delete;
 
     Document parse(std::string markdown, const NodeSpec* detached_textblock = nullptr) const;
-    bool inline_round_trips(const Document& document, std::size_t index, const Node& parent,
-                            const NodeSpec* declared, bool pipe_cell, bool task_checkbox) const;
 
 private:
     ParseOptions options_;

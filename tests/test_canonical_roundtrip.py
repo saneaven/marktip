@@ -25,6 +25,10 @@ def _non_whitespace(text):
             yield char, category
 
 
+def _normalize_newlines(text):
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _signature(document, schema):
     declarations = {} if schema is None else {mark.name: mark.attrs for mark in schema.marks}
     overlays = {} if schema is None else schema.core_attrs
@@ -49,12 +53,11 @@ def _signature(document, schema):
         attrs = node.get("attrs", {})
         children = node.get("content", ())
         if kind == "text":
-            code = ("code", ()) in marks
             for char, category in _non_whitespace(node["text"]):
-                value = ("code", char) if code else char
-                yield (), value, marks if code or category[0] not in "PS" else frozenset()
+                yield (), char, marks if category[0] not in "PS" else frozenset()
         elif kind == "codeBlock":
-            body = "".join(char for child in children for char, _ in _non_whitespace(child["text"]))
+            # The reader already removes the code block's structural newline.
+            body = _normalize_newlines("".join(child["text"] for child in children))
             yield (), (kind, body), marks
         elif kind == "image":
             yield (), (kind, attrs["src"], attrs.get("alt") or "", attrs.get("title") or ""), marks
@@ -65,18 +68,27 @@ def _signature(document, schema):
         else:
             def child_group(entry):
                 index, child = entry
-                if child["type"] == "htmlInline":
-                    return marks | frozenset(mark_key(mark) for mark in child.get("marks", ()))
-                return index
+                child_kind = child["type"]
+                if child_kind in ("htmlInline", "text"):
+                    child_marks = marks | frozenset(mark_key(mark) for mark in child.get("marks", ()))
+                    if child_kind == "htmlInline" or ("code", ()) in child_marks:
+                        return child_kind, child_marks
+                return index, None
 
             positions = Counter()
-            for group_marks, group in groupby(enumerate(children), key=child_group):
+            for (group_kind, group_marks), group in groupby(enumerate(children), key=child_group):
                 index, child = next(group)
                 child_kind = child["type"]
                 child_attrs = child.get("attrs", {})
-                if child_kind == "htmlInline":
+                if group_kind == "htmlInline":
                     html = child_attrs["html"] + "".join(part["attrs"]["html"] for _, part in group)
                     characters = (((), (child_kind, html), group_marks),)
+                elif group_kind == "text":
+                    # Adjacent equal-mark runs can split a CRLF across nodes.
+                    body = child["text"] + "".join(part["text"] for _, part in group)
+                    for char in _normalize_newlines(body).replace("\n", " "):
+                        yield (), ("code", char), group_marks
+                    continue
                 else:
                     characters = tuple(visits(child, marks))
                 if child_kind == "text":
@@ -113,14 +125,6 @@ def _signature(document, schema):
     return tuple(visits(document, frozenset()))
 
 
-class _CanonicalMismatch(AssertionError):
-    pass
-
-
-class _BaseSpellingMismatch(AssertionError):
-    pass
-
-
 RUN_MASKS = tuple("".join(str(mask) for mask in masks) for masks in product(range(8), repeat=3))
 
 # Masks use bold=1, italic=2 and strike=4 in run order.
@@ -151,16 +155,13 @@ REFUSES = {
 def _canonical_roundtrip(document, **options):
     canonical = document.to_markdown(canonical=True)
     reread = tm.from_markdown(canonical, **options)
-    rewritten = reread.to_markdown(canonical=True)
-    if not (reread == document and rewritten == canonical):
-        raise _CanonicalMismatch(canonical, rewritten, document.to_dict(), reread.to_dict())
+    assert reread == document, (canonical, document.to_dict(), reread.to_dict())
+    assert reread.to_markdown(canonical=True) == canonical
     return canonical
 
 
 def _base_spelling(document, markdown):
-    written = document.to_markdown()
-    if written != markdown:
-        raise _BaseSpellingMismatch(markdown, written)
+    assert document.to_markdown() == markdown
 
 
 def _storage_roundtrip(document, **options):

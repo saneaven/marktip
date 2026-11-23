@@ -5,6 +5,7 @@
 
 #include "ast.h"
 #include "compiler.h"
+#include "node_kind.h"
 
 namespace marktip {
 
@@ -17,10 +18,7 @@ bool has_tag_attr(const AttrList& attrs, const std::vector<AttrSpec>& specs) {
 namespace {
 
 bool omits_empty_paragraph(const Node& parent) {
-    std::string_view type = parent.type;
-    return parent.content.size() == 1 &&
-           (type == "listItem" || type == "taskItem" || type == "tableCell" || type == "tableHeader" ||
-            type == "blockquote");
+    return parent.content.size() == 1 && fills_empty_paragraph(node_kind(parent.type));
 }
 
 bool different_cell_alignment(const Node& header, const Node& cell) {

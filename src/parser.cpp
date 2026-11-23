@@ -6,7 +6,6 @@ extern "C" {
 
 #include <algorithm>
 #include <cstddef>
-#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -14,9 +13,7 @@ extern "C" {
 
 #include "errors.h"
 #include "lift.h"
-#include "normalize.h"
 #include "schema.h"
-#include "serializer.h"
 
 namespace marktip {
 namespace {
@@ -843,41 +840,6 @@ Document MarkdownParser::parse(std::string markdown, const NodeSpec* detached_te
 Document parse_to_document(std::string markdown, const ParseOptions& options,
                            std::shared_ptr<const Schema> schema) {
     return MarkdownParser(options, std::move(schema)).parse(std::move(markdown));
-}
-
-bool MarkdownParser::inline_round_trips(const Document& document, std::size_t index, const Node& parent,
-                                        const NodeSpec* declared, bool pipe_cell, bool task_checkbox) const {
-    const Node& block = document.node(index);
-    try {
-        std::string rendered = render_textblock_for_readback(document, index, parent, pipe_cell, task_checkbox);
-        const NodeSpec* detached_textblock = pipe_cell || task_checkbox ? nullptr : declared;
-        Document parsed = parse(std::move(rendered), detached_textblock);
-        normalize_document(parsed, options_.cjk_friendly);
-        const Node* container = &parsed.root();
-        auto descend = [&](std::initializer_list<std::string_view> wrappers) {
-            for (std::string_view type : wrappers) {
-                if (container->content.size() != 1) {
-                    return false;
-                }
-                container = &parsed.node(container->content.front());
-                if (container->type != type) {
-                    return false;
-                }
-            }
-            return true;
-        };
-        if ((pipe_cell && !descend({"table", "tableRow", "tableHeader"})) ||
-            (task_checkbox && !descend({"taskList", "taskItem"}))) {
-            return false;
-        }
-        if (container->content.size() != 1) {
-            return false;
-        }
-        const Node& reread = parsed.node(container->content.front());
-        return reread.type == block.type && same_carried_inline_content(document, block, parsed, reread);
-    } catch (const MarktipError&) {
-        return false;
-    }
 }
 
 }  // namespace marktip

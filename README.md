@@ -52,6 +52,10 @@ doc = tm.from_dict(ast)
   The sole filler paragraph in a list item, task item, table cell or blockquote stays unwritten.
   With heading tags, `| ## title |` becomes `| <h2>title</h2> |` for a cell containing a heading, including when the schema also has table tags.
   Tag-form lists and tables write the normalized attrs `tight`, `start` on ordered lists, and `colCount` on tables.
+- Markdown and dict conversion can now raise `invalid_content` if removing an empty block leaves a required child that normalization cannot create.
+  For example, with table tags enabled, a declared `callout` with `content="table+"` fails if its only child is an empty `<table>`.
+  Both conversions accepted that input in 0.8.3.
+  The error can also occur on dict input with `strict="off"`.
 - Strict editor saves can raise `InvalidNodeError` with code `unrepresentable` for emphasis the canonical writer cannot carry or for a pipe cell it cannot carry.
   Display the error to the editor user.
   Pass `cjk_friendly=True` to `from_dict` or `cjkFriendly: true` to `fromDict` when that Markdown will be read in CJK-friendly mode.
@@ -279,6 +283,7 @@ The frontend can render the stored `doc` without running marktip.
 - The remembered text of a block dropped as empty stays in the output.
   Adding or rewriting surrounding blocks can change how that text reads back.
 - If an editor omits a cell's `align` but keeps `tight`, a tag-form table in a tight list item can lose its match and remembered spelling.
+- In a schema without table tags, resubmitting a table with only a header cell's `align` key omitted can lose the column's alignment and the table's remembered spelling even with `base=`.
 - Adjacent links to the same destination can merge before matching if the caller omits the attr that distinguished them, such as the second link's `title`.
   The merged block loses the attr and the remembered spelling.
   Conversely, submitting two equal link runs with `target` omitted from only one can keep them separate, so they no longer match a base that joined them.
@@ -583,7 +588,9 @@ Declared tag attrs are written in declaration order and always double-quoted.
 `&`, `"`, `<`, `>`, `|`, the backtick and C0 controls are written as character references.
 The reader accepts double-quoted, single-quoted, unquoted and value-less boolean attrs, decodes character references, and checks the declared type.
 An undeclared attr on a declared tag is `unknown_attr`; a repeated attr is `invalid_attr_value`.
-Dict input under `strict="off"` skips declared attr and content validation, and attrs the declaration does not carry are not written.
+Dict input under `strict="off"` skips declared attr and content validation when reading the submitted tree.
+If normalization removes a child and cannot fill the required content, it raises `invalid_content` at every strict level.
+Writing omits attrs the declaration does not carry.
 
 `MarkSpec.excludes=None` means the mark excludes its own type, `()` excludes nothing, and `"_"` excludes every mark.
 Otherwise pass a tuple of mark names.
@@ -642,6 +649,8 @@ The reader uses only the first word for a declared carrier.
 For example, the suffix in `math display` is omitted from the declared node and its canonical spelling.
 A leading tab prevents the info from selecting a declared carrier.
 The code body loses its final newline; writing adds one newline.
+When md4c reads a code block or a declared fence carrier, it expands tabs in the leading indentation to spaces.
+Tabs after the leading indentation are kept.
 The fence form is used only when the body attr is set, no other attr is set, the body has no carriage return, and no line's leading whitespace contains a tab.
 Otherwise the node uses its tag form, so an unset body and an empty body remain distinct.
 Strict dict input refuses a core `codeBlock` whose info word collides with a declared fence, with `unrepresentable`.
@@ -675,7 +684,7 @@ Without a redeclaration, a dropped attr stays dropped in either form and keeps i
 
 A set overlay attr selects the tag form.
 A kept empty paragraph also uses its available tag, except for a sole filler paragraph in a list item, task item, table cell or blockquote.
-A heading with a hard break or newline, including one in an inline HTML payload, uses its available tag too.
+A heading with a hard break, a newline in text, or a newline in an inline HTML payload uses its available tag too.
 A heading directly in a pipe cell uses its tag whenever the schema provides it.
 Declaring attrs on any list or table type activates its whole family.
 A list uses tags when it or any item needs them; items follow the list's form.
@@ -837,7 +846,7 @@ For `from_markdown` it locates the node in the parsed document, since the input 
 | `invalid_uri_char` | `InvalidNodeError` | a core or declared URI attr contains an ASCII control character |
 | `disallowed_node_type` | `InvalidNodeError` | a node type appears in `reject_node_types` |
 | `unknown_field` | `InvalidNodeError` | `strict`: a node/mark top-level key is not defined for that type |
-| `invalid_content` | `InvalidNodeError` | a content-model violation on strict dict input or a declared tag, or an invalid strict text payload |
+| `invalid_content` | `InvalidNodeError` | a content-model violation on strict dict input or a declared tag, a required child that cannot be filled after normalization, or an invalid strict text payload |
 | `unknown_attr` | `InvalidNodeError` | an unknown attr on strict dict input or a declared tag |
 | `invalid_attr_value` | `InvalidNodeError` | a wrong type, out-of-range value or repeated tag attr |
 | `unrepresentable` | `InvalidNodeError` | well-formed input would lose content or attrs in the selected Markdown form, including emphasis the writer's spelling cannot carry |
@@ -913,8 +922,9 @@ It deliberately does **not** validate, unless `strict` asks it to:
   With strict validation disabled, a key the converter does not read is ignored.
   Both enabled levels reject it with `unknown_field`, including `marks` on a block or `text` on a non-text node.
 - **Content models.**
-  With strict validation disabled, which node may contain which is not checked — a `text` node directly under `doc` is accepted and serialized.
+  With strict validation disabled, the submitted tree's content model is unchecked, so a `text` node directly under `doc` is accepted and serialized.
   Both enabled levels enforce the content-model table above, the text payload shape, and the absence of marks inside a code block.
+  After normalization removes a child, a required child that cannot be filled raises `invalid_content` at every strict level.
 - **Raw HTML.**
   The URI policy governs link/image and declared URI attrs, not undeclared markup inside `htmlBlock`/`htmlInline`.
   Without an active link tag form, `<a href="javascript:...">` remains raw HTML and passes it.
@@ -991,6 +1001,7 @@ The writer uses the resulting tree when it needs to regenerate a block.
   Each LI's attrs are decoded against the type selected by its own `checked`.
 - **Tables** — without table tags, the first row becomes the header, subsequent rows become body rows, and body cells take the header alignment.
   Multiple paragraphs without tag attrs in a cell join with hard breaks.
+  Under `strict="off"`, this join also applies to paragraphs with tag attrs and can drop those attrs.
   Short rows are padded with empty cells.
   With table tags, differing row lengths and body alignments are carried in tags.
   In either form `colCount` is the widest row's cell count, which can be smaller than the visual width with spanning cells.

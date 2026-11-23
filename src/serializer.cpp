@@ -268,7 +268,8 @@ void escape_autolinks(std::string& run, std::size_t start = 0) {
     }
 }
 
-// Stored text has no NUL, and the marker's nondigit after adjacent NULs keeps it distinct from math tokens through escaping.
+// Stored text has no NUL,
+// and the marker's nondigit after adjacent NULs keeps it distinct from math tokens through escaping.
 constexpr std::string_view kHtmlLineMarker("\0\0h\0", 4);
 
 // Escape block starts on paragraph lines,

@@ -405,6 +405,9 @@ bool join_inline(Node& left, const Node& right, bool text) {
     if (text) {
         left.text += right.text;
     } else {
+        if (find_attr(left.attrs, "html") == nullptr || find_attr(right.attrs, "html") == nullptr) {
+            return false;
+        }
         std::string joined = attr_string(left.attrs, "html");
         joined += attr_string(right.attrs, "html");
         set_attr(left.attrs, "html", AttrValue::string(std::move(joined)));
@@ -425,6 +428,33 @@ struct EdgeEdit {
     unsigned removed;
     bool trailing;
 };
+
+unsigned character_category(std::string_view text, bool trailing, bool cjk_friendly, MD_SIZE& width) {
+    if (text.empty()) {
+        width = 0;
+        return MD_ATTN_SPACE;
+    }
+    if ((trailing ? text.back() : text.front()) == '\n') {
+        width = 1;
+        return MD_ATTN_SPACE;
+    }
+    if (trailing) {
+        if (text.size() > 8) {
+            text.remove_prefix(text.size() - 8);
+        }
+        return md_attention_before(text.data(), static_cast<MD_SIZE>(text.size()), cjk_friendly, &width);
+    }
+    auto size = static_cast<MD_SIZE>(std::min<std::size_t>(text.size(), 4));
+    return md_attention_category(md_attention_codepoint(text.data(), size, false, &width), cjk_friendly);
+}
+
+unsigned inline_edge(const Node& node, bool trailing, bool cjk_friendly) {
+    if (std::string_view(node.type) == "text") {
+        MD_SIZE width;
+        return character_category(node.text, trailing, cjk_friendly, width);
+    }
+    return node.type == "hardBreak" ? MD_ATTN_SPACE : MD_ATTN_PUNCT;
+}
 
 unsigned emphasis_at_edge(const std::vector<Mark>& marks, std::size_t prefix, unsigned inside,
                           unsigned outside, bool trailing) {
@@ -860,16 +890,12 @@ NodeKind Normalizer::normalize_node(std::size_t index, NodeKind kind, LineBreaks
         if (find_attr(node.attrs, "checked") == nullptr) {
             set_attr(node.attrs, "checked", AttrValue::boolean(false));
         }
-        [[fallthrough]];
-    case NodeKind::ParagraphContainer:
+        break;
     case NodeKind::TableCell:
-        if (kind == NodeKind::TableCell && !table_tags && node.content.size() > 1) {
+        if (!table_tags && node.content.size() > 1) {
             join_cell_paragraphs(document, index);
         }
-        if (normalize_children(index, nullptr, kind == NodeKind::TableCell ? LineBreaks::Cell : LineBreaks::Preserve)) {
-            document.append_child(index, Node {"paragraph", {}, {}, {}, {}});
-        }
-        return kind;
+        break;
     case NodeKind::Image:
         if (find_attr(node.attrs, "alt") == nullptr) {
             set_attr(node.attrs, "alt", AttrValue::string(plain_text(document, node)));
@@ -905,12 +931,16 @@ NodeKind Normalizer::normalize_node(std::size_t index, NodeKind kind, LineBreaks
     case NodeKind::CodeText:
     case NodeKind::HtmlInline:
     case NodeKind::EmptyParagraph:
+    case NodeKind::ParagraphContainer:
     case NodeKind::Container:
     case NodeKind::Removed:
         break;
     }
-    if (!node.content.empty()) {
-        normalize_children(index, spec);
+    if (!document.node(index).content.empty()) {
+        normalize_children(index, spec, kind == NodeKind::TableCell ? LineBreaks::Cell : LineBreaks::Preserve);
+    }
+    if (fills_empty_paragraph(kind) && document.node(index).content.empty()) {
+        document.append_child(index, Node {"paragraph", {}, {}, {}, {}});
     }
     return kind;
 }
