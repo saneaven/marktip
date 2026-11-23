@@ -301,7 +301,7 @@ def test_writer_omits_equal_delimiter_marks_inside_marked_containers(html, level
         body = "<d>x</d>"
     ast = doc(container(*children, marks=[mark]))
     source = tm.from_dict(ast, schema=current_schema, strict=level)
-    assert source.to_dict() == ast
+    assert source.to_dict() == doc(container(*expected, marks=[mark]))
     markup = opening + "<c>" + body + "</c>" + closing
     assert source.to_markdown(canonical=True) == markup
     parsed = tm.from_markdown(markup, schema=current_schema, html=html)
@@ -318,7 +318,7 @@ def test_writer_groups_code_text_after_omitting_enclosing_container_marks(html, 
     code = {"type": "code"}
     ast = doc(container(text("a", code), text("b", code, mark), marks=[mark]))
     source = tm.from_dict(ast, schema=schema(), strict="exact")
-    assert source.to_dict() == ast
+    assert source.to_dict() == doc(container(text("ab", code), marks=[mark]))
     markup = opening + "<c>`ab`</c>" + closing
     assert source.to_markdown(canonical=True) == markup
     parsed = tm.from_markdown(markup, schema=schema(), html=html)

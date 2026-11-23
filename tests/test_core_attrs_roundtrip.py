@@ -267,18 +267,27 @@ def test_markdown_form_link_text_keeps_its_existing_bytes_when_tag_form_is_activ
     (text("see http://x.com", mark("link", href="u")), "[see http://x.com](u)"),
     (text("mail a@b.com now", mark("link", href="u")), "[mail a@b.com now](u)"),
     (text("go www.x.com now", mark("link", href="u")), "[go www.x.com now](u)"),
-    (text("see http://x.com", mark("bold"), mark("link", href="u")), "**[see http://x.com](u)**"),
+    (text("see http://x.com", mark("bold"), mark("link", href="u")), "[**see http://x.com**](u)"),
     (node("image", attrs={"src": "u", "alt": "see http://x.com"}), "![see http://x.com](u)"),
 ])
 def test_markdown_link_and_image_labels_keep_autolink_text_unescaped(html, child, markdown):
     roundtrip(doc(p(child)), None, markdown, html, "exact")
 
 
+def test_adjacent_bold_links_with_different_destinations_roundtrip():
+    markdown = "[**a**](/u)[**b**](/v)c"
+    document = tm.from_markdown(markdown)
+
+    written = document.to_markdown(canonical=True)
+    assert written == markdown
+    assert tm.from_markdown(written) == document
+
+
 @pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("level", LEVELS)
 @pytest.mark.parametrize("target", ("_blank", "_self"))
 @pytest.mark.parametrize("reverse", (False, True))
-def test_link_target_selects_its_form_and_only_tag_links_normalize_core_mark_order(html, level, target, reverse):
+def test_link_target_selects_its_form_and_normalizes_core_mark_order(html, level, target, reverse):
     schema = tm.Schema(core_attrs={"link": {"target": tm.Attr(str, default="_blank")}})
     marks = [mark("bold"), mark("link", href="https://example.com", target=target)]
     if reverse:
@@ -288,11 +297,8 @@ def test_link_target_selects_its_form_and_only_tag_links_normalize_core_mark_ord
         expected_marks = [mark("bold"), mark("link", href="https://example.com", target="_self")]
         markdown = '<a href="https://example.com" target="_self">**x**</a>'
     else:
-        expected_marks = [mark("bold"), mark("link", href="https://example.com")]
-        markdown = "**[x](https://example.com)**"
-        if reverse:
-            expected_marks.reverse()
-            markdown = "[**x**](https://example.com)"
+        expected_marks = [mark("link", href="https://example.com"), mark("bold")]
+        markdown = "[**x**](https://example.com)"
     source = tm.from_dict(ast, schema=schema, strict=level)
     assert source.to_dict()["content"][0]["content"][0]["marks"] == expected_marks
     parsed = roundtrip(ast, schema, markdown, html, level)

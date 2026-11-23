@@ -9,6 +9,7 @@
 
 #include "errors.h"
 #include "form.h"
+#include "inline_runs.h"
 #include "schema.h"
 #include "tags.h"
 
@@ -386,12 +387,6 @@ std::string mark_attr_string(const Mark& mark, const char* name, std::string fal
     return attr_string(mark.attrs, name, std::move(fallback));
 }
 
-bool has_mark(const std::vector<Mark>& marks, std::string_view type) {
-    return std::any_of(marks.begin(), marks.end(), [type](const Mark& mark) {
-        return mark.type == type;
-    });
-}
-
 std::string apply_marks(std::string rendered, const std::vector<Mark>& marks, const Schema& schema,
                         bool skip_code = false) {
     for (auto it = marks.rbegin(); it != marks.rend(); ++it) {
@@ -424,7 +419,7 @@ std::string apply_marks(std::string rendered, const std::vector<Mark>& marks, co
 
 // A run of consecutive inline nodes sharing the same marks, with its content
 // already rendered. `marks` excludes "code" (code spans are atomic per run).
-struct InlineRun {
+struct RenderedRun {
     std::vector<Mark> marks;
     std::string content;
 };
@@ -604,22 +599,22 @@ std::string close_delimiter(const Mark& mark, const Schema& schema) {
 // moved outside the emphasis marks (cf. prosemirror-markdown
 // expelEnclosingWhitespace). It stays inside enclosing non-emphasis marks
 // such as links, which have no whitespace restriction.
-void expel_boundary_whitespace(std::vector<InlineRun>& runs) {
+void expel_boundary_whitespace(std::vector<RenderedRun>& runs) {
     static const char* const kWhitespace = " \t\n";
     const std::vector<Mark> no_marks;
-    std::vector<InlineRun> result;
+    std::vector<RenderedRun> result;
 
     for (std::size_t i = 0; i < runs.size(); ++i) {
         const std::vector<Mark>& prev = i > 0 ? runs[i - 1].marks : no_marks;
         const std::vector<Mark>& next = i + 1 < runs.size() ? runs[i + 1].marks : no_marks;
-        InlineRun& run = runs[i];
+        RenderedRun& run = runs[i];
 
         std::size_t opening_emphasis = first_emphasis_at_or_after(run.marks, common_prefix(prev, run.marks));
         if (opening_emphasis < run.marks.size()) {
             std::size_t body = run.content.find_first_not_of(kWhitespace);
             std::size_t lead_len = body == std::string::npos ? run.content.size() : body;
             if (lead_len > 0) {
-                InlineRun lead;
+                RenderedRun lead;
                 lead.marks.assign(run.marks.begin(), run.marks.begin() + opening_emphasis);
                 lead.content = run.content.substr(0, lead_len);
                 run.content.erase(0, lead_len);
@@ -627,7 +622,7 @@ void expel_boundary_whitespace(std::vector<InlineRun>& runs) {
             }
         }
 
-        InlineRun tail;
+        RenderedRun tail;
         bool has_tail = false;
         std::size_t closing_emphasis = first_emphasis_at_or_after(run.marks, common_prefix(run.marks, next));
         if (closing_emphasis < run.marks.size() && !run.content.empty()) {
@@ -642,7 +637,7 @@ void expel_boundary_whitespace(std::vector<InlineRun>& runs) {
         }
 
         if (!run.content.empty()) {
-            InlineRun kept;
+            RenderedRun kept;
             if (!run.marks.empty()) {
                 kept.marks = run.marks;
             }
@@ -659,10 +654,10 @@ void expel_boundary_whitespace(std::vector<InlineRun>& runs) {
 
 // Emit runs keeping shared marks open across run boundaries, so e.g.
 // [a: bold][b: bold+italic] becomes "**a*b***" rather than "**a*****b***".
-std::string emit_runs(const std::vector<InlineRun>& runs, const Schema& schema) {
+std::string emit_runs(const std::vector<RenderedRun>& runs, const Schema& schema) {
     std::string out;
     std::vector<Mark> open;
-    for (const InlineRun& run : runs) {
+    for (const RenderedRun& run : runs) {
         std::size_t keep = common_prefix(open, run.marks);
         while (open.size() > keep) {
             out += close_delimiter(open.back(), schema);
@@ -1310,13 +1305,7 @@ private:
                 }
                 std::string rendered = open_node_tag(spec, node.attrs);
                 if (spec.shape == Shape::InlineContainer) {
-                    std::vector<Mark> inner = enclosing;
-                    for (const Mark& mark : node.marks) {
-                        if (mark.type != "code" && !uses_tag_form(mark, *schema_.mark(mark.type)) &&
-                            std::find(inner.begin(), inner.end(), mark) == inner.end()) {
-                            inner.push_back(mark);
-                        }
-                    }
+                    auto inner = enclosing_delimiters(schema_, enclosing, node.marks);
                     rendered += render_inlines(node, ctx, inner) + close_node_tag(spec, node.attrs);
                 }
                 return rendered;
@@ -1325,97 +1314,40 @@ private:
         return render_inlines(node, ctx, enclosing);
     }
 
-    const NodeSpec* declared_inline_spec(const Node& node) const {
-        const std::string& type = node.type;
-        if (type == "text" || type == "hardBreak" || type == "image" || type == "htmlInline") {
-            return nullptr;
-        }
-        const NodeSpec& spec = *schema_.node(type);
-        return !spec.core && (spec.shape == Shape::InlineAtom || spec.shape == Shape::InlineContainer)
-                   ? &spec : nullptr;
-    }
-
     std::string render_inlines(const Node& node, InlineContext ctx = InlineContext::Default,
                                const std::vector<Mark>& enclosing = {}) {
         if (node.content.empty() && node.type == "text") {
             return render_inline(node, ctx);
         }
 
-        std::vector<InlineRun> runs = build_runs(node.content, ctx, enclosing);
-        expel_boundary_whitespace(runs);
-        return emit_runs(runs, schema_);
-    }
-
-    std::vector<InlineRun> build_runs(const std::vector<std::size_t>& content, InlineContext ctx,
-                                      const std::vector<Mark>& enclosing) {
-        std::vector<InlineRun> runs;
-        auto without_enclosing = [&](const std::vector<Mark>& marks) {
-            std::vector<Mark> filtered;
-            for (const Mark& mark : marks) {
-                if (std::find(enclosing.begin(), enclosing.end(), mark) == enclosing.end()) {
-                    filtered.push_back(mark);
-                }
-            }
-            return filtered;
-        };
-        std::size_t i = 0;
-        while (i < content.size()) {
-            const Node& first = document_.node(content[i]);
-            std::vector<Mark> filtered;
-            if (!enclosing.empty()) {
-                filtered = without_enclosing(first.marks);
-            }
-            const std::vector<Mark>& marks = enclosing.empty() ? first.marks : filtered;
-            bool in_code = has_mark(marks, "code");
-            bool code_node = in_code && node_forms_ && declared_inline_spec(first) != nullptr;
-            in_code = in_code && !code_node;
-            bool escape_links = !in_code && !has_markdown_link(marks) && !has_markdown_link(enclosing);
-            std::size_t group_end = code_node ? i + 1 : content.size();
-            InlineRun run;
+        std::vector<RenderedRun> runs;
+        for_each_inline_run(document_, node.content, enclosing, node_forms_, [&](const InlineRun& run) {
+            bool escape_links = !run.in_code && !has_markdown_link(run.marks) && !has_markdown_link(enclosing);
             std::string group;
             std::size_t text_begin = 0;
-            std::size_t j = i;
-            while (j < group_end) {
-                const Node& child = document_.node(content[j]);
-                if (enclosing.empty() ? !(child.marks == first.marks) : !(without_enclosing(child.marks) == marks)) {
-                    break;
-                }
-                if (in_code && node_forms_ && declared_inline_spec(child) != nullptr) {
-                    break;
-                }
+            for (std::size_t i = run.begin; i < run.end; ++i) {
+                const Node& child = document_.node(node.content[i]);
                 bool ends_text = escape_links && child.type != "text";
                 if (ends_text) {
                     escape_autolinks(group, text_begin);
                 }
-                group += render_inline_content(child, ctx, in_code, enclosing);
+                group += render_inline_content(child, ctx, run.in_code, enclosing);
                 if (ends_text) {
                     text_begin = group.size();
                 }
-                ++j;
             }
             if (escape_links) {
                 escape_autolinks(group, text_begin);
             }
-
-            for (const Mark& mark : marks) {
-                if (mark.type != "code") {
-                    run.marks.push_back(mark);
-                }
-            }
-            if (extended_) {
-                // Tag marks must enclose delimiters before whitespace is expelled,
-                // so the whitespace keeps its tag marks and emphasis can still flank text.
-                order_tag_marks(run.marks, schema_);
-            }
-            run.content = in_code ? code_span(group) : std::move(group);
-            runs.push_back(std::move(run));
-            i = j;
-        }
-        return runs;
+            runs.push_back({run.delimiter_marks(schema_, extended_),
+                            run.in_code ? code_span(group) : std::move(group)});
+        });
+        expel_boundary_whitespace(runs);
+        return emit_runs(runs, schema_);
     }
 
     std::string render_inline(const Node& node, InlineContext ctx = InlineContext::Default) {
-        const NodeSpec* spec = node_forms_ ? declared_inline_spec(node) : nullptr;
+        const NodeSpec* spec = node_forms_ ? declared_inline_spec(schema_, node) : nullptr;
         bool in_code = has_mark(node.marks, "code");
         bool skip_code = in_code;
         if (spec != nullptr) {

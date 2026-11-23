@@ -96,7 +96,7 @@ def test_written_tag_outside_each_core_mark_roundtrips(html, level, reverse, cor
 @pytest.mark.parametrize("html", HTML)
 @pytest.mark.parametrize("level", LEVELS)
 def test_written_code_remains_innermost_while_tag_marks_roundtrip(html, level):
-    core = "***~~[`x`](https://example.com)~~***"
+    core = "[~~***`x`***~~](https://example.com)"
     expected = tm.from_markdown(core).to_dict()
     expected["content"][0]["content"][0]["marks"].append(mark("underline"))
     ast = doc(p(text("x", mark("underline"), mark("bold"), mark("italic"), mark("strike"),

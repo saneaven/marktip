@@ -532,6 +532,18 @@ def test_inherited_tag_link_attr_reorders_marks():
     assert tm.from_dict(document.to_dict(), schema=schema, strict="content") == document
 
 
+def test_link_order_roundtrips_after_inheriting_a_title_on_one_run():
+    base = tm.from_markdown('[**a*b***](/x "title")')
+    submitted = base.to_dict()
+    marks = submitted["content"][0]["content"][1]["marks"]
+    next(mark for mark in marks if mark["type"] == "link")["attrs"].pop("title")
+
+    document = tm.from_dict(submitted, base=base, strict="content")
+    assert document == base
+    assert tm.from_markdown(document.to_markdown(canonical=True)) == document
+    assert tm.from_dict(document.to_dict(), strict="content") == document
+
+
 def test_inherited_tag_link_attr_keeps_adjacent_code_runs_together():
     schema = tm.Schema(core_attrs={"link": {"target": tm.Attr(str)}})
     runs = [
@@ -540,12 +552,11 @@ def test_inherited_tag_link_attr_keeps_adjacent_code_runs_together():
         ]}
         for value in ("a", "b")
     ]
-    base = tm.from_dict({"type": "doc", "content": [{"type": "paragraph", "content": runs}]},
-                        schema=schema, strict="content")
-    submitted = base.to_dict()
-    marks = submitted["content"][0]["content"][1]["marks"]
-    marks.reverse()
-    marks[0]["attrs"].pop("target")
+    submitted = {"type": "doc", "content": [{"type": "paragraph", "content": runs}]}
+    base = tm.from_dict(submitted, schema=schema, strict="content")
+    for run in runs:
+        run["marks"][1]["attrs"].pop("target")
+    runs[1]["marks"].reverse()
 
     document = tm.from_dict(submitted, schema=schema, base=base, strict="content")
     assert document == base

@@ -1,10 +1,12 @@
 #include "normalize.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 
 #include "ast.h"
 #include "form.h"
+#include "inline_runs.h"
 #include "lift.h"
 #include "node_kind.h"
 #include "schema.h"
@@ -250,12 +252,6 @@ bool is_blank(char ch) {
     return ch == ' ' || ch == '\t';
 }
 
-bool is_code(const Node& node) {
-    return std::any_of(node.marks.begin(), node.marks.end(), [](const Mark& mark) {
-        return std::string_view(mark.type) == "code";
-    });
-}
-
 void normalize_newlines(std::string& text) {
     std::size_t write = text.find('\r');
     if (write == std::string::npos) {
@@ -271,10 +267,19 @@ void normalize_newlines(std::string& text) {
     text.resize(write);
 }
 
+NodeKind normalize_text(Node& node, bool in_code) {
+    normalize_newlines(node.text);
+    if (in_code) {
+        std::replace(node.text.begin(), node.text.end(), '\n', ' ');
+        return NodeKind::CodeText;
+    }
+    return NodeKind::Text;
+}
+
 void trim_before_soft_break(Document& document, const std::vector<std::size_t>& children, std::size_t& kept) {
     while (kept != 0) {
         Node& left = document.node(children[kept - 1]);
-        if (std::string_view(left.type) != "text" || !is_blank(left.text.back()) || is_code(left)) {
+        if (std::string_view(left.type) != "text" || !is_blank(left.text.back()) || has_mark(left.marks, "code")) {
             return;
         }
         left.text.erase(left.text.find_last_not_of(" \t") + 1);
@@ -286,7 +291,7 @@ void trim_before_soft_break(Document& document, const std::vector<std::size_t>& 
 }
 
 enum class LinePosition { Start, Content };
-enum class LineScope { Paragraph, Heading, Declared };
+enum class LineScope { Paragraph, Heading, Declared, Code };
 enum class LineBreaks { Preserve, Cell, FlatHeading };
 
 void normalize_line_text(Document& document, const std::vector<std::size_t>& children, std::string& text,
@@ -339,7 +344,8 @@ void trim_line_end(Document& document, const std::vector<std::size_t>& children,
     while (kept != 0) {
         Node& last = document.node(children[kept - 1]);
         if (!drop_breaks || kind != NodeKind::HardBreak) {
-            if (kind != NodeKind::Text || (!is_blank(last.text.back()) && last.text.back() != '\n') || is_code(last)) {
+            if (kind != NodeKind::Text || (!is_blank(last.text.back()) && last.text.back() != '\n') ||
+                has_mark(last.marks, "code")) {
                 return;
             }
             last.text.erase(last.text.find_last_not_of(" \t\n") + 1);
@@ -354,35 +360,35 @@ void trim_line_end(Document& document, const std::vector<std::size_t>& children,
     }
 }
 
-void flatten_heading_breaks(Document& document, std::vector<std::size_t>& children, std::size_t& kept,
-                            LineScope scope) {
-    std::size_t write = 0;
-    bool after_break = false;
-    for (std::size_t i = 0; i < kept; ++i) {
-        std::size_t index = children[i];
-        Node& child = document.node(index);
-        bool hard_break = child.type == "hardBreak";
-        if (hard_break) {
-            if (write == 0 && scope == LineScope::Heading) {
-                continue;
-            }
-            child.type = "text";
-            child.text = " ";
-        }
-        if (write != 0 && (hard_break || after_break) && child.type == "text") {
-            Node& left = document.node(children[write - 1]);
-            if (left.type == "text" && left.marks == child.marks) {
-                left.text += child.text;
-                after_break = hard_break;
-                continue;
-            }
-        }
-        children[write++] = index;
-        after_break = hard_break;
+enum class InlineMarkKind { Link, Strike, Italic, Bold, Code, Declared };
+
+InlineMarkKind inline_mark_kind(std::string_view type) {
+    if (type == "link") return InlineMarkKind::Link;
+    if (type == "strike") return InlineMarkKind::Strike;
+    if (type == "italic") return InlineMarkKind::Italic;
+    if (type == "bold") return InlineMarkKind::Bold;
+    if (type == "code") return InlineMarkKind::Code;
+    return InlineMarkKind::Declared;
+}
+
+void order_inline_marks(std::vector<Mark>& marks, const std::vector<Mark>& previous) {
+    std::array<std::size_t, 6> ranks;
+    for (std::size_t k = 0; k < ranks.size(); ++k) {
+        ranks[k] = previous.size() + k;
     }
-    kept = write;
-    if (kept != 0 && scope == LineScope::Heading) {
-        trim_line_end(document, children, kept, node_kind(document.node(children[kept - 1]).type), false);
+    for (std::size_t i = previous.size(); i != 0; --i) {
+        InlineMarkKind kind = inline_mark_kind(previous[i - 1].type);
+        if (kind < InlineMarkKind::Code) {
+            ranks[static_cast<std::size_t>(kind)] = i - 1;
+        }
+    }
+    auto before = [&](const Mark& a, const Mark& b) {
+        return ranks[static_cast<std::size_t>(inline_mark_kind(a.type))] <
+               ranks[static_cast<std::size_t>(inline_mark_kind(b.type))];
+    };
+    // The rank is per type, so repeated marks retain their input occurrence order.
+    if (!std::is_sorted(marks.begin(), marks.end(), before)) {
+        std::stable_sort(marks.begin(), marks.end(), before);
     }
 }
 
@@ -398,70 +404,153 @@ struct Normalizer {
     PathStack path;
 
     void normalize_root();
-    NodeKind normalize_node(std::size_t index, LineBreaks breaks);
+    NodeKind normalize_node(std::size_t index, NodeKind kind, LineBreaks breaks, const std::vector<Mark>& enclosing);
+    NodeKind normalize_prepared_child(std::size_t index, std::size_t position, NodeKind kind,
+                                     LineBreaks breaks, const std::vector<Mark>& enclosing);
     NodeKind normalize_child(std::size_t index, std::size_t position, LineBreaks breaks = LineBreaks::Preserve);
-    bool normalize_lines(std::size_t index, LineScope scope, LineBreaks breaks);
+    bool normalize_lines(std::size_t index, LineScope scope, LineBreaks breaks,
+                         const std::vector<Mark>& enclosing = {});
     bool normalize_children(std::size_t index, const NodeSpec* spec = nullptr,
                             LineBreaks breaks = LineBreaks::Preserve);
-    void normalize_marks(Node& node);
+    void normalize_marks(Node& node, const std::vector<Mark>& enclosing);
+    void order_stored_marks(std::vector<Mark>& marks, const std::vector<Mark>& previous);
     bool remove_child(NodeKind kind) const;
 };
 
-bool Normalizer::normalize_lines(std::size_t index, LineScope scope, LineBreaks breaks) {
+bool Normalizer::normalize_lines(std::size_t index, LineScope scope, LineBreaks breaks,
+                                 const std::vector<Mark>& enclosing) {
     // Filling descendants can move the node arena.
     auto children = std::move(document.node(index).content);
     std::size_t kept = 0;
     // Declared textblocks and inline containers enclose their content in tags.
     LinePosition position = scope == LineScope::Declared ? LinePosition::Content : LinePosition::Start;
-    NodeKind last = NodeKind::Other;
     char soft_break = breaks == LineBreaks::Preserve ? '\n' : ' ';
-    bool hard_breaks = false;
-    for (std::size_t i = 0; i < children.size(); ++i) {
-        std::size_t child_index = children[i];
-        NodeKind kind = normalize_child(child_index, i, breaks);
-        Node& child = document.node(child_index);
-        if (kind == NodeKind::Text) {
+    for (std::size_t child : children) {
+        normalize_marks(document.node(child), enclosing);
+    }
+    auto normalize_line_child_text = [&](Node& child, bool in_code) {
+        NodeKind kind = normalize_text(child, in_code);
+        if (scope != LineScope::Code && kind == NodeKind::Text) {
             normalize_line_text(document, children, child.text, kept, position, soft_break);
-        } else if (kind == NodeKind::HardBreak) {
-            position = LinePosition::Start;
-            hard_breaks = true;
-        } else {
+        } else if (!child.text.empty()) {
             position = LinePosition::Content;
         }
-        if ((kind == NodeKind::Text || kind == NodeKind::CodeText) && child.text.empty()) {
-            continue;
+        return kind;
+    };
+    auto normalize_run = [&](const InlineRun& run) {
+        for (std::size_t i = run.begin; i < run.end; ++i) {
+            std::size_t child_index = children[i];
+            Node& child = document.node(child_index);
+            NodeKind kind = node_kind(child.type);
+            if (kind == NodeKind::Text) {
+                // Join before T1 and T5 so a CRLF can span the original nodes.
+                while (i + 1 < run.end && std::string_view(document.node(children[i + 1]).type) == "text") {
+                    child.text += document.node(children[++i]).text;
+                }
+                kind = normalize_line_child_text(child, run.in_code);
+                if (child.text.empty()) {
+                    continue;
+                }
+            } else if (kind == NodeKind::HardBreak) {
+                position = LinePosition::Start;
+                if (breaks == LineBreaks::FlatHeading) {
+                    if (kept == 0 && scope == LineScope::Heading) {
+                        continue;
+                    }
+                    child.type = "text";
+                    child.text = " ";
+                    kind = NodeKind::Text;
+                }
+            }
+            // Line trimming may have dropped the preceding input node.
+            if (child.marks.size() > 1 && kept != 0) {
+                const auto& previous = document.node(children[kept - 1]).marks;
+                if (!previous.empty()) {
+                    order_stored_marks(child.marks, previous);
+                }
+            }
+            bool text = kind == NodeKind::Text || kind == NodeKind::CodeText;
+            bool html = kind == NodeKind::HtmlInline;
+            if (!text && kind != NodeKind::HardBreak) {
+                if (!html) {
+                    normalize_prepared_child(child_index, i, kind, breaks, enclosing);
+                }
+                position = LinePosition::Content;
+            }
+            // A flattened break or trimmed text can leave new neighbours.
+            if (kept != 0 && (text || html)) {
+                Node& left = document.node(children[kept - 1]);
+                if (left.type == child.type && same_run_marks(left.marks, child.marks)) {
+                    if (text) {
+                        left.text += child.text;
+                    } else {
+                        std::string joined = attr_string(left.attrs, "html");
+                        joined += attr_string(child.attrs, "html");
+                        set_attr(left.attrs, "html", AttrValue::string(std::move(joined)));
+                    }
+                    continue;
+                }
+            }
+            children[kept++] = child_index;
         }
-        children[kept++] = child_index;
-        last = kind;
+    };
+    if (children.size() == 1 && std::string_view(document.node(children.front()).type) == "text") {
+        Node& child = document.node(children.front());
+        normalize_line_child_text(child, has_mark(child.marks, "code"));
+        kept = !child.text.empty();
+    } else {
+        for_each_inline_run(document, children, {}, declared_nodes, normalize_run);
     }
-    if (scope != LineScope::Declared) {
-        trim_line_end(document, children, kept, last, scope == LineScope::Paragraph);
-    }
-    if (hard_breaks && breaks == LineBreaks::FlatHeading) {
-        flatten_heading_breaks(document, children, kept, scope);
+    if (kept != 0 && (scope == LineScope::Paragraph || scope == LineScope::Heading)) {
+        trim_line_end(document, children, kept, node_kind(document.node(children[kept - 1]).type),
+                      scope == LineScope::Paragraph);
     }
     children.resize(kept);
     document.node(index).content = std::move(children);
     return kept == 0;
 }
 
-void Normalizer::normalize_marks(Node& node) {
+void Normalizer::order_stored_marks(std::vector<Mark>& marks, const std::vector<Mark>& previous) {
+    order_inline_marks(marks, previous);
+    if (reorder_marks) {
+        order_marks(marks, schema);
+    }
+}
+
+void Normalizer::normalize_marks(Node& node, const std::vector<Mark>& enclosing) {
+    if (node.marks.empty()) {
+        return;
+    }
     for (Mark& mark : node.marks) {
         if (std::string_view(mark.type) == "link") {
             remove_empty_title(mark.attrs);
         }
     }
-    if (reorder_marks && node.marks.size() > 1) {
-        order_marks(node.marks, schema);
+    if (std::string_view(node.type) == "hardBreak") {
+        node.marks.erase(std::remove_if(node.marks.begin(), node.marks.end(), [](const Mark& mark) {
+            return std::string_view(mark.type) == "code";
+        }), node.marks.end());
+    }
+    remove_enclosing_marks(node.marks, enclosing);
+    if (node.marks.size() > 1) {
+        order_stored_marks(node.marks, {});
     }
 }
 
 NodeKind Normalizer::normalize_child(std::size_t index, std::size_t position, LineBreaks breaks) {
+    Node& node = document.node(index);
+    NodeKind kind = node_kind(node.type);
+    normalize_marks(node, {});
+    return normalize_prepared_child(index, position, kind, breaks, {});
+}
+
+NodeKind Normalizer::normalize_prepared_child(std::size_t index, std::size_t position, NodeKind kind,
+                                              LineBreaks breaks, const std::vector<Mark>& enclosing) {
     if (!declared_nodes) {
-        return normalize_node(index, breaks);
+        return normalize_node(index, kind, breaks, enclosing);
     }
     path.push_back({"content", position});
-    NodeKind kind = normalize_node(index, breaks);
+    kind = normalize_node(index, kind, breaks, enclosing);
     path.pop_back();
     return kind;
 }
@@ -505,7 +594,7 @@ void update_spelling(Spelling& spelling, const std::vector<std::size_t>& childre
 }
 
 void Normalizer::normalize_root() {
-    normalize_marks(document.root());
+    normalize_marks(document.root(), {});
     auto children = std::move(document.root().content);
     std::size_t kept = 0;
     std::size_t last = 0;
@@ -534,23 +623,14 @@ void Normalizer::normalize_root() {
     document.root().content = std::move(children);
 }
 
-NodeKind Normalizer::normalize_node(std::size_t index, LineBreaks breaks) {
+NodeKind Normalizer::normalize_node(std::size_t index, NodeKind kind, LineBreaks breaks,
+                                    const std::vector<Mark>& enclosing) {
     Node& node = document.node(index);
-    normalize_marks(node);
-    NodeKind kind = node_kind(node.type);
     const NodeSpec* spec = nullptr;
     switch (kind) {
     case NodeKind::Text:
-        normalize_newlines(node.text);
-        if (is_code(node)) {
-            std::replace(node.text.begin(), node.text.end(), '\n', ' ');
-            kind = NodeKind::CodeText;
-        }
-        break;
+        return normalize_text(node, has_mark(node.marks, "code"));
     case NodeKind::HardBreak:
-        node.marks.erase(std::remove_if(node.marks.begin(), node.marks.end(), [](const Mark& mark) {
-            return std::string_view(mark.type) == "code";
-        }), node.marks.end());
         break;
     case NodeKind::OrderedList:
         if (find_attr(node.attrs, "start") == nullptr) {
@@ -603,17 +683,24 @@ NodeKind Normalizer::normalize_node(std::size_t index, LineBreaks breaks) {
     }
     case NodeKind::CodeBlock:
         normalize_fence_info(node.attrs);
-        break;
+        normalize_lines(index, LineScope::Code, LineBreaks::Preserve);
+        return kind;
     case NodeKind::Other:
         if (!node.content.empty() && declared_nodes) {
             spec = schema.node(node.type);
-            if (spec->shape == Shape::TextBlock || spec->shape == Shape::InlineContainer) {
+            if (spec->shape == Shape::TextBlock) {
                 normalize_lines(index, LineScope::Declared, breaks);
+                return kind;
+            }
+            if (spec->shape == Shape::InlineContainer) {
+                auto inner = enclosing_delimiters(schema, enclosing, node.marks);
+                normalize_lines(index, LineScope::Declared, breaks, inner);
                 return kind;
             }
         }
         break;
     case NodeKind::CodeText:
+    case NodeKind::HtmlInline:
     case NodeKind::EmptyParagraph:
     case NodeKind::Container:
     case NodeKind::Removed:

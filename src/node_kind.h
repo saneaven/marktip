@@ -7,7 +7,7 @@ namespace marktip {
 
 enum class NodeKind {
     Text, CodeText, HardBreak, Paragraph, EmptyParagraph, Heading, OrderedList, List, TaskItem, Image, Table,
-    TableCell, CodeBlock, ParagraphContainer, Container, Other, Removed
+    TableCell, CodeBlock, HtmlInline, ParagraphContainer, Container, Other, Removed
 };
 
 inline NodeKind node_kind(std::string_view type) {
@@ -39,6 +39,7 @@ inline NodeKind node_kind(std::string_view type) {
         if (std::memcmp(name, "tableCell", 9) == 0) return NodeKind::TableCell;
         break;
     case 10:
+        if (std::memcmp(name, "htmlInline", 10) == 0) return NodeKind::HtmlInline;
         if (std::memcmp(name, "blockquote", 10) == 0) return NodeKind::ParagraphContainer;
         if (std::memcmp(name, "bulletList", 10) == 0) return NodeKind::List;
         break;

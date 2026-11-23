@@ -243,7 +243,7 @@ def test_attr_validation_still_precedes_the_mark_set_conflict(level):
 
 
 @pytest.mark.parametrize("level", LEVELS)
-def test_mark_order_is_core_input_order_then_declared_order_and_same_type_input_order(level):
+def test_mark_order_sorts_core_and_declared_marks_and_preserves_same_type_order(level):
     schema = tm.Schema(marks=[
         tm.MarkSpec("zulu"), tm.MarkSpec("alpha"),
         tm.MarkSpec("comment", attrs={"id": tm.Attr(str)}, excludes=()),
@@ -253,7 +253,7 @@ def test_mark_order_is_core_input_order_then_declared_order_and_same_type_input_
         mark("link", href="https://example.com"), mark("comment", id="1"),
     ), schema=schema, strict=level)
     assert stored_marks(document) == [
-        mark("italic"), mark("bold"), mark("link", href="https://example.com"),
+        mark("link", href="https://example.com"), mark("italic"), mark("bold"),
         mark("zulu"), mark("alpha"), mark("comment", id="2"), mark("comment", id="1"),
     ]
 
@@ -358,7 +358,7 @@ def test_code_stays_innermost_with_all_other_marks(level):
         mark("underline"), mark("bold"), mark("italic"), mark("strike"),
         mark("code"), mark("link", href="https://example.com"),
     ), schema=underline_schema(), strict=level)
-    assert document.to_markdown(canonical=True) == "<u>***~~[`x`](https://example.com)~~***</u>"
+    assert document.to_markdown(canonical=True) == "<u>[~~***`x`***~~](https://example.com)</u>"
 
 
 @pytest.mark.parametrize("level", LEVELS)

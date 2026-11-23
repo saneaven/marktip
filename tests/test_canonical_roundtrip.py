@@ -1,5 +1,5 @@
 from collections import Counter
-from itertools import product
+from itertools import groupby, product
 import unicodedata
 
 import pytest
@@ -63,11 +63,22 @@ def _signature(document, schema):
         elif kind in math_bodies:
             yield (), (kind, attrs[math_bodies[kind]]), marks
         else:
+            def child_group(entry):
+                index, child = entry
+                if child["type"] == "htmlInline":
+                    return marks | frozenset(mark_key(mark) for mark in child.get("marks", ()))
+                return index
+
             positions = Counter()
-            for index, child in enumerate(children):
-                characters = tuple(visits(child, marks))
+            for group_marks, group in groupby(enumerate(children), key=child_group):
+                index, child = next(group)
                 child_kind = child["type"]
                 child_attrs = child.get("attrs", {})
+                if child_kind == "htmlInline":
+                    html = child_attrs["html"] + "".join(part["attrs"]["html"] for _, part in group)
+                    characters = (((), (child_kind, html), group_marks),)
+                else:
+                    characters = tuple(visits(child, marks))
                 if child_kind == "text":
                     yield from characters
                     continue
@@ -102,12 +113,6 @@ def _signature(document, schema):
     return tuple(visits(document, frozenset()))
 
 
-def _spec_ids(prefixes, commonmark="", gfm=""):
-    return [f"{prefix}-commonmark-{number}" for prefix in prefixes for number in commonmark.split()] + [
-        f"{prefix}-gfm-{number}" for prefix in prefixes for number in gfm.split()
-    ]
-
-
 def _run_ids(variant, masks):
     return [f"{variant}-{mask}" for mask in masks.split()]
 
@@ -120,58 +125,14 @@ class _BaseSpellingMismatch(AssertionError):
     pass
 
 
-EDITOR_SPECS = ("editor",)
 RUN_MASKS = tuple("".join(str(mask) for mask in masks) for masks in product(range(8), repeat=3))
 
 # Keep the failing case IDs fixed so each completed plan item exposes its XPASSes.
 XFAIL_GROUPS = (
-    ("M1 aligns emphasis order and continuation with the reader",
-     _spec_ids(EDITOR_SPECS, """
-         393 394 395 399 404 406 410 411 413 414 415 416 418 419 422 424 428
-         430 431 432 433 467 468 470 478 479 516 519 530 533
-     """) + ["bold-inside-italic", "new-emphasis-marks-in-editor-order"]),
-    ("M2 joins adjacent equal text runs as the reader does", ["adjacent-plain-and-marked-text"]),
     ("M3 normalizes emphasis boundaries that lose whitespace or punctuation",
-     ["strike-trailing-space", "italic-space-after-bold-letter", "bold-quoted-letter-between-letters",
-      "bold-colon-before-word", "emphasis-on-hard-break"]),
-    ("M4 removes the duplicate mark inside the container",
-     ["bold-repeated-inside-inline-container", "link-repeated-inside-inline-container"]),
-    ("E1 rejects touching emphasis that loses marks or becomes literal punctuation",
-     ["touching-strike-inside-italic", "touching-crossed-bold-and-italic"], pytest.raises.Exception),
-    # Masks use bold=1, italic=2 and strike=4 in run order.
-    ("M1 orders combined or continued marks as the reader does",
-     _run_ids("latin-spaced", "023 027 037 045 046 047 057 067 157 237 267 457 467") + _run_ids("latin-touching", """
-         016 023 025 030 032 034 036 037 043 047 103 125 143 147 161 162 163 164
-         165 167 203 216 230 232 234 236 237 243 247 251 252 254 256 257 263 267
-         301 302 303 304 313 316 320 321 324 325 326 340 341 342 343 345 346 347
-         362 363 364 365 373 374 376 403 416 423 425 430 432 434 436 437 452 461
-         463 467 471 472 473 474 476 516 520 521 523 524 525 526 543 547 561 563
-         571 572 610 612 613 614 615 616 623 625 630 631 632 634 636 637 643 647
-         652 671 672 673 674 676 710 712 713 714 715 716 720 721 723 724 725 726
-         730 732 734 736 737 740 741 742 743 745 746 747 752 757 761 762 763 764
-         765
-     """)),
-    ("M1/M2 reorder combined marks and join runs as the reader does",
-     _run_ids("latin-spaced", """
-         003 007 033 077 223 227 233 277 333 337 377 445 446 447 455 466 477 557
-         577 667 677 777
-     """) + _run_ids("latin-touching", """
-         003 033 116 166 223 225 233 255 300 322 330 332 333 334 336 337 344 366
-         377 433 443 447 477 522 552 611 633 661 663 667 677 711 722 733 744 766
-         771 772 773 774 776 777
-     """)),
-    ("M2 joins adjacent runs with the same marks as the reader does",
-     _run_ids("latin-spaced", """
-         000 001 002 004 005 006 011 022 044 055 066 111 113 115 117 133 155 177
-         222 226 266 444 555 666
-     """) + _run_ids("latin-touching", """
-         000 001 002 004 011 022 044 100 110 111 112 113 114 115 122 133 144 155
-         200 211 220 221 222 224 226 244 266 311 331 335 355 400 411 422 440 441
-         442 444 445 446 455 466 511 533 544 551 553 554 555 556 557 566 577 622
-         644 655 662 664 665 666 755 775
-     """)),
-    ("M3/M1/M2 normalize marks and runs where delimiters move marked spaces",
-     _run_ids("latin-spaced", """
+     ["markdown-html-true-commonmark-430", "markdown-html-false-commonmark-430", "editor-commonmark-430",
+      "strike-trailing-space", "italic-space-after-bold-letter", "bold-quoted-letter-between-letters",
+      "bold-colon-before-word", "emphasis-on-hard-break"] + _run_ids("latin-spaced", """
          010 012 014 016 020 021 024 025 030 031 032 034 035 036 040 041 042 043
          050 051 052 053 054 056 060 061 062 063 064 065 070 071 072 073 074 075
          076 100 101 102 103 104 105 106 107 110 112 114 116 120 121 122 123 124
@@ -198,19 +159,21 @@ XFAIL_GROUPS = (
          735 736 737 740 741 742 743 744 745 746 747 750 751 752 753 754 755 756
          757 760 761 762 763 764 765 766 767 770 771 772 773 774 775 776
      """)),
+    ("E1 rejects touching emphasis that loses marks or becomes literal punctuation",
+     ["touching-strike-inside-italic", "touching-crossed-bold-and-italic"], pytest.raises.Exception),
+    # Masks use bold=1, italic=2 and strike=4 in run order.
     ("E1 rejects touching emphasis that drops marks or produces literal delimiters",
      _run_ids("latin-touching", """
-         005 006 007 017 027 050 051 052 053 054 055 056 057 060 061 062 063 064
-         065 066 067 070 071 072 073 074 075 076 077 105 106 107 117 123 127 132
-         136 150 152 160 170 171 172 173 174 175 176 177 205 206 207 213 217 227
-         231 235 250 260 261 270 271 272 273 274 275 276 277 305 306 307 317 323
-         327 350 352 357 360 361 367 370 371 372 405 406 407 417 427 450 460 470
-         500 501 502 503 504 505 506 507 517 527 536 550 560 567 570 576 600 601
-         602 603 604 605 606 607 617 627 635 650 657 660 670 675 700 701 702 703
-         704 705 706 707 717 727 750 760 767 770
+         005 006 007 017 027 035 050 051 052 053 054 055 056 057 060 061 062 063
+         064 065 066 067 070 071 072 073 074 075 076 077 105 106 107 117 123 127
+         132 136 150 152 160 170 171 172 173 174 175 176 177 205 206 207 213 217
+         227 231 235 250 260 261 270 271 272 273 274 275 276 277 305 306 307 317
+         323 327 335 350 351 352 353 354 355 356 357 360 361 367 370 371 372 405
+         406 407 417 427 435 450 460 470 500 501 502 503 504 505 506 507 517 527
+         536 550 560 567 570 576 600 601 602 603 604 605 606 607 617 627 635 650
+         657 660 670 675 700 701 702 703 704 705 706 707 717 727 735 750 760 767
+         770
      """)),
-    ("M1 addresses the shared bold and italic order reversed on reread",
-     _run_ids("latin-touching", "253 532")),
     ("cjk_friendly (step 6) adds the required reading option to from_dict",
      [f"hangul-touching-{masks}" for masks in RUN_MASKS], TypeError),
 )
@@ -263,6 +226,13 @@ def test_canonical_from_markdown(markdown, html):
     document = tm.from_markdown(markdown, html=html)
     _storage_roundtrip(document)
     _canonical_roundtrip(document, html=html)
+
+
+def test_canonical_from_markdown_joins_adjacent_equal_mark_html():
+    document = tm.from_markdown("[**<b>**](u)**[</b>](u)**")
+    assert document == tm.from_markdown("[**<b></b>**](u)")
+    _storage_roundtrip(document)
+    _canonical_roundtrip(document)
 
 
 @pytest.mark.parametrize(

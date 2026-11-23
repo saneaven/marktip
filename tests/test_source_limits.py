@@ -131,15 +131,16 @@ def test_an_edited_loose_list_without_tight_is_written_tight():
     assert tm.from_markdown(document.to_markdown()).to_dict()["content"][0]["attrs"]["tight"] is True
 
 
-def test_coalescing_text_with_different_mark_order_loses_source_spelling():
-    base = tm.from_markdown("**_a_**_**b**_\n")
-    submitted = base.to_dict()
-    content = submitted["content"][0]["content"]
-    assert len(content) == 2
-    assert content[0]["marks"] != content[1]["marks"]
-    content[0]["text"] += content.pop(1)["text"]
+def test_coalescing_text_with_different_mark_order_preserves_source_spelling():
+    markdown = "**_a_**_**b**_\n"
+    base = tm.from_markdown(markdown)
+    submitted = {"type": "doc", "content": [{"type": "paragraph", "content": [
+        {"type": "text", "text": "a", "marks": [{"type": "bold"}, {"type": "italic"}]},
+        {"type": "text", "text": "b", "marks": [{"type": "italic"}, {"type": "bold"}]},
+    ]}]}
     document = tm.from_dict(submitted, base=base)
-    assert document.to_markdown() == "***ab***"
+    assert document == base
+    assert document.to_markdown() == markdown
 
 
 @pytest.mark.parametrize("source, expected", (
